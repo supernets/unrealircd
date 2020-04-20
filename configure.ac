@@ -7,7 +7,7 @@ dnl src/windows/unrealinst.iss
 dnl doc/Config.header
 dnl src/version.c.SH
 
-AC_INIT([unrealircd], [5.0.3.1], [https://bugs.unrealircd.org/], [], [https://unrealircd.org/])
+AC_INIT([unrealircd], [5.0.4], [https://bugs.unrealircd.org/], [], [https://unrealircd.org/])
 AC_CONFIG_SRCDIR([src/ircd.c])
 AC_CONFIG_HEADER([include/setup.h])
 AC_CONFIG_AUX_DIR([autoconf])
@@ -34,13 +34,13 @@ UNREAL_VERSION_MAJOR=["0"]
 AC_DEFINE_UNQUOTED([UNREAL_VERSION_MAJOR], [$UNREAL_VERSION_MAJOR], [Major version number (e.g.: Y for X.Y.Z)])
 
 # Minor version number (e.g.: Z in X.Y.Z)
-UNREAL_VERSION_MINOR=["3"]
+UNREAL_VERSION_MINOR=["4"]
 AC_DEFINE_UNQUOTED([UNREAL_VERSION_MINOR], [$UNREAL_VERSION_MINOR], [Minor version number (e.g.: Z for X.Y.Z)])
 
 # The version suffix such as a beta marker or release candidate
 # marker. (e.g.: -rcX for unrealircd-3.2.9-rcX). This macro is a
 # string instead of an integer because it contains arbitrary data.
-UNREAL_VERSION_SUFFIX=[".1"]
+UNREAL_VERSION_SUFFIX=[""]
 AC_DEFINE_UNQUOTED([UNREAL_VERSION_SUFFIX], ["$UNREAL_VERSION_SUFFIX"], [Version suffix such as a beta marker or release candidate marker. (e.g.: -rcX for unrealircd-3.2.9-rcX)])
 
 AC_PATH_PROG(RM,rm)
@@ -60,13 +60,6 @@ exit 1
 ])
 
 AC_PATH_PROG(INSTALL,install)
-AC_CHECK_PROG(MAKER, gmake, gmake, make)
-AC_PATH_PROG(GMAKE,gmake)
-
-AS_IF([$MAKER --version | grep -q "GNU Make"],
-        [GNUMAKE="0"],
-        [AC_MSG_ERROR([It seems your system does not have gmake installed. Please install gmake.])])
-
 AC_PATH_PROG(GUNZIP, gunzip)
 AC_PATH_PROG(PKGCONFIG, pkg-config)
 
@@ -74,6 +67,13 @@ dnl Check for compiler
 AC_PROG_CC_C99
 AS_IF([test "$ac_cv_prog_cc_c99" = "no"],
 	[AC_MSG_ERROR([No C99 compiler was found. Please install gcc or clang and other build tools. Eg, on Debian/Ubuntu you probably want to run the following as root: apt-get install build-essential ])])
+
+dnl Check for make moved down, so the above compiler check takes precedence.
+AC_CHECK_PROG(MAKER, gmake, gmake, make)
+AC_PATH_PROG(GMAKE,gmake)
+AS_IF([$MAKER --version | grep -q "GNU Make"],
+        [GNUMAKE="0"],
+        [AC_MSG_ERROR([It seems your system does not have make/gmake installed. If you are on Linux then install make, otherwise install gmake.])])
 
 dnl Checks for libraries.
 AC_CHECK_LIB(descrypt, crypt,
@@ -497,6 +497,7 @@ AC_ARG_WITH(system-cares, [AS_HELP_STRING([--without-system-cares], [Use bundled
 CHECK_SSL
 CHECK_SSL_CTX_SET1_CURVES_LIST
 CHECK_SSL_CTX_SET_MIN_PROTO_VERSION
+CHECK_SSL_CTX_SET_SECURITY_LEVEL
 AC_ARG_ENABLE(dynamic-linking, [AS_HELP_STRING([--disable-dynamic-linking], [Make the IRCd statically link with shared objects rather than dynamically (noone knows if disabling dynamic linking actually does anything or not)])],
 	[enable_dynamic_linking=$enableval], [enable_dynamic_linking="yes"])
 AS_IF([test $enable_dynamic_linking = "yes"],
@@ -603,6 +604,11 @@ AC_MSG_RESULT(installing Argon2 library)
 $ac_cv_prog_MAKER install PREFIX=$cur_dir/extras/argon2 || exit 1
 # We need to manually copy the libs to PRIVATELIBDIR because
 # there is no way to tell make install in libargon2 to do so.
+# BUT FIRST, delete the old library so it becomes an unlink+create
+# operation rather than overwriting the existing file which would
+# lead to a crash of the currently running IRCd.
+rm -f "$PRIVATELIBDIR/"libargon2*
+# Now copy the new library files:
 cp -av $cur_dir/extras/argon2/lib/* $PRIVATELIBDIR/
 ARGON2_CFLAGS="-I$cur_dir/extras/argon2/include"
 AC_SUBST(ARGON2_CFLAGS)
