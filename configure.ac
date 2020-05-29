@@ -7,7 +7,7 @@ dnl src/windows/unrealinst.iss
 dnl doc/Config.header
 dnl src/version.c.SH
 
-AC_INIT([unrealircd], [5.0.4], [https://bugs.unrealircd.org/], [], [https://unrealircd.org/])
+AC_INIT([unrealircd], [5.0.5], [https://bugs.unrealircd.org/], [], [https://unrealircd.org/])
 AC_CONFIG_SRCDIR([src/ircd.c])
 AC_CONFIG_HEADER([include/setup.h])
 AC_CONFIG_AUX_DIR([autoconf])
@@ -34,7 +34,7 @@ UNREAL_VERSION_MAJOR=["0"]
 AC_DEFINE_UNQUOTED([UNREAL_VERSION_MAJOR], [$UNREAL_VERSION_MAJOR], [Major version number (e.g.: Y for X.Y.Z)])
 
 # Minor version number (e.g.: Z in X.Y.Z)
-UNREAL_VERSION_MINOR=["4"]
+UNREAL_VERSION_MINOR=["5"]
 AC_DEFINE_UNQUOTED([UNREAL_VERSION_MINOR], [$UNREAL_VERSION_MINOR], [Minor version number (e.g.: Z for X.Y.Z)])
 
 # The version suffix such as a beta marker or release candidate
@@ -128,6 +128,12 @@ AS_IF([test x"$hardening" != x"no"], [
         [], [-fstack-protector-all])
       check_cc_flag([--param ssp-buffer-size=1], [HARDEN_CFLAGS="$HARDEN_CFLAGS --param ssp-buffer-size=1"],
         [], [-fstack-protector-all])])])
+
+  # Added in UnrealIRCd 5.0.5 (default on Ubuntu 19.10)
+  check_cc_flag([-fstack-clash-protection], [HARDEN_CFLAGS="$HARDEN_CFLAGS -fstack-clash-protection"])
+
+  # Control Flow Enforcement (ROP hardening) - requires CPU hardware support
+  check_cc_flag([-fcf-protection], [HARDEN_CFLAGS="$HARDEN_CFLAGS -fcf-protection"])
 
   # At the link step, we might want -pie (GCC) or -Wl,-pie (Clang on OS X)
   #
@@ -531,12 +537,12 @@ export PATH_SEPARATOR
 dnl Use system pcre2 when available, unless --without-system-pcre2.
 has_system_pcre2="no"
 AS_IF([test "x$with_system_pcre2" = "xyes"],[
-PKG_CHECK_MODULES([PCRE2], libpcre2-8 >= 10.00,[has_system_pcre2=yes
+PKG_CHECK_MODULES([PCRE2], libpcre2-8 >= 10.34,[has_system_pcre2=yes
 AS_IF([test "x$PRIVATELIBDIR" != "x"], [rm -f "$PRIVATELIBDIR/"libpcre2*])],[has_system_pcre2=no])])
 
 AS_IF([test "$has_system_pcre2" = "no"], [
 dnl REMEMBER TO CHANGE WITH A NEW PCRE2 RELEASE!
-pcre2_version="10.33"
+pcre2_version="10.34"
 AC_MSG_RESULT(extracting PCRE2 regex library)
 cur_dir=`pwd`
 cd extras
@@ -553,7 +559,7 @@ else
 fi
 AC_MSG_RESULT(configuring PCRE2 regex library)
 cd pcre2-$pcre2_version
-./configure --enable-jit --enable-shared --disable-unicode --prefix=$cur_dir/extras/pcre2 --libdir=$PRIVATELIBDIR || exit 1
+./configure --enable-jit --enable-shared --prefix=$cur_dir/extras/pcre2 --libdir=$PRIVATELIBDIR || exit 1
 AC_MSG_RESULT(compiling PCRE2 regex library)
 $ac_cv_prog_MAKER || exit 1
 AC_MSG_RESULT(installing PCRE2 regex library)
@@ -627,7 +633,7 @@ AS_IF([test "$has_system_cares" = "no"], [
 dnl REMEMBER TO CHANGE WITH A NEW C-ARES RELEASE!
 dnl NOTE: when changing this here, ALSO change it in extras/curlinstall
 dnl       and in the comment in this file around line 400!
-cares_version="1.15.0"
+cares_version="1.16.0"
 AC_MSG_RESULT(extracting c-ares resolver library)
 cur_dir=`pwd`
 cd extras

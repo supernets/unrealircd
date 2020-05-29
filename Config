@@ -88,6 +88,19 @@ fi
 if [ "x$INSTALLCURL" = "x1" ]; then
 	extras/curlinstall "$PRIVATELIBDIR" || exit 1
 fi
+# At least do SOME parallel compiling by default, IF:
+# - the MAKE environment variable is not set
+# - the MAKEFLAGS environment variable is not set
+# - we are using GNU Make
+if [ "x$MAKE" = "x" ]; then
+	if [ "x$MAKEFLAGS" = "x" ]; then
+		if make --version 2>&1|grep -q "GNU Make"; then
+			echo "Running with 4 concurrent build processes by default (make -j4)."
+			export MAKE='make -j4'
+		fi
+	fi
+fi
+
 echo $CONF
 $CONF || exit 1
 cd "$UNREALCWD"
@@ -313,7 +326,7 @@ echo "We will now ask you a number of questions. You can just press ENTER to acc
 echo ""
 
 # This needs to be updated each release so auto-upgrading works for settings, modules, etc!!:
-UNREALRELEASES="unrealircd-5.0.3.1 unrealircd-5.0.3 unrealircd-5.0.2 unrealircd-5.0.1 unrealircd-5.0.0 unrealircd-5.0.0-rc2 unrealircd-5.0.0-rc1"
+UNREALRELEASES="unrealircd-5.0.4 unrealircd-5.0.3.1 unrealircd-5.0.3 unrealircd-5.0.2 unrealircd-5.0.1 unrealircd-5.0.0 unrealircd-5.0.0-rc2 unrealircd-5.0.0-rc1"
 if [ -f "config.settings" ]; then
 	. ./config.settings
 else
@@ -479,7 +492,7 @@ while [ -z "$TEST" ] ; do
     echo ""
     echo "Do you want to enable remote includes?"
     echo "This allows stuff like this in your configuration file:"
-    echo "include \"http://www.somesite.org/files/opers.conf\";"
+    echo "include \"https://www.somesite.org/files/opers.conf\";"
     echo $n "[$TEST] -> $c"
 	read cc
     if [ -z "$cc" ] ; then

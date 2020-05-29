@@ -901,7 +901,7 @@ extern void SavePersistentIntX(ModuleInfo *modinfo, char *varshortname, int var)
 #define SavePersistentInt(modinfo, var) SavePersistentIntX(modinfo, #var, var)
 
 extern int LoadPersistentLongX(ModuleInfo *modinfo, char *varshortname, long *var);
-#define LoadPersistentLong(modinfo, var) LoadPersistentIntX(modinfo, #var, &var)
+#define LoadPersistentLong(modinfo, var) LoadPersistentLongX(modinfo, #var, &var)
 extern void SavePersistentLongX(ModuleInfo *modinfo, char *varshortname, long var);
 #define SavePersistentLong(modinfo, var) SavePersistentLongX(modinfo, #var, var)
 
@@ -1009,6 +1009,7 @@ extern void SavePersistentLongX(ModuleInfo *modinfo, char *varshortname, long va
 #define HOOKTYPE_CAN_SEND_TO_USER 105
 #define HOOKTYPE_SERVER_SYNC 106
 #define HOOKTYPE_ACCOUNT_LOGIN 107
+#define HOOKTYPE_CLOSE_CONNECTION 108
 
 /* Adding a new hook here?
  * 1) Add the #define HOOKTYPE_.... with a new number
@@ -1042,12 +1043,12 @@ char *hooktype_pre_local_kick(Client *client, Client *victim, Channel *channel, 
 int hooktype_can_kick(Client *client, Client *victim, Channel *channel, char *comment, long client_flags, long victim_flags, char **error);
 int hooktype_local_kick(Client *client, Client *victim, Channel *channel, MessageTag *mtags, char *comment);
 int hooktype_remote_kick(Client *client, Client *victim, Channel *channel, MessageTag *mtags, char *comment);
-char *hooktype_pre_usermsg(Client *client, Client *to, char *text, int notice);
-int hooktype_usermsg(Client *client, Client *to, MessageTag *mtags, char *text, int notice);
-int hooktype_can_send_to_channel(Client *client, Channel *channel, Membership *member, char **text, char **errmsg, int notice);
-int hooktype_can_send_to_user(Client *client, Client *target, char **text, char **errmsg, int notice);
-int hooktype_pre_chanmsg(Client *client, Channel *channel, MessageTag *mtags, char *text, int notice);
-int hooktype_chanmsg(Client *client, Channel *channel, int sendflags, int prefix, char *target, MessageTag *mtags, char *text, int notice);
+char *hooktype_pre_usermsg(Client *client, Client *to, char *text, SendType sendtype);
+int hooktype_usermsg(Client *client, Client *to, MessageTag *mtags, char *text, SendType sendtype);
+int hooktype_can_send_to_channel(Client *client, Channel *channel, Membership *member, char **text, char **errmsg, SendType sendtype);
+int hooktype_can_send_to_user(Client *client, Client *target, char **text, char **errmsg, SendType sendtype);
+int hooktype_pre_chanmsg(Client *client, Channel *channel, MessageTag *mtags, char *text, SendType sendtype);
+int hooktype_chanmsg(Client *client, Channel *channel, int sendflags, int prefix, char *target, MessageTag *mtags, char *text, SendType sendtype);
 char *hooktype_pre_local_topic(Client *client, Channel *channel, char *topic);
 int hooktype_local_topic(Client *client, Channel *channel, char *topic);
 int hooktype_topic(Client *client, Channel *channel, MessageTag *mtags, char *topic);
@@ -1084,7 +1085,7 @@ int hooktype_tkl_add(Client *client, TKL *tkl);
 int hooktype_tkl_del(Client *client, TKL *tkl);
 int hooktype_log(int flags, char *timebuf, char *buf);
 int hooktype_local_spamfilter(Client *acptr, char *str, char *str_in, int type, char *target, TKL *tkl);
-int hooktype_silenced(Client *client, Client *to, int notice);
+int hooktype_silenced(Client *client, Client *to, SendType sendtype);
 int hooktype_rawpacket_in(Client *client, char *readbuf, int *length);
 int hooktype_packet(Client *from, Client *to, Client *intended_to, char **msg, int *length);
 int hooktype_handshake(Client *client);
@@ -1121,6 +1122,7 @@ int hooktype_is_handshake_finished(Client *acptr);
 char *hooktype_pre_local_quit_chan(Client *client, Channel *channel, char *comment);
 int hooktype_ident_lookup(Client *acptr);
 int hooktype_account_login(Client *client, MessageTag *mtags);
+int hooktype_close_connection(Client *client);
 
 #ifdef GCC_TYPECHECKING
 #define ValidateHook(validatefunc, func) __builtin_types_compatible_p(__typeof__(func), __typeof__(validatefunc))
@@ -1229,7 +1231,8 @@ _UNREAL_ERROR(_hook_error_incompatible, "Incompatible hook function. Check argum
         ((hooktype == HOOKTYPE_PRE_LOCAL_QUIT_CHAN) && !ValidateHook(hooktype_pre_local_quit_chan, func)) || \
         ((hooktype == HOOKTYPE_IDENT_LOOKUP) && !ValidateHook(hooktype_ident_lookup, func)) || \
         ((hooktype == HOOKTYPE_CONFIGRUN_EX) && !ValidateHook(hooktype_configrun_ex, func)) || \
-        ((hooktype == HOOKTYPE_ACCOUNT_LOGIN) && !ValidateHook(hooktype_account_login, func)) ) \
+        ((hooktype == HOOKTYPE_ACCOUNT_LOGIN) && !ValidateHook(hooktype_account_login, func)) || \
+        ((hooktype == HOOKTYPE_CLOSE_CONNECTION) && !ValidateHook(hooktype_close_connection, func)) ) \
         _hook_error_incompatible();
 #endif /* GCC_TYPECHECKING */
 

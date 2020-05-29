@@ -45,6 +45,7 @@ struct LabeledResponseContext {
 /* Forward declarations */
 int lr_pre_command(Client *from, MessageTag *mtags, char *buf);
 int lr_post_command(Client *from, MessageTag *mtags, char *buf);
+int lr_close_connection(Client *client);
 int lr_packet(Client *from, Client *to, Client *intended_to, char **msg, int *len);
 void *_labeled_response_save_context(void);
 void _labeled_response_set_context(void *ctx);
@@ -94,6 +95,7 @@ MOD_INIT()
 
 	HookAdd(modinfo->handle, HOOKTYPE_PRE_COMMAND, 2000000000, lr_pre_command);
 	HookAdd(modinfo->handle, HOOKTYPE_POST_COMMAND, -2000000000, lr_post_command);
+	HookAdd(modinfo->handle, HOOKTYPE_CLOSE_CONNECTION, 2000000000, lr_close_connection);
 	HookAdd(modinfo->handle, HOOKTYPE_PACKET, 0, lr_packet);
 
 	return MOD_SUCCESS;
@@ -179,11 +181,12 @@ int lr_post_command(Client *from, MessageTag *mtags, char *buf)
 
 		if (currentcmd.responses == 0)
 		{
-			/* Note: we blindly send recv_mtags back here,
-			 * which is OK now, but may not be OK later.
-			 */
+			MessageTag *m = safe_alloc(sizeof(MessageTag));
+			safe_strdup(m->name, "label");
+			safe_strdup(m->value, currentcmd.label);
 			memset(&currentcmd, 0, sizeof(currentcmd));
-			sendto_one(from, mtags, ":%s ACK", me.name);
+			sendto_one(from, m, ":%s ACK", me.name);
+			free_message_tags(m);
 			goto done;
 		} else
 		if (currentcmd.responses == 1)
@@ -216,6 +219,13 @@ int lr_post_command(Client *from, MessageTag *mtags, char *buf)
 done:
 	memset(&currentcmd, 0, sizeof(currentcmd));
 	labeled_response_inhibit = labeled_response_inhibit_end = labeled_response_force = 0;
+	return 0;
+}
+
+int lr_close_connection(Client *client)
+{
+	/* Flush all data before closing connection */
+	lr_post_command(client, NULL, NULL);
 	return 0;
 }
 

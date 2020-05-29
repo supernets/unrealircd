@@ -117,8 +117,8 @@ int cmodef_sjoin_check(Channel *channel, void *ourx, void *theirx);
 int floodprot_join(Client *client, Channel *channel, MessageTag *mtags, char *parv[]);
 EVENT(modef_event);
 int cmodef_channel_destroy(Channel *channel, int *should_destroy);
-int floodprot_can_send_to_channel(Client *client, Channel *channel, Membership *lp, char **msg, char **errmsg, int notice);
-int floodprot_post_chanmsg(Client *client, Channel *channel, int sendflags, int prefix, char *target, MessageTag *mtags, char *text, int notice);
+int floodprot_can_send_to_channel(Client *client, Channel *channel, Membership *lp, char **msg, char **errmsg, SendType sendtype);
+int floodprot_post_chanmsg(Client *client, Channel *channel, int sendflags, int prefix, char *target, MessageTag *mtags, char *text, SendType sendtype);
 int floodprot_knock(Client *client, Channel *channel, MessageTag *mtags, char *comment);
 int floodprot_nickchange(Client *client, char *oldnick);
 int floodprot_chanmode_del(Channel *channel, int m);
@@ -623,10 +623,11 @@ void *cmodef_put_param(void *fld_in, char *param)
 	/* if new 'per xxx seconds' is smaller than current 'per' then reset timers/counters (t, c) */
 	if (v < fld->per)
 	{
-		for (v=0; v < NUMFLD; v++)
+		int i;
+		for (i=0; i < NUMFLD; i++)
 		{
-			fld->timer[v] = 0;
-			fld->counter[v] = 0;
+			fld->timer[i] = 0;
+			fld->counter[i] = 0;
 		}
 	}
 	fld->per = v;
@@ -939,7 +940,7 @@ char *channel_modef_string(ChannelFloodProtection *x, char *retbuf)
 	return retbuf;
 }
 
-int floodprot_can_send_to_channel(Client *client, Channel *channel, Membership *lp, char **msg, char **errmsg, int notice)
+int floodprot_can_send_to_channel(Client *client, Channel *channel, Membership *lp, char **msg, char **errmsg, SendType sendtype)
 {
 	Membership *mb;
 	ChannelFloodProtection *chp;
@@ -952,6 +953,8 @@ int floodprot_can_send_to_channel(Client *client, Channel *channel, Membership *
 	if (!MyUser(client))
 		return HOOK_CONTINUE;
 
+	if (sendtype == SEND_TYPE_TAGMSG)
+		return 0; // TODO: some TAGMSG specific limit? (1 of 2)
 
 	if (ValidatePermissionsForPath("channel:override:flood",client,NULL,channel,NULL) || !IsFloodLimit(channel) || is_skochanop(client, channel))
 		return HOOK_CONTINUE;
@@ -1061,10 +1064,13 @@ int floodprot_can_send_to_channel(Client *client, Channel *channel, Membership *
 	return HOOK_CONTINUE;
 }
 
-int floodprot_post_chanmsg(Client *client, Channel *channel, int sendflags, int prefix, char *target, MessageTag *mtags, char *text, int notice)
+int floodprot_post_chanmsg(Client *client, Channel *channel, int sendflags, int prefix, char *target, MessageTag *mtags, char *text, SendType sendtype)
 {
 	if (!IsFloodLimit(channel) || is_skochanop(client, channel) || IsULine(client))
 		return 0;
+
+	if (sendtype == SEND_TYPE_TAGMSG)
+		return 0; // TODO: some TAGMSG specific limit? (2 of 2)
 
 	/* HINT: don't be so stupid to reorder the items in the if's below.. you'll break things -- Syzop. */
 

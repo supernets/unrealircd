@@ -140,6 +140,12 @@ typedef enum OperClassEntryType { OPERCLASSENTRY_ALLOW=1, OPERCLASSENTRY_DENY=2}
 
 typedef enum OperPermission { OPER_ALLOW=1, OPER_DENY=0} OperPermission;
 
+typedef enum SendType {
+	SEND_TYPE_PRIVMSG	= 0,
+	SEND_TYPE_NOTICE	= 1,
+	SEND_TYPE_TAGMSG	= 2
+} SendType;
+
 struct OperClassValidator;
 typedef struct OperClassValidator OperClassValidator;
 typedef struct OperClassACLPath OperClassACLPath;
@@ -338,6 +344,8 @@ typedef enum ClientStatus {
 #define PROTO_MTAGS	0x010000	/* Support message tags and big buffers */
 
 /* For client capabilities: */
+#define CAP_INVERT	1L
+
 /** HasCapabilityFast() checks for a token if you know exactly which bit to check */
 #define HasCapabilityFast(cptr, val) ((cptr)->local->caps & (val))
 /** HasCapability() checks for a token by name and is slightly slower */

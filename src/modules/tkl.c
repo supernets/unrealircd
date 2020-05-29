@@ -115,6 +115,7 @@ struct TKLTypeTable
  * IMPORTANT IF YOU ARE ADDING A NEW TYPE TO THIS TABLE:
  * - also update eline_syntax()
  * - also check if eline_type_requires_ip() needs to be updated
+ * - update help.conf (HELPOP ELINE)
  * - more?
  */
 TKLTypeTable tkl_types[] = {
@@ -868,7 +869,7 @@ int tkl_config_run_except(ConfigFile *cf, ConfigEntry *ce, int configtype)
 	{
 		/* Default setting if no 'type' is specified: */
 		if (!strcmp(ce->ce_vardata, "ban"))
-			strlcpy(bantypes, "kgzZs", sizeof(bantypes));
+			strlcpy(bantypes, "kGzZs", sizeof(bantypes));
 		else if (!strcmp(ce->ce_vardata, "throttle"))
 			strlcpy(bantypes, "c", sizeof(bantypes));
 		else if (!strcmp(ce->ce_vardata, "blacklist"))
@@ -1208,6 +1209,22 @@ int ban_too_broad(char *usermask, char *hostmask)
 	return 1;
 }
 
+/** Ugly function, only meant to be called by cmd_tkl_line() */
+static int xline_exists(char *type, char *usermask, char *hostmask)
+{
+	char *umask = usermask;
+	int softban = 0;
+	int tpe = tkl_chartotype(type[0]);
+
+	if (*umask == '%')
+	{
+		umask++;
+		softban = 1;
+	}
+
+	return find_tkl_serverban(tpe, umask, hostmask, softban) ? 1 : 0;
+}
+
 /** Intermediate layer between user functions such as KLINE/GLINE
  * and the TKL layer (cmd_tkl).
  * This allows us doing some syntax checking and other helpful
@@ -1431,6 +1448,13 @@ void cmd_tkl_line(Client *client, int parc, char *parv[], char *type)
 		if (!t)
 		{
 			sendnotice(client, "*** [error] The time you specified is out of range");
+			return;
+		}
+
+		/* Some stupid checking */
+		if (xline_exists(type, usermask, hostmask))
+		{
+			sendnotice(client, "ERROR: Ban for %s@%s already exists.", usermask, hostmask);
 			return;
 		}
 

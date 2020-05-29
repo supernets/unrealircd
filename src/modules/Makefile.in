@@ -71,7 +71,9 @@ R_MODULES= \
 	account-tag.so labeled-response.so link-security.so \
 	message-ids.so plaintext-policy.so server-time.so sts.so \
 	echo-message.so userip-tag.so userhost-tag.so \
-	ident_lookup.so history.so
+	typing-indicator.so \
+	ident_lookup.so history.so \
+	targetfloodprot.so clienttagdeny.so
 
 MODULES=cloak.so $(R_MODULES)
 MODULEFLAGS=@MODULEFLAGS@
@@ -610,6 +612,10 @@ userhost-tag.so: userhost-tag.c $(INCLUDES)
 	$(CC) $(CFLAGS) $(MODULEFLAGS) -DDYNAMIC_LINKING \
 		-o userhost-tag.so userhost-tag.c
 
+typing-indicator.so: typing-indicator.c $(INCLUDES)
+	$(CC) $(CFLAGS) $(MODULEFLAGS) -DDYNAMIC_LINKING \
+		-o typing-indicator.so typing-indicator.c
+
 require-module.so: require-module.c $(INCLUDES)
 	$(CC) $(CFLAGS) $(MODULEFLAGS) -DDYNAMIC_LINKING \
 		-o require-module.so require-module.c
@@ -625,6 +631,14 @@ ident_lookup.so: ident_lookup.c $(INCLUDES)
 history.so: history.c $(INCLUDES)
 	$(CC) $(CFLAGS) $(MODULEFLAGS) -DDYNAMIC_LINKING \
 		-o history.so history.c
+
+targetfloodprot.so: targetfloodprot.c $(INCLUDES)
+	$(CC) $(CFLAGS) $(MODULEFLAGS) -DDYNAMIC_LINKING \
+		-o targetfloodprot.so targetfloodprot.c
+
+clienttagdeny.so: clienttagdeny.c $(INCLUDES)
+	$(CC) $(CFLAGS) $(MODULEFLAGS) -DDYNAMIC_LINKING \
+		-o clienttagdeny.so clienttagdeny.c
 
 #############################################################################
 # capabilities

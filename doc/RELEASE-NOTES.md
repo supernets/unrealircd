@@ -1,5 +1,81 @@
-UnrealIRCd 5.0.4 Release Notes
+UnrealIRCd 5.0.5 Release Notes
 ===============================
+
+This release mainly focuses on new features, while also fixing a few bugs.
+
+Fixes:
+* [except ban { }](https://www.unrealircd.org/docs/Except_ban_block)
+  without 'type' was not exempting from gline.
+* Channel mode ```+L #forward``` and ```+k key```: should forward
+  on wrong key, but was also redirecting on correct key.
+* Crash on 32-bit machines in tkldb (on start or rehash)
+* Crash when saving channeldb when a parameter channel mode is combined
+  with ```+P``` and that module was loaded after channeldb. This may
+  happen if you use 3rd party modules that add parameter channel modes.
+
+Enhancements:
+* [Spamfilter](https://www.unrealircd.org/docs/Spamfilter) is now UTF8-aware.
+  This means, among other things:
+  * Case insensitive matches work better. For example, with extended
+    Latin, a spamfilter on ```ę``` now also matches ```Ę```.
+  * Other PCRE2 features such as [\p](https://www.pcre.org/current/doc/html/pcre2syntax.html#SEC5)
+    are now available. For example you can now set a spamfilter with the regex
+    ```\p{Arabic}``` to block all Arabic script, or ```\p{Cyrillic}``` to
+    block all Cyrillic script (such as Russian).
+    Please do use these new tools with care. Blocking an entire language
+    or script is quite a drastic measure.
+  * These new features require the PCRE2 10.34 regex library. If you
+    have a lower version on your system then UnrealIRCd will fall back
+    to using the UnrealIRCd-shipped-library version 10.34. The only
+    downside to that is that compiling during ```./Config``` may take
+    a little longer than usual.
+* [antimixedutf8](https://www.unrealircd.org/docs/Set_block#set::antimixedutf8)
+  has been improved to detect CJK and other scripts and this will now
+  catch more mixed UTF8 spam. Note that, if you previously manually
+  set the score very tight (much lower than the default of 10) then you
+  may have to increase it a bit, or not, depending on your network.
+* Support for IRCv3 [+typing clienttag](https://ircv3.net/specs/client-tags/typing.html),
+  which adds "user is typing" support to channels and PM (if the client
+  supports it).
+* New flood countermeasure,
+  [set::anti-flood::target-flood](https://www.unrealircd.org/docs/Set_block#set%3A%3Aanti-flood%3A%3Atarget-flood),
+  which limits flooding to channels and users. This is only meant as a
+  filter for high rate floods. You are still encouraged to use
+  [channel mode +f](https://www.unrealircd.org/docs/Anti-flood_features#Channel_mode_f)
+  in channels which give you more customized and fine-grained options
+  to deal with low- and medium-rate floods.
+* If a chanop /INVITEs someone, it will now override ban forwards
+  such as ```+b ~f:#forward:*!*@*```.
+
+Changes:
+* We now do parallel builds by default (```make -j4```) within ./Config,
+  unless the ```$MAKE``` or ```$MAKEFLAGS``` environment variable is set.
+* [set::restrict-commands](https://www.unrealircd.org/docs/Set_block#set%3A%3Arestrict-commands):
+  * The ```disable``` option is now removed as it is implied. In other words: if
+    you want to disable a command, then simply don't use ```connect-delay```.
+  * You can now have a block without ```connect-delay``` but still make
+    users bypass the restriction with ```exempt-identified``` and/or
+    ```exempt-reputation-score```. Previously this was not possible.
+* We now give an error when an IRCOp tries to place an *LINE that already
+  exists. (Previously we sometimes replaced the existing *LINE and other
+  times we did not)
+* Add Polish HELPOP (help.pl.conf)
+
+Module coders / Developers:
+* Breaking API change in ```HOOKTYPE_CAN_SEND_TO_USER``` and
+  ```HOOKTYPE_CAN_SEND_TO_CHANNEL```: the final argument has changed
+  from ```int notice``` to ```SendType sendtype```, which is an
+  enum, since we now have 3 message options (PRIVMSG, NOTICE, TAGMSG).
+
+Upgrading from UnrealIRCd 4?
+-----------------------------
+
+Are you upgrading from UnrealIRCd 4.x to UnrealIRCd 5?
+Then check out the *UnrealIRCd 5* release notes [further down](#unrealircd-5). At the
+very least, check out [Upgrading from 4.x](https://www.unrealircd.org/docs/Upgrading_from_4.x).
+
+UnrealIRCd 5.0.4
+------------------
 
 This new 5.0.4 version fixes quite a number of bugs. It contains only two small feature improvements.
 
@@ -34,13 +110,6 @@ Changes:
   This message is customizable through
   [set::plaintext-policy::oper-message](https://www.unrealircd.org/docs/Set_block#set::plaintext-policy).
 * The French HELPOP text was updated.
-
-Upgrading from UnrealIRCd 4?
------------------------------
-
-Are you upgrading from UnrealIRCd 4.x to UnrealIRCd 5?
-Then check out the *UnrealIRCd 5* release notes [further down](#unrealircd-5). At the
-very least, check out [Upgrading from 4.x](https://www.unrealircd.org/docs/Upgrading_from_4.x).
 
 UnrealIRCd 5.0.3.1
 -------------------

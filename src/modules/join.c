@@ -113,9 +113,8 @@ int _can_join(Client *client, Channel *channel, char *key, char *parv[])
 	if (banned && j == HOOK_DENY)
 		return (ERR_BANNEDFROMCHAN);
 
-	for (lp = client->user->invited; lp; lp = lp->next)
-		if (lp->value.channel == channel)
-			return 0;
+	if (is_invited(client, channel))
+		return 0; /* allowed */
 
         if (channel->users >= channel->mode.limit)
         {
@@ -515,20 +514,12 @@ void _do_join(Client *client, int parc, char *parv[])
 			    !strcasecmp(name, SPAMFILTER_VIRUSCHAN) &&
 			    !ValidatePermissionsForPath("immune:server-ban:viruschan",client,NULL,NULL,NULL) && !spamf_ugly_vchanoverride)
 			{
-				int invited = 0;
-				Link *lp;
 				Channel *channel = find_channel(name, NULL);
 				
-				if (channel)
+				if (!channel || !is_invited(client, channel))
 				{
-					for (lp = client->user->invited; lp; lp = lp->next)
-						if (lp->value.channel == channel)
-							invited = 1;
-				}
-				if (!invited)
-				{
-					sendnotice(client, "*** Cannot join '%s' because it's the virus-help-channel which is "
-					                 "reserved for infected users only", name);
+					sendnotice(client, "*** Cannot join '%s' because it's the virus-help-channel "
+					                   "which is reserved for infected users only", name);
 					continue;
 				}
 			}
@@ -549,7 +540,17 @@ void _do_join(Client *client, int parc, char *parv[])
 			Hook *h;
 			for (h = Hooks[HOOKTYPE_PRE_LOCAL_JOIN]; h; h = h->next) 
 			{
-				i = (*(h->func.intfunc))(client,channel,parv);
+				/* Note: this is just a hack not to break the ABI but still be
+				 * able to fix https://bugs.unrealircd.org/view.php?id=5644
+				 * In the future we should just drop the parv/parx argument
+				 * and use key as an argument instead.
+				 */
+				char *parx[4];
+				parx[0] = NULL;
+				parx[1] = name;
+				parx[2] = key;
+				parx[3] = NULL;
+				i = (*(h->func.intfunc))(client,channel,parx);
 				if (i == HOOK_DENY || i == HOOK_ALLOW)
 					break;
 			}
