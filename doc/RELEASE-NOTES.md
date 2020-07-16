@@ -1,7 +1,53 @@
-UnrealIRCd 5.0.5 Release Notes
+UnrealIRCd 5.0.6 Release Notes
 ===============================
 
-This release mainly focuses on new features, while also fixing a few bugs.
+UnrealIRCd 5.0.6 is a small maintenance release for the stable 5.x series.
+For existing 5.x users there is probably little reason to upgrade.
+
+Enhancements:
+* Spanish help conf was added (conf/help/help.es.conf)
+
+Fixes:
+* History playback on join was not obeying the limits from
+  [set::history::channel::playback-on-join](https://www.unrealircd.org/docs/Set_block#set::history).
+  Note that if you want to see more lines, there is the ```HISTORY```
+  command. For more information on the different ways to retrieve history, see
+  [Channel History](https://www.unrealircd.org/docs/Channel_history)
+* [Spamfilter](https://www.unrealircd.org/docs/Spamfilter) with the
+  ['tempshun' action](https://www.unrealircd.org/docs/Actions) was letting
+  the message through.
+* In very specific circumstances a ```REHASH -tls``` would cause outgoing
+  linking to fail with the error "called a function you should not call".
+* Crash if empty [set::cloak-method](https://www.unrealircd.org/docs/Set_block#set::cloak-method)
+* Issues with labeled-response on websockets (partial fix)
+
+Module coders / Developers:
+* In ```RPL_ISUPPORT``` we now announce ```BOT=B``` to indicate the user mode and
+  ```WHO``` status flag for bots.
+* ```HOOKTYPE_ACCOUNT_LOGIN``` is called for remote users too now (also on server syncs)
+* Send ```RPL_LOGGEDOUT``` when logging out of services account
+* Fix double batch in message tags when using both labeled-response
+  and the ```HISTORY``` command
+
+Upgrading from UnrealIRCd 4?
+-----------------------------
+
+Are you upgrading from UnrealIRCd 4.x to UnrealIRCd 5?
+Then check out the *UnrealIRCd 5* release notes [further down](#unrealircd-5). At the
+very least, check out [Upgrading from 4.x](https://www.unrealircd.org/docs/Upgrading_from_4.x).
+
+
+UnrealIRCd 5.0.5.1
+-------------------
+
+5.0.5.1 reverts the previously introduced UTF8 Spamfilter support.
+Unfortunately we had to do this, due to a bug in the PCRE2 regex library
+that caused a freeze / infinite loop with certain regexes and text.
+
+UnrealIRCd 5.0.5
+-----------------
+
+This 5.0.5 release mainly focuses on new features, while also fixing a few bugs.
 
 Fixes:
 * [except ban { }](https://www.unrealircd.org/docs/Except_ban_block)
@@ -14,21 +60,6 @@ Fixes:
   happen if you use 3rd party modules that add parameter channel modes.
 
 Enhancements:
-* [Spamfilter](https://www.unrealircd.org/docs/Spamfilter) is now UTF8-aware.
-  This means, among other things:
-  * Case insensitive matches work better. For example, with extended
-    Latin, a spamfilter on ```ę``` now also matches ```Ę```.
-  * Other PCRE2 features such as [\p](https://www.pcre.org/current/doc/html/pcre2syntax.html#SEC5)
-    are now available. For example you can now set a spamfilter with the regex
-    ```\p{Arabic}``` to block all Arabic script, or ```\p{Cyrillic}``` to
-    block all Cyrillic script (such as Russian).
-    Please do use these new tools with care. Blocking an entire language
-    or script is quite a drastic measure.
-  * These new features require the PCRE2 10.34 regex library. If you
-    have a lower version on your system then UnrealIRCd will fall back
-    to using the UnrealIRCd-shipped-library version 10.34. The only
-    downside to that is that compiling during ```./Config``` may take
-    a little longer than usual.
 * [antimixedutf8](https://www.unrealircd.org/docs/Set_block#set::antimixedutf8)
   has been improved to detect CJK and other scripts and this will now
   catch more mixed UTF8 spam. Note that, if you previously manually
@@ -66,13 +97,6 @@ Module coders / Developers:
   ```HOOKTYPE_CAN_SEND_TO_CHANNEL```: the final argument has changed
   from ```int notice``` to ```SendType sendtype```, which is an
   enum, since we now have 3 message options (PRIVMSG, NOTICE, TAGMSG).
-
-Upgrading from UnrealIRCd 4?
------------------------------
-
-Are you upgrading from UnrealIRCd 4.x to UnrealIRCd 5?
-Then check out the *UnrealIRCd 5* release notes [further down](#unrealircd-5). At the
-very least, check out [Upgrading from 4.x](https://www.unrealircd.org/docs/Upgrading_from_4.x).
 
 UnrealIRCd 5.0.4
 ------------------
