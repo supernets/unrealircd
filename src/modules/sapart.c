@@ -161,7 +161,7 @@ CMD_FUNC(cmd_sapart)
 	parv[2] = comment ? commentx : NULL; // comment
 	if (comment)
 	{
-		sendnotice(target, "*** You were forced to part %s (%s)", parv[1], commentx);
+		//sendnotice(target, "*** You were forced to part %s (%s)", parv[1], commentx);
 		sendto_umode_global(UMODE_OPER, "%s used SAPART to make %s part %s (%s)",
 				    client->name, target->name, parv[1], comment);
 		ircd_log(LOG_SACMDS,"SAPART: %s used SAPART to make %s part %s (%s)",
@@ -169,7 +169,7 @@ CMD_FUNC(cmd_sapart)
 	}
 	else
 	{
-		sendnotice(target, "*** You were forced to part %s", parv[1]);
+		//sendnotice(target, "*** You were forced to part %s", parv[1]);
 		sendto_umode_global(UMODE_OPER, "%s used SAPART to make %s part %s",
 				    client->name, target->name, parv[1]);
 		ircd_log(LOG_SACMDS,"SAPART: %s used SAPART to make %s part %s",
