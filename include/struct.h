@@ -108,6 +108,7 @@ typedef struct ConfigItem_include ConfigItem_include;
 typedef struct ConfigItem_blacklist_module ConfigItem_blacklist_module;
 typedef struct ConfigItem_help ConfigItem_help;
 typedef struct ConfigItem_offchans ConfigItem_offchans;
+typedef struct SecurityGroup SecurityGroup;
 typedef struct ListStruct ListStruct;
 typedef struct ListStructPrio ListStructPrio;
 
@@ -285,7 +286,7 @@ typedef enum ClientStatus {
 #define	SetUser(x)		((x)->status = CLIENT_STATUS_USER)
 #define	SetLog(x)		((x)->status = CLIENT_STATUS_LOG)
 
-/* @} */
+/** @} */
 
 /** Used for checking certain properties of clients, such as IsSecure() and IsULine().
  * @defgroup ClientFlags Client flags
@@ -487,7 +488,7 @@ typedef enum ClientStatus {
 #define ClearULine(x)			do { (x)->flags &= ~CLIENT_FLAG_ULINE; } while(0)
 #define ClearVirus(x)			do { (x)->flags &= ~CLIENT_FLAG_VIRUS; } while(0)
 #define ClearIdentLookupSent(x)		do { (x)->flags &= ~CLIENT_FLAG_IDENTLOOKUPSENT; } while(0)
-/* @} */
+/** @} */
 
 
 /* Others that access client structs: */
@@ -497,6 +498,9 @@ typedef enum ClientStatus {
 #define IsLoggedIn(x)	(IsRegNick(x) || (x->user && (*x->user->svid != '*') && !isdigit(*x->user->svid))) /* registered nick (+r) or just logged into services (may be -r) */
 #define IsSynched(x)	(x->serv->flags.synced)
 #define IsServerSent(x) (x->serv && x->serv->flags.server_sent)
+
+/* And more that access client stuff - but actually modularized */
+#define GetReputation(client) (moddata_client_get(client, "reputation") ? atoi(moddata_client_get(client, "reputation")) : 0) /**< Get reputation value for a client */
 
 /* PROTOCTL (Server protocol) stuff */
 #ifndef DEBUGMODE
@@ -792,7 +796,8 @@ struct SWhois {
 	char *setby;
 };
 
-/** The command API - used by modules and the core.
+/** The command API - used by modules and the core to add commands, overrides, etc.
+ * See also https://www.unrealircd.org/docs/Dev:Command_API for a higher level overview and example.
  * @defgroup CommandAPI Command API
  * @{
  */
@@ -829,7 +834,7 @@ struct SWhois {
  *        E.g. parv[3] in the above example is out of bounds.
  */
 #define CMD_FUNC(x) void (x) (Client *client, MessageTag *recv_mtags, int parc, char *parv[])
-/* @} */
+/** @} */
 
 /** Command override function - used by all command override handlers.
  * This is used in the code like <pre>CMD_OVERRIDE_FUNC(ovr_somecmd)</pre> as a function definition.
@@ -1217,7 +1222,7 @@ struct Server {
 	} features;
 };
 
-/* @} */
+/** @} */
 
 struct MessageTag {
 	MessageTag *prev, *next;
@@ -1379,6 +1384,7 @@ struct ConfigFlag_allow {
 	unsigned	noident :1;
 	unsigned	useip :1;
 	unsigned	tls :1;
+	unsigned	reject_on_auth_failure :1;
 };
 
 struct ConfigItem_allow {
@@ -1715,6 +1721,16 @@ struct ConfigItem_offchans {
 	char *topic;
 };
 
+#define SECURITYGROUPLEN 48
+struct SecurityGroup {
+	SecurityGroup *prev, *next;
+	int priority;
+	char name[SECURITYGROUPLEN+1];
+	int identified;
+	int reputation_score;
+	int webirc;
+	int tls;
+};
 
 #define HM_HOST 1
 #define HM_IPV4 2
@@ -2009,18 +2025,6 @@ extern MODVAR char *gnulicense[];
 extern MODVAR SSL_CTX *ctx;
 extern MODVAR SSL_CTX *ctx_server;
 extern MODVAR SSL_CTX *ctx_client;
-
-extern SSL_METHOD *meth;
-extern int early_init_ssl();
-extern int init_ssl();
-extern int ssl_handshake(Client *);   /* Handshake the accpeted con.*/
-extern int ssl_client_handshake(Client *, ConfigItem_link *); /* and the initiated con.*/
-extern int ircd_SSL_accept(Client *acptr, int fd);
-extern int ircd_SSL_connect(Client *acptr, int fd);
-extern int SSL_smart_shutdown(SSL *ssl);
-extern void ircd_SSL_client_handshake(int, int, void *);
-extern void SSL_set_nonblocking(SSL *s);
-extern SSL_CTX *init_ctx(TLSOptions *tlsoptions, int server);
 
 #define TLS_PROTOCOL_TLSV1		0x0001
 #define TLS_PROTOCOL_TLSV1_1	0x0002

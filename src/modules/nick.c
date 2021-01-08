@@ -315,8 +315,8 @@ CMD_FUNC(cmd_nick_local)
 		{
 			client->local->since += 4; /* lag them up */
 			sendnumeric(client, ERR_ERRONEUSNICKNAME, nick, tklban->ptr.nameban->reason);
-			sendto_snomask(SNO_QLINE, "Forbidding Q-lined nick %s from %s.",
-			    nick, get_client_name(cptr, FALSE));
+			sendto_snomask(SNO_QLINE, "Forbidding Q-lined nick %s from %s (%s)",
+			    nick, get_client_name(cptr, FALSE), tklban->ptr.nameban->reason);
 			return;	/* NICK message ignored */
 		}
 		/* fallthrough for ircops that have sufficient privileges */
@@ -866,6 +866,12 @@ int _register_user(Client *client, char *nick, char *username, char *umode, char
 		/* Check G/Z lines before shuns -- kill before quite -- codemastr */
 		if (find_tkline_match(client, 0))
 		{
+			if (!IsDead(client) && client->local->class)
+			{
+				/* Fix client count bug, in case that it was a hold such as via authprompt */
+				client->local->class->clients--;
+				client->local->class = NULL;
+			}
 			ircstats.is_ref++;
 			return 0;
 		}
@@ -892,7 +898,17 @@ int _register_user(Client *client, char *nick, char *username, char *umode, char
 		{
 			i = (*(h->func.intfunc))(client);
 			if (i == HOOK_DENY)
+			{
+				if (!IsDead(client) && client->local->class)
+				{
+					/* Fix client count bug, in case that
+					 * the HOOK_DENY was only meant temporarily.
+					 */
+					client->local->class->clients--;
+					client->local->class = NULL;
+				}
 				return 0;
+			}
 			if (i == HOOK_ALLOW)
 				break;
 		}
@@ -1316,12 +1332,9 @@ int AllowClient(Client *client, char *username)
 
 	for (aconf = conf_allow; aconf; aconf = aconf->next)
 	{
-		if (!aconf->hostname || !aconf->ip)
-			goto attach;
-		if (aconf->auth && !client->local->passwd && !moddata_client_get(client, "certfp"))
-			continue;
 		if (aconf->flags.tls && !IsSecure(client))
 			continue;
+
 		if (hp && hp->h_name)
 		{
 			hname = hp->h_name;
@@ -1376,8 +1389,21 @@ int AllowClient(Client *client, char *username)
 				goto attach;
 		}
 
-		continue;
+		continue; /* No match */
 	attach:
+		/* Check authentication */
+		if (aconf->auth && !Auth_Check(client, aconf->auth, client->local->passwd))
+		{
+			/* Incorrect password/authentication - but was is it required? */
+			if (aconf->flags.reject_on_auth_failure)
+			{
+				exit_client(client, NULL, iConf.reject_message_unauthorized);
+				return 0;
+			} else {
+				continue; /* Continue (this is the default behavior) */
+			}
+		}
+
 		if (!aconf->flags.noident)
 			SetUseIdent(client);
 		if (!aconf->flags.useip && hp)
@@ -1391,12 +1417,6 @@ int AllowClient(Client *client, char *username)
 			/* Already got too many with that ip# */
 			exit_client(client, NULL, iConf.reject_message_too_many_connections);
 			return 0;
-		}
-
-		if (aconf->auth && !Auth_Check(client, aconf->auth, client->local->passwd))
-		{
-			/* Always continue if password was wrong. */
-			continue;
 		}
 
 		if (!((aconf->class->clients + 1) > aconf->class->maxclients))

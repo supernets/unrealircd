@@ -90,6 +90,7 @@ extern MODVAR ConfigItem_alias		*conf_alias;
 extern MODVAR ConfigItem_include	*conf_include;
 extern MODVAR ConfigItem_help		*conf_help;
 extern MODVAR ConfigItem_offchans	*conf_offchans;
+extern MODVAR SecurityGroup		*securitygroups;
 extern void		completed_connection(int, int, void *);
 extern void clear_unknown();
 extern EVENT(e_unload_module_delayed);
@@ -163,7 +164,6 @@ extern MODVAR struct list_head global_server_list;
 extern MODVAR struct list_head dead_list;
 extern RealCommand *find_command(char *cmd, int flags);
 extern RealCommand *find_command_simple(char *cmd);
-extern Channel *find_channel(char *, Channel *);
 extern Membership *find_membership_link(Membership *lp, Channel *ptr);
 extern Member *find_member_link(Member *, Client *);
 extern int remove_user_from_channel(Client *, Channel *);
@@ -336,7 +336,7 @@ extern void del_queries(char *);
 #define WATCH_HASH_TABLE_SIZE 32768
 #define WHOWAS_HASH_TABLE_SIZE 32768
 #define THROTTLING_HASH_TABLE_SIZE 8192
-#define find_channel hash_find_channel
+#define hash_find_channel find_channel
 extern uint64_t siphash(const char *in, const char *k);
 extern uint64_t siphash_raw(const char *in, size_t len, const char *k);
 extern uint64_t siphash_nocase(const char *in, const char *k);
@@ -359,7 +359,7 @@ extern Channel *hash_get_chan_bucket(uint64_t);
 extern Client *hash_find_client(const char *, Client *);
 extern Client *hash_find_id(const char *, Client *);
 extern Client *hash_find_nickatserver(const char *, Client *);
-extern Channel *hash_find_channel(char *name, Channel *channel);
+extern Channel *find_channel(char *name, Channel *channel);
 extern Client *hash_find_server(const char *, Client *);
 extern struct MODVAR ThrottlingBucket *ThrottlingHash[THROTTLING_HASH_TABLE_SIZE];
 
@@ -460,6 +460,7 @@ extern void count_memory(Client *cptr, char *nick);
 extern void list_scache(Client *client);
 extern char *oflagstr(long oflag);
 extern int rehash(Client *client, int sig);
+extern void s_die();
 extern int match_simple(const char *mask, const char *name);
 extern int match_esc(const char *mask, const char *name);
 extern int add_listener(ConfigItem_listen *conf);
@@ -549,10 +550,6 @@ extern void *safe_alloc(size_t size);
 extern char *our_strdup(const char *str);
 extern char *our_strldup(const char *str, size_t max);
 
-extern MODFUNC char  *tls_get_cipher(SSL *ssl);
-extern TLSOptions *get_tls_options_for_client(Client *acptr);
-extern int outdated_tls_client(Client *acptr);
-extern char *outdated_tls_client_build_string(char *pattern, Client *acptr);
 extern long config_checkval(char *value, unsigned short flags);
 extern void config_status(FORMAT_STRING(const char *format), ...) __attribute__((format(printf,1,2)));
 extern void init_random();
@@ -701,7 +698,7 @@ extern MODVAR int (*find_shun)(Client *cptr);
 extern MODVAR int (*find_spamfilter_user)(Client *client, int flags);
 extern MODVAR TKL *(*find_qline)(Client *cptr, char *nick, int *ishold);
 extern MODVAR TKL *(*find_tkline_match_zap)(Client *cptr);
-extern MODVAR void (*tkl_stats)(Client *cptr, int type, char *para);
+extern MODVAR void (*tkl_stats)(Client *cptr, int type, char *para, int *cnt);
 extern MODVAR void (*tkl_sync)(Client *client);
 extern MODVAR void (*cmd_tkl)(Client *client, MessageTag *recv_mtags, int parc, char *parv[]);
 extern MODVAR int (*place_host_ban)(Client *client, BanAction action, char *reason, long duration);
@@ -753,6 +750,25 @@ extern MODVAR void (*labeled_response_force_end)(void);
 extern MODVAR void (*kick_user)(MessageTag *mtags, Channel *channel, Client *client, Client *victim, char *comment);
 /* /Efuncs */
 
+/* SSL/TLS functions */
+extern int early_init_ssl();
+extern int init_ssl();
+extern int ssl_handshake(Client *);   /* Handshake the accpeted con.*/
+extern int ssl_client_handshake(Client *, ConfigItem_link *); /* and the initiated con.*/
+extern int ircd_SSL_accept(Client *acptr, int fd);
+extern int ircd_SSL_connect(Client *acptr, int fd);
+extern int SSL_smart_shutdown(SSL *ssl);
+extern void ircd_SSL_client_handshake(int, int, void *);
+extern void SSL_set_nonblocking(SSL *s);
+extern SSL_CTX *init_ctx(TLSOptions *tlsoptions, int server);
+extern MODFUNC char  *tls_get_cipher(SSL *ssl);
+extern TLSOptions *get_tls_options_for_client(Client *acptr);
+extern int outdated_tls_client(Client *acptr);
+extern char *outdated_tls_client_build_string(char *pattern, Client *acptr);
+extern int check_certificate_expiry_ctx(SSL_CTX *ctx, char **errstr);
+extern EVENT(tls_check_expiry);
+/* End of SSL/TLS functions */
+
 extern void parse_message_tags_default_handler(Client *client, char **str, MessageTag **mtag_list);
 extern char *mtags_to_string_default_handler(MessageTag *m, Client *client);
 extern void *labeled_response_save_context_default_handler(void);
@@ -793,6 +809,8 @@ extern char *cm_getparameter_ex(void **p, char mode);
 extern void cm_putparameter_ex(void **p, char mode, char *str);
 extern void cm_freeparameter_ex(void **p, char mode, char *str);
 extern int file_exists(char *file);
+extern time_t get_file_time(char *fname);
+extern long get_file_size(char *fname);
 extern void free_motd(MOTDFile *motd); /* s_serv.c */
 extern void fix_timers(void);
 extern char *chfl_to_sjoin_symbol(int s);
@@ -974,3 +992,11 @@ extern int hide_idle_time(Client *client, Client *target);
 extern void lost_server_link(Client *serv, FORMAT_STRING(const char *fmt), ...);
 extern char *sendtype_to_cmd(SendType sendtype);
 extern MODVAR MessageTagHandler *mtaghandlers;
+extern int security_group_valid_name(char *name);
+extern int security_group_exists(char *name);
+extern SecurityGroup *add_security_group(char *name, int order);
+extern SecurityGroup *find_security_group(char *name);
+extern void free_security_group(SecurityGroup *s);
+extern void set_security_group_defaults(void);
+extern int user_allowed_by_security_group(Client *client, SecurityGroup *s);
+extern int user_allowed_by_security_group_name(Client *client, char *secgroupname);

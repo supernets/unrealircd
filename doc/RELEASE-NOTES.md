@@ -1,5 +1,71 @@
-UnrealIRCd 5.0.7 Release Notes
+UnrealIRCd 5.0.8 Release Notes
 ===============================
+
+The main purpose of this release is to enhance the
+[reputation](https://www.unrealircd.org/docs/Reputation_score)
+functionality. There have also been some other changes and minor
+bug fixes. For more information, see below.
+
+Enhancements:
+* Support for [security groups](https://www.unrealircd.org/docs/Security-group_block),
+  of which four groups always exist by default: known-users, unknown-users,
+  tls-users and tls-and-known-users.
+* New extended ban ```~G:securitygroupname```. Typical usage would be
+  ```MODE #chan +b ~G:unknown-users``` which will ban all users from the
+  channel that are not identified to services and have a reputation
+  score below 25 (by default). The exact settings can be tweaked in the
+  [security group block](https://www.unrealircd.org/docs/Security-group_block).
+* The reputation command (IRCOp-only) has been extended to make it
+  easier to look for potential troublemakers:
+  * ```REPUTATION Nick``` shows reputation about the nick name
+  * ```REPUTATION IP``` shows reputation about the IP address
+  * ```REPUTATION #channel``` lists users in channel with their reputation score
+  * ```REPUTATION <NN``` lists users with reputation scores below value NN
+* Only send the first 1000 matches on ```STATS gline``` or a
+  similar command. This to prevent the IRCOp from being flooded off.
+  This value can be changed via
+  [set::max-stats-matches](https://www.unrealircd.org/docs/Set_block#set::max-stats-matches)
+* Warn when the SSL/TLS server certificate is expired or expires soon
+  (within 7 days).
+* New option allow::options::reject-on-auth-failure if you want to
+  stop matching on a passworded allow block, see the
+  [allow password documentation](https://www.unrealircd.org/docs/Allow_block#password)
+  for more information. Note that most people won't use this.
+
+Fixes:
+* The ```WHO``` command searched on nick name even if it was told
+  to search on a specific account name via WHOX options.
+* Some typos in the Config script and a warning
+* Counting clients twice in some circumstances
+
+Changes:
+* Support for $(DESTDIR) in 'make install' if packaging for a distro
+* Mention the ban reason in Q-line server notices
+* Add self-test to module manager and improve the error message in case
+  the IRCd source directory does not exist.
+* Print out a more helpful error if you run the unrealircd binary
+  rather than the unrealircd script with an argument like 'mkpasswd' etc.
+* On *NIX create a symlink 'source' to the UnrealIRCd source
+
+Module coders / Developers:
+* The [Doxygen module API docs](https://www.unrealircd.org/api/5/index.html)
+  have been improved, in particular the 
+  [Hook API](https://www.unrealircd.org/api/5/group__HookAPI.html)
+  is now 100% documented.
+
+Reminder: UnrealIRCd 4 is no longer supported
+----------------------------------------------
+
+UnrealIRCd 4.x is [no longer supported](https://www.unrealircd.org/docs/UnrealIRCd_4_EOL).
+Admins must upgrade to UnrealIRCd 5.
+
+Upgrading from 4.x to 5.x?
+Then check out the *UnrealIRCd 5* release notes [further down](#unrealircd-5).
+Or, at the very least, check out
+[Upgrading from 4.x](https://www.unrealircd.org/docs/Upgrading_from_4.x).
+
+UnrealIRCd 5.0.7
+-----------------
 
 UnrealIRCd 5.0.7 consists mainly of fixes for the 5.x stable series,
 with some minor enhancements.
@@ -33,17 +99,6 @@ websocket packet.
 Module coders / Developers:
 * No changes, only some small additions to the
 [Doxygen module API docs](https://www.unrealircd.org/api/5/index.html)
-
-Reminder: UnrealIRCd 4 is End Of Life
----------------------------------------
-
-All support for the previous series, UnrealIRCd 4.x, will stop after
-[December 31, 2020](https://www.unrealircd.org/docs/UnrealIRCd_4_EOL).
-If you haven't upgraded yet, do so soon!
-
-Upgrading from 4.x to 5.x?
-Then check out the *UnrealIRCd 5* release notes [further down](#unrealircd-5). At the
-very least, check out [Upgrading from 4.x](https://www.unrealircd.org/docs/Upgrading_from_4.x).
 
 UnrealIRCd 5.0.6
 -----------------
