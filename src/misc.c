@@ -137,7 +137,13 @@ void ircd_log(int flags, FORMAT_STRING(const char *format), ...)
 	strlcat(buf, "\n", sizeof(buf));
 
 	if (!loop.ircd_forked && (flags & LOG_ERROR))
+	{
+#ifdef _WIN32
+		win_log("* %s", buf);
+#else
 		fprintf(stderr, "%s", buf);
+#endif
+	}
 
 	/* In case of './unrealircd configtest': don't write to log file, only to stderr */
 	if (loop.config_test)
@@ -146,83 +152,66 @@ void ircd_log(int flags, FORMAT_STRING(const char *format), ...)
 		return;
 	}
 
-	for (logs = conf_log; logs; logs = logs->next) {
+	for (logs = conf_log; logs; logs = logs->next)
+	{
+		if (!(logs->flags & flags))
+			continue;
+
 #ifdef HAVE_SYSLOG
-		if (!strcasecmp(logs->file, "syslog") && logs->flags & flags) {
+		if (logs->file && !strcasecmp(logs->file, "syslog"))
+		{
 			syslog(LOG_INFO, "%s", buf);
 			written++;
 			continue;
 		}
 #endif
-		if (logs->flags & flags)
+
+		/* This deals with dynamic log file names, such as ircd.%Y-%m-%d.log */
+		if (logs->filefmt)
 		{
-			if (stat(logs->file, &fstats) != -1 && logs->maxsize && fstats.st_size >= logs->maxsize)
+			char *fname = unreal_strftime(logs->filefmt);
+			if (logs->file && (logs->logfd != -1) && strcmp(logs->file, fname))
 			{
-				char oldlog[512];
-				if (logs->logfd == -1)
-				{
-					/* Try to open, so we can write the 'Max file size reached' message. */
-#ifndef _WIN32
-					logs->logfd = fd_fileopen(logs->file, O_CREAT|O_APPEND|O_WRONLY);
-#else
-					logs->logfd = fd_fileopen(logs->file, O_CREAT|O_APPEND|O_WRONLY);
-#endif
-				}
-				if (logs->logfd != -1)
-				{
-					if (write(logs->logfd, "Max file size reached, starting new log file\n", 45) < 0)
-					{
-						/* We already handle the unable to write to log file case for normal data.
-						 * I think we can get away with not handling this one.
-						 */
-						;
-					}
-					fd_close(logs->logfd);
-				}
-
-				/* Rename log file to xxxxxx.old */
-				snprintf(oldlog, sizeof(oldlog), "%s.old", logs->file);
-				rename(logs->file, oldlog);
-
-				logs->logfd = fd_fileopen(logs->file, O_CREAT|O_WRONLY|O_TRUNC);
-				if (logs->logfd == -1)
-					continue;
+				/* We are logging already and need to switch over */
+				fd_close(logs->logfd);
+				logs->logfd = -1;
 			}
-			else if (logs->logfd == -1) {
-#ifndef _WIN32
-				logs->logfd = fd_fileopen(logs->file, O_CREAT|O_APPEND|O_WRONLY);
-#else
-				logs->logfd = fd_fileopen(logs->file, O_CREAT|O_APPEND|O_WRONLY);
-#endif
-				if (logs->logfd == -1)
-				{
-					if (!loop.ircd_booted)
-					{
-						config_status("WARNING: Unable to write to '%s': %s", logs->file, strerror(ERRNO));
-					} else {
-						if (last_log_file_warning + 300 < TStime())
-						{
-							config_status("WARNING: Unable to write to '%s': %s. This warning will not re-appear for at least 5 minutes.", logs->file, strerror(ERRNO));
-							last_log_file_warning = TStime();
-						}
-					}
-					continue;
-				}
-			}
-			/* this shouldn't happen, but lets not waste unnecessary syscalls... */
+			safe_strdup(logs->file, fname);
+		}
+
+		/* log::maxsize code */
+		if (logs->maxsize && (stat(logs->file, &fstats) != -1) && fstats.st_size >= logs->maxsize)
+		{
+			char oldlog[512];
 			if (logs->logfd == -1)
-				continue;
-			if (write(logs->logfd, timebuf, strlen(timebuf)) < 0)
 			{
-				/* Let's ignore any write errors for this one. Next write() will catch it... */
-				;
+				/* Try to open, so we can write the 'Max file size reached' message. */
+				logs->logfd = fd_fileopen(logs->file, O_CREAT|O_APPEND|O_WRONLY);
 			}
-			n = write(logs->logfd, buf, strlen(buf));
-			if (n == strlen(buf))
+			if (logs->logfd != -1)
 			{
-				written++;
+				if (write(logs->logfd, "Max file size reached, starting new log file\n", 45) < 0)
+				{
+					/* We already handle the unable to write to log file case for normal data.
+					 * I think we can get away with not handling this one.
+					 */
+					;
+				}
+				fd_close(logs->logfd);
 			}
-			else
+			logs->logfd = -1;
+
+			/* Rename log file to xxxxxx.old */
+			snprintf(oldlog, sizeof(oldlog), "%s.old", logs->file);
+			unlink(oldlog); /* windows rename cannot overwrite, so unlink here.. ;) */
+			rename(logs->file, oldlog);
+		}
+
+		/* generic code for opening log if not open yet.. */
+		if (logs->logfd == -1)
+		{
+			logs->logfd = fd_fileopen(logs->file, O_CREAT|O_APPEND|O_WRONLY);
+			if (logs->logfd == -1)
 			{
 				if (!loop.ircd_booted)
 				{
@@ -233,6 +222,32 @@ void ircd_log(int flags, FORMAT_STRING(const char *format), ...)
 						config_status("WARNING: Unable to write to '%s': %s. This warning will not re-appear for at least 5 minutes.", logs->file, strerror(ERRNO));
 						last_log_file_warning = TStime();
 					}
+				}
+				continue;
+			}
+		}
+
+		/* Now actually WRITE to the log... */
+		if (write(logs->logfd, timebuf, strlen(timebuf)) < 0)
+		{
+			/* Let's ignore any write errors for this one. Next write() will catch it... */
+			;
+		}
+		n = write(logs->logfd, buf, strlen(buf));
+		if (n == strlen(buf))
+		{
+			written++;
+		}
+		else
+		{
+			if (!loop.ircd_booted)
+			{
+				config_status("WARNING: Unable to write to '%s': %s", logs->file, strerror(ERRNO));
+			} else {
+				if (last_log_file_warning + 300 < TStime())
+				{
+					config_status("WARNING: Unable to write to '%s': %s. This warning will not re-appear for at least 5 minutes.", logs->file, strerror(ERRNO));
+					last_log_file_warning = TStime();
 				}
 			}
 		}
@@ -754,14 +769,14 @@ void exit_client(Client *client, MessageTag *recv_mtags, char *comment)
 			hash_del_watch_list(client);
 			on_for = TStime() - client->local->firsttime;
 			if (IsHidden(client))
-				ircd_log(LOG_CLIENT, "Disconnect - (%lld:%lld:%lld) %s!%s@%s [VHOST %s] (%s)",
+				ircd_log(LOG_CLIENT, "Disconnect - (%lld:%lld:%lld) %s!%s@%s [%s] [vhost: %s] (%s)",
 					on_for / 3600, (on_for % 3600) / 60, on_for % 60,
 					client->name, client->user->username,
-					client->user->realhost, client->user->virthost, comment);
+					client->user->realhost, GetIP(client), client->user->virthost, comment);
 			else
-				ircd_log(LOG_CLIENT, "Disconnect - (%lld:%lld:%lld) %s!%s@%s (%s)",
+				ircd_log(LOG_CLIENT, "Disconnect - (%lld:%lld:%lld) %s!%s@%s [%s] (%s)",
 					on_for / 3600, (on_for % 3600) / 60, on_for % 60,
-					client->name, client->user->username, client->user->realhost, comment);
+					client->name, client->user->username, client->user->realhost, GetIP(client), comment);
 		} else
 		if (IsUnknown(client))
 		{

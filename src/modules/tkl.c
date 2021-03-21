@@ -34,7 +34,7 @@ ModuleHeader MOD_HEADER
 
 /* Forward declarations */
 int tkl_config_test_spamfilter(ConfigFile *, ConfigEntry *, int, int *);
-int tkl_config_match_spamfilter(ConfigFile *, ConfigEntry *, int);
+int tkl_config_run_spamfilter(ConfigFile *, ConfigEntry *, int);
 int tkl_config_test_ban(ConfigFile *, ConfigEntry *, int, int *);
 int tkl_config_run_ban(ConfigFile *, ConfigEntry *, int);
 int tkl_config_test_except(ConfigFile *, ConfigEntry *, int, int *);
@@ -95,6 +95,7 @@ TKL *_find_tkl_banexception(int type, char *usermask, char *hostmask, int softba
 TKL *_find_tkl_nameban(int type, char *name, int hold);
 TKL *_find_tkl_spamfilter(int type, char *match_string, BanAction action, unsigned short target);
 int _find_tkl_exception(int ban_type, Client *client);
+static void add_default_exempts(void);
 
 /* Externals (only for us :D) */
 extern int MODVAR spamf_ugly_vchanoverride;
@@ -122,27 +123,27 @@ struct TKLTypeTable
  */
 TKLTypeTable tkl_types[] = {
 	/* <config name> <letter> <TKL_xxx type>               <logging name> <tkl option?> <exempt option?> */
-	{ "gline",              'G', TKL_KILL       | TKL_GLOBAL, "G-Line",             1, 1 },
-	{ "kline",              'k', TKL_KILL,                    "K-Line",             1, 1 },
-	{ "gzline",             'Z', TKL_ZAP        | TKL_GLOBAL, "Global Z-Line",      1, 1 },
-	{ "zline",              'z', TKL_ZAP,                     "Z-Line",             1, 1 },
-	{ "spamfilter",         'F', TKL_SPAMF      | TKL_GLOBAL, "Spamfilter",         1, 1 },
-	{ "qline",              'Q', TKL_NAME       | TKL_GLOBAL, "Q-Line",             1, 1 },
-	{ "except",             'E', TKL_EXCEPTION  | TKL_GLOBAL, "Exception",          1, 0 },
-	{ "shun",               's', TKL_SHUN       | TKL_GLOBAL, "Shun",               1, 1 },
-	{ "local-qline",        'q', TKL_NAME,                    "Local Q-Line",       1, 0 },
-	{ "local-spamfilter",   'e', TKL_EXCEPTION,               "Local Exception",    1, 0 },
-	{ "local-exception",    'f', TKL_SPAMF,                   "Local Spamfilter",   1, 0 },
-	{ "blacklist",          'b', TKL_BLACKLIST,               "Blacklist",          0, 1 },
-	{ "connect-flood",      'c', TKL_CONNECT_FLOOD,           "Connect flood",      0, 1 },
-	{ "maxperip",           'm', TKL_MAXPERIP,                "Max-per-IP",         0, 1 },
-	{ "unknown-data-flood", 'd', TKL_UNKNOWN_DATA_FLOOD,      "Unknown data flood", 0, 1 },
-	{ "antirandom",         'r', TKL_ANTIRANDOM,              "Antirandom",         0, 1 },
-	{ "antimixedutf8",      '8', TKL_ANTIMIXEDUTF8,           "Antimixedutf8",      0, 1 },
-	{ "ban-version",        'v', TKL_BAN_VERSION,             "Ban Version",        0, 1 },
-	{ NULL,                 '\0', 0,                          NULL,                 0, 0 },
+	{ "gline",                'G', TKL_KILL       | TKL_GLOBAL, "G-Line",               1, 1 },
+	{ "kline",                'k', TKL_KILL,                    "K-Line",               1, 1 },
+	{ "gzline",               'Z', TKL_ZAP        | TKL_GLOBAL, "Global Z-Line",        1, 1 },
+	{ "zline",                'z', TKL_ZAP,                     "Z-Line",               1, 1 },
+	{ "spamfilter",           'F', TKL_SPAMF      | TKL_GLOBAL, "Spamfilter",           1, 1 },
+	{ "qline",                'Q', TKL_NAME       | TKL_GLOBAL, "Q-Line",               1, 1 },
+	{ "except",               'E', TKL_EXCEPTION  | TKL_GLOBAL, "Exception",            1, 0 },
+	{ "shun",                 's', TKL_SHUN       | TKL_GLOBAL, "Shun",                 1, 1 },
+	{ "local-qline",          'q', TKL_NAME,                    "Local Q-Line",         1, 0 },
+	{ "local-spamfilter",     'e', TKL_EXCEPTION,               "Local Exception",      1, 0 },
+	{ "local-exception",      'f', TKL_SPAMF,                   "Local Spamfilter",     1, 0 },
+	{ "blacklist",            'b', TKL_BLACKLIST,               "Blacklist",            0, 1 },
+	{ "connect-flood",        'c', TKL_CONNECT_FLOOD,           "Connect flood",        0, 1 },
+	{ "maxperip",             'm', TKL_MAXPERIP,                "Max-per-IP",           0, 1 },
+	{ "handshake-data-flood", 'd', TKL_HANDSHAKE_DATA_FLOOD,    "Handshake data flood", 0, 1 },
+	{ "antirandom",           'r', TKL_ANTIRANDOM,              "Antirandom",           0, 1 },
+	{ "antimixedutf8",        '8', TKL_ANTIMIXEDUTF8,           "Antimixedutf8",        0, 1 },
+	{ "ban-version",          'v', TKL_BAN_VERSION,             "Ban Version",          0, 1 },
+	{ NULL,                   '\0', 0,                          NULL,                   0, 0 },
 };
-#define ALL_VALID_EXCEPTION_TYPES "kline, gline, zline, gzline, spamfilter, shun, qline, blacklist, connect-flood, unknown-data-flood, antirandom, antimixedutf8, ban-version"
+#define ALL_VALID_EXCEPTION_TYPES "kline, gline, zline, gzline, spamfilter, shun, qline, blacklist, connect-flood, handshake-data-flood, antirandom, antimixedutf8, ban-version"
 
 int max_stats_matches = 1000;
 
@@ -192,7 +193,7 @@ MOD_TEST()
 MOD_INIT()
 {
 	MARK_AS_OFFICIAL_MODULE(modinfo);
-	HookAdd(modinfo->handle, HOOKTYPE_CONFIGRUN, 0, tkl_config_match_spamfilter);
+	HookAdd(modinfo->handle, HOOKTYPE_CONFIGRUN, 0, tkl_config_run_spamfilter);
 	HookAdd(modinfo->handle, HOOKTYPE_CONFIGRUN, 0, tkl_config_run_ban);
 	HookAdd(modinfo->handle, HOOKTYPE_CONFIGRUN, 0, tkl_config_run_except);
 	HookAdd(modinfo->handle, HOOKTYPE_CONFIGRUN, 0, tkl_config_run_set);
@@ -205,6 +206,7 @@ MOD_INIT()
 	CommandAdd(modinfo->handle, "SPAMFILTER", cmd_spamfilter, 7, CMD_OPER);
 	CommandAdd(modinfo->handle, "ELINE", cmd_eline, 4, CMD_OPER);
 	CommandAdd(modinfo->handle, "TKL", _cmd_tkl, MAXPARA, CMD_OPER|CMD_SERVER);
+	add_default_exempts();
 	MARK_AS_OFFICIAL_MODULE(modinfo);
 	return MOD_SUCCESS;
 }
@@ -437,7 +439,7 @@ int tkl_config_test_spamfilter(ConfigFile *cf, ConfigEntry *ce, int type, int *e
 }
 
 /** Process a spamfilter { } block in the configuration file */
-int tkl_config_match_spamfilter(ConfigFile *cf, ConfigEntry *ce, int type)
+int tkl_config_run_spamfilter(ConfigFile *cf, ConfigEntry *ce, int type)
 {
 	ConfigEntry *cep;
 	ConfigEntry *cepp;
@@ -491,7 +493,7 @@ int tkl_config_match_spamfilter(ConfigFile *cf, ConfigEntry *ce, int type)
 	                    target,
 	                    action,
 	                    m,
-	                    me.name,
+	                    "-config-",
 	                    0,
 	                    TStime(),
 	                    bantime,
@@ -1525,14 +1527,14 @@ void eline_syntax(Client *client)
 	sendnotice(client, "F: Spamfilter");
 	sendnotice(client, "b: Blacklist checking");
 	sendnotice(client, "c: Connect flood (bypass set::anti-flood::connect-flood))");
-	sendnotice(client, "d: Unknown data flood (no ZLINE on too much data before registration)");
+	sendnotice(client, "d: Handshake data flood (no ZLINE on too much data before registration)");
 	sendnotice(client, "m: Bypass allow::maxperip restriction");
 	sendnotice(client, "r: Bypass antirandom module");
 	sendnotice(client, "8: Bypass antimixedutf8 module");
 	sendnotice(client, "v: Bypass ban version { } blocks");
 	sendnotice(client, "Examples:");
-	sendnotice(client, "/ELINE *@unrealircd.org kGf 0 This user is exempt");
-	sendnotice(client, "/ELINE ~S:1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef kGf 0 Trusted user with this certificate fingerprint");
+	sendnotice(client, "/ELINE *@unrealircd.org kGF 0 This user is exempt");
+	sendnotice(client, "/ELINE ~S:1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef kGF 0 Trusted user with this certificate fingerprint");
 	sendnotice(client, "-");
 	sendnotice(client, "To get a list of all current ELINEs, type: /STATS except");
 }
@@ -2635,6 +2637,18 @@ void _tkl_del_line(TKL *tkl)
 
 	/* Finally, free the entry */
 	free_tkl(tkl);
+}
+
+/** Add some default ban exceptions - for localhost */
+static void add_default_exempts(void)
+{
+	/* The exempted ban types are only ones that will affect other connections as well,
+	 * such as gline, and not policy decissions such as maxperip exempt or bypass qlines.
+	 * Currently the list is: gline, kline, gzline, zline, shun, blacklist,
+	 *                        connect-flood, handshake-data-flood.
+	 */
+	tkl_add_banexception(TKL_EXCEPTION, "*", "127.*", "localhost is always exempt",
+	                     "-default-", 0, TStime(), 0, "GkZzsbcd", TKL_FLAG_CONFIG);
 }
 
 /*
@@ -4671,6 +4685,12 @@ int _match_spamfilter(Client *client, char *str_in, int target, char *destinatio
 	 * due to SPAMF_USER where user isn't marked as client/person yet.
 	 */
 	if (!client->user || ValidatePermissionsForPath("immune:server-ban:spamfilter",client,NULL,NULL,NULL) || IsULine(client))
+		return 0;
+
+	/* Client exempt from spamfilter checking?
+	 * Let's check that early: going through elines is likely faster than running the regex(es).
+	 */
+	if (find_tkl_exception(TKL_SPAMF, client))
 		return 0;
 
 	for (tkl = tklines[tkl_hash('F')]; tkl; tkl = tkl->next)

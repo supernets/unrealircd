@@ -488,9 +488,15 @@ int stats_allow(Client *client, char *para)
 {
 	ConfigItem_allow *allows;
 	for (allows = conf_allow; allows; allows = allows->next)
-		sendnumeric(client, RPL_STATSILINE, allows->ip, allows->hostname, allows->maxperip,
-			allows->class->name, allows->server ? allows->server
-			: defserv, allows->port ? allows->port : 6667);
+	{
+		sendnumeric(client, RPL_STATSILINE,
+		            allows->ip, allows->hostname,
+		            allows->maxperip,
+		            allows->global_maxperip,
+		            allows->class->name,
+		            allows->server ? allows->server : defserv,
+		            allows->port ? allows->port : 6667);
+	}
 	return 0;
 }
 
@@ -866,12 +872,11 @@ int stats_set(Client *client, char *para)
 	if (LINK_BINDIP)
 		sendtxtnumeric(client, "link::bind-ip: %s", LINK_BINDIP);
 	sendtxtnumeric(client, "anti-flood::connect-flood: %d per %s", THROTTLING_COUNT, pretty_time_val(THROTTLING_PERIOD));
-	sendtxtnumeric(client, "anti-flood::unknown-flood-bantime: %s", pretty_time_val(UNKNOWN_FLOOD_BANTIME));
-	sendtxtnumeric(client, "anti-flood::unknown-flood-amount: %ldKB", UNKNOWN_FLOOD_AMOUNT);
+	sendtxtnumeric(client, "anti-flood::handshake-data-flood::amount: %ld bytes", iConf.handshake_data_flood_amount);
+	sendtxtnumeric(client, "anti-flood::handshake-data-flood::ban-action: %s", banact_valtostring(iConf.handshake_data_flood_ban_action));
+	sendtxtnumeric(client, "anti-flood::handshake-data-flood::ban-time: %s", pretty_time_val(iConf.handshake_data_flood_ban_time));
 	if (AWAY_PERIOD)
-	{
 		sendtxtnumeric(client, "anti-flood::away-flood: %d per %s", AWAY_COUNT, pretty_time_val(AWAY_PERIOD));
-	}
 	sendtxtnumeric(client, "anti-flood::nick-flood: %d per %s", NICK_COUNT, pretty_time_val(NICK_PERIOD));
 	sendtxtnumeric(client, "handshake-timeout: %s", pretty_time_val(iConf.handshake_timeout));
 	sendtxtnumeric(client, "sasl-timeout: %s", pretty_time_val(iConf.sasl_timeout));

@@ -321,6 +321,7 @@ typedef enum ClientStatus {
 #define CLIENT_FLAG_DCCBLOCK		0x04000000	/**< Block all DCC send requests */
 #define CLIENT_FLAG_MAP			0x08000000	/**< Show this entry in /MAP (only used in map module) */
 #define CLIENT_FLAG_PINGWARN		0x10000000	/**< Server ping warning (remote server slow with responding to PINGs) */
+#define CLIENT_FLAG_NOHANDSHAKEDELAY	0x20000000	/**< No handshake delay */
 /** @} */
 
 #define SNO_DEFOPER "+kscfvGqobS"
@@ -421,6 +422,7 @@ typedef enum ClientStatus {
 #define IsOutgoing(x)			((x)->flags & CLIENT_FLAG_OUTGOING)
 #define IsPingSent(x)			((x)->flags & CLIENT_FLAG_PINGSENT)
 #define IsPingWarning(x)		((x)->flags & CLIENT_FLAG_PINGWARN)
+#define IsNoHandshakeDelay(x)		((x)->flags & CLIENT_FLAG_NOHANDSHAKEDELAY)
 #define IsProtoctlReceived(x)		((x)->flags & CLIENT_FLAG_PROTOCTL)
 #define IsQuarantined(x)		((x)->flags & CLIENT_FLAG_QUARANTINE)
 #define IsShunned(x)			((x)->flags & CLIENT_FLAG_SHUNNED)
@@ -451,6 +453,7 @@ typedef enum ClientStatus {
 #define SetOutgoing(x)			do { (x)->flags |= CLIENT_FLAG_OUTGOING; } while(0)
 #define SetPingSent(x)			do { (x)->flags |= CLIENT_FLAG_PINGSENT; } while(0)
 #define SetPingWarning(x)		do { (x)->flags |= CLIENT_FLAG_PINGWARN; } while(0)
+#define SetNoHandshakeDelay(x)		do { (x)->flags |= CLIENT_FLAG_NOHANDSHAKEDELAY; } while(0)
 #define SetProtoctlReceived(x)		do { (x)->flags |= CLIENT_FLAG_PROTOCTL; } while(0)
 #define SetQuarantined(x)		do { (x)->flags |= CLIENT_FLAG_QUARANTINE; } while(0)
 #define SetShunned(x)			do { (x)->flags |= CLIENT_FLAG_SHUNNED; } while(0)
@@ -480,6 +483,7 @@ typedef enum ClientStatus {
 #define ClearOutgoing(x)		do { (x)->flags &= ~CLIENT_FLAG_OUTGOING; } while(0)
 #define ClearPingSent(x)		do { (x)->flags &= ~CLIENT_FLAG_PINGSENT; } while(0)
 #define ClearPingWarning(x)		do { (x)->flags &= ~CLIENT_FLAG_PINGWARN; } while(0)
+#define ClearNoHandshakeDelay(x)	do { (x)->flags &= ~CLIENT_FLAG_NOHANDSHAKEDELAY; } while(0)
 #define ClearProtoctlReceived(x)	do { (x)->flags &= ~CLIENT_FLAG_PROTOCTL; } while(0)
 #define ClearQuarantined(x)		do { (x)->flags &= ~CLIENT_FLAG_QUARANTINE; } while(0)
 #define ClearShunned(x)			do { (x)->flags &= ~CLIENT_FLAG_SHUNNED; } while(0)
@@ -876,7 +880,7 @@ typedef void (*OverrideCmdFunc)(CommandOverride *ovr, Client *client, MessageTag
 #define TKL_BLACKLIST		0x0001000
 #define TKL_CONNECT_FLOOD	0x0002000
 #define TKL_MAXPERIP		0x0004000
-#define TKL_UNKNOWN_DATA_FLOOD	0x0008000
+#define TKL_HANDSHAKE_DATA_FLOOD	0x0008000
 #define TKL_ANTIRANDOM          0x0010000
 #define TKL_ANTIMIXEDUTF8       0x0020000
 #define TKL_BAN_VERSION         0x0040000
@@ -1013,6 +1017,21 @@ struct IRCCounts {
 
 /** The /LUSERS stats information */
 extern MODVAR IRCCounts irccounts;
+
+typedef struct NameValueList NameValueList;
+struct NameValueList {
+	NameValueList *prev, *next;
+	char *name;
+	char *value;
+};
+
+typedef struct NameValuePrioList NameValuePrioList;
+struct NameValuePrioList {
+	NameValuePrioList *prev, *next;
+	int priority;
+	char *name;
+	char *value;
+};
 
 #include "modules.h"
 
@@ -1176,7 +1195,7 @@ struct User {
 	Link *invited;			/**< Channels has the user been invited to (linked list) */
 	Link *dccallow;			/**< DCCALLOW list (linked list) */
 	char *away;			/**< AWAY message, or NULL if not away */
-	char svid[SVIDLEN + 1];		/**< Unique value assigned by services (SVID) */
+	char svid[SVIDLEN + 1];		/**< Services account name or ID (SVID) */
 	unsigned short joined;		/**< Number of channels joined */
 	char username[USERLEN + 1];	/**< Username, the user portion in nick!user@host. */
 	char realhost[HOSTLEN + 1];	/**< Realhost, the real host of the user (IP or hostname) - usually this is not shown to other users */
@@ -1226,13 +1245,6 @@ struct Server {
 
 struct MessageTag {
 	MessageTag *prev, *next;
-	char *name;
-	char *value;
-};
-
-typedef struct NameValueList NameValueList;
-struct NameValueList {
-	NameValueList *prev, *next;
 	char *name;
 	char *value;
 };
@@ -1387,15 +1399,19 @@ struct ConfigFlag_allow {
 	unsigned	reject_on_auth_failure :1;
 };
 
+/** allow { } block settings */
 struct ConfigItem_allow {
-	ConfigItem_allow	*prev, *next;
-	ConfigFlag			flag;
-	char				*ip, *hostname, *server;
-	AuthConfig		*auth;	
-	unsigned short		maxperip;
-	int					port;
-	ConfigItem_class	*class;
-	ConfigFlag_allow	flags;
+	ConfigItem_allow *prev, *next;
+	ConfigFlag flag;
+	char *ip;
+	char *hostname;
+	char *server;
+	AuthConfig *auth;
+	int maxperip; /**< Maximum connections permitted per IP address (locally) */
+	int global_maxperip; /**< Maximum connections permitted per IP address (globally) */
+	int port;
+	ConfigItem_class *class;
+	ConfigFlag_allow flags;
 	unsigned short ipv6_clone_mask;
 };
 
@@ -1630,7 +1646,8 @@ struct ConfigItem_allow_dcc {
 struct ConfigItem_log {
 	ConfigItem_log *prev, *next;
 	ConfigFlag flag;
-	char *file;
+	char *file; /**< Filename to log to (either generated or specified) */
+	char *filefmt; /**< Filename with dynamic % stuff */
 	long maxsize;
 	int  flags;
 	int  logfd;

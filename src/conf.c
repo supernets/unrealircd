@@ -1374,10 +1374,6 @@ void config_error(FORMAT_STRING(const char *format), ...)
 	va_end(ap);
 	if ((ptr = strchr(buffer, '\n')) != NULL)
 		*ptr = '\0';
-#ifdef _WIN32
-	if (!loop.ircd_booted)
-		win_log("[error] %s", buffer);
-#endif
 	ircd_log(LOG_ERROR, "config error: %s", buffer);
 	sendto_realops("error: %s", buffer);
 	if (remote_rehash_client)
@@ -1437,10 +1433,6 @@ void config_status(FORMAT_STRING(const char *format), ...)
 	va_end(ap);
 	if ((ptr = strchr(buffer, '\n')) != NULL)
 		*ptr = '\0';
-#ifdef _WIN32
-	if (!loop.ircd_booted)
-		win_log("* %s", buffer);
-#endif
 	ircd_log(LOG_ERROR, "%s", buffer);
 	sendto_realops("%s", buffer);
 	if (remote_rehash_client)
@@ -1458,10 +1450,6 @@ void config_warn(FORMAT_STRING(const char *format), ...)
 	va_end(ap);
 	if ((ptr = strchr(buffer, '\n')) != NULL)
 		*ptr = '\0';
-#ifdef _WIN32
-	if (!loop.ircd_booted)
-		win_log("[warning] %s", buffer);
-#endif
 	ircd_log(LOG_ERROR, "[warning] %s", buffer);
 	sendto_realops("[warning] %s", buffer);
 	if (remote_rehash_client)
@@ -1556,24 +1544,6 @@ int config_test_openfile(ConfigEntry *cep, int flags, mode_t mode, const char *e
 	return 0;
 }
 
-void config_progress(FORMAT_STRING(const char *format), ...)
-{
-	va_list		ap;
-	char		buffer[1024];
-	char		*ptr;
-
-	va_start(ap, format);
-	vsnprintf(buffer, 1023, format, ap);
-	va_end(ap);
-	if ((ptr = strchr(buffer, '\n')) != NULL)
-		*ptr = '\0';
-#ifdef _WIN32
-	if (!loop.ircd_booted)
-		win_log("* %s", buffer);
-#endif
-	sendto_realops("%s", buffer);
-}
-
 int config_is_blankorempty(ConfigEntry *cep, const char *block)
 {
 	if (!cep->ce_vardata)
@@ -1655,8 +1625,9 @@ void config_setdefaultsettings(Configuration *i)
 {
 	char tmp[512];
 
-	i->unknown_flood_amount = 4;
-	i->unknown_flood_bantime = 600;
+	i->handshake_data_flood_amount = 4096;
+	i->handshake_data_flood_ban_action = BAN_ACT_ZLINE;
+	i->handshake_data_flood_ban_time = 600;
 	safe_strdup(i->oper_snomask, SNO_DEFOPER);
 	i->ident_read_timeout = 7;
 	i->ident_connect_timeout = 3;
@@ -5333,6 +5304,8 @@ int	_conf_allow(ConfigFile *conf, ConfigEntry *ce)
 		}
 		else if (!strcmp(cep->ce_varname, "maxperip"))
 			allow->maxperip = atoi(cep->ce_vardata);
+		else if (!strcmp(cep->ce_varname, "global-maxperip"))
+			allow->global_maxperip = atoi(cep->ce_vardata);
 		else if (!strcmp(cep->ce_varname, "redirect-server"))
 			safe_strdup(allow->server, cep->ce_vardata);
 		else if (!strcmp(cep->ce_varname, "redirect-port"))
@@ -5368,6 +5341,14 @@ int	_conf_allow(ConfigFile *conf, ConfigEntry *ce)
 	if (!allow->ip)
 		safe_strdup(allow->ip, "*@NOMATCH");
 
+	/* Default: global-maxperip = maxperip+1 */
+	if (allow->global_maxperip == 0)
+		allow->global_maxperip = allow->maxperip+1;
+
+	/* global-maxperip < maxperip makes no sense */
+	if (allow->global_maxperip < allow->maxperip)
+		allow->global_maxperip = allow->maxperip;
+
 	AddListItem(allow, conf_allow);
 	return 1;
 }
@@ -5377,7 +5358,7 @@ int	_test_allow(ConfigFile *conf, ConfigEntry *ce)
 	ConfigEntry *cep, *cepp;
 	int		errors = 0;
 	Hook *h;
-	char has_ip = 0, has_hostname = 0, has_maxperip = 0, has_password = 0, has_class = 0;
+	char has_ip = 0, has_hostname = 0, has_maxperip = 0, has_global_maxperip = 0, has_password = 0, has_class = 0;
 	char has_redirectserver = 0, has_redirectport = 0, has_options = 0;
 	int hostname_possible_silliness = 0;
 
@@ -5450,9 +5431,26 @@ int	_test_allow(ConfigFile *conf, ConfigEntry *ce)
 				continue;
 			}
 			has_maxperip = 1;
-			if ((v <= 0) || (v > 65535))
+			if ((v <= 0) || (v > 1000000))
 			{
-				config_error("%s:%i: allow::maxperip with illegal value (must be 1-65535)",
+				config_error("%s:%i: allow::maxperip with illegal value (must be 1-1000000)",
+					cep->ce_fileptr->cf_filename, cep->ce_varlinenum);
+				errors++;
+			}
+		}
+		else if (!strcmp(cep->ce_varname, "global-maxperip"))
+		{
+			int v = atoi(cep->ce_vardata);
+			if (has_global_maxperip)
+			{
+				config_warn_duplicate(cep->ce_fileptr->cf_filename,
+					cep->ce_varlinenum, "allow::global-maxperip");
+				continue;
+			}
+			has_global_maxperip = 1;
+			if ((v <= 0) || (v > 1000000))
+			{
+				config_error("%s:%i: allow::global-maxperip with illegal value (must be 1-1000000)",
 					cep->ce_fileptr->cf_filename, cep->ce_varlinenum);
 				errors++;
 			}
@@ -6096,7 +6094,10 @@ int     _conf_log(ConfigFile *conf, ConfigEntry *ce)
 
 	ca = safe_alloc(sizeof(ConfigItem_log));
 	ca->logfd = -1;
-	safe_strdup(ca->file, ce->ce_vardata);
+	if (strchr(ce->ce_vardata, '%'))
+		safe_strdup(ca->filefmt, ce->ce_vardata);
+	else
+		safe_strdup(ca->file, ce->ce_vardata);
 
 	for (cep = ce->ce_entries; cep; cep = cep->ce_next)
 	{
@@ -6122,6 +6123,7 @@ int _test_log(ConfigFile *conf, ConfigEntry *ce) {
 	int fd, errors = 0;
 	ConfigEntry *cep, *cepp;
 	char has_flags = 0, has_maxsize = 0;
+	char *fname;
 
 	if (!ce->ce_vardata)
 	{
@@ -6192,21 +6194,25 @@ int _test_log(ConfigFile *conf, ConfigEntry *ce) {
 			continue;
 		}
 	}
+
 	if (!has_flags)
 	{
 		config_error_missing(ce->ce_fileptr->cf_filename, ce->ce_varlinenum,
 			"log::flags");
 		errors++;
 	}
-	if ((fd = fd_fileopen(ce->ce_vardata, O_WRONLY|O_CREAT)) == -1)
+
+	fname = unreal_strftime(ce->ce_vardata);
+	if ((fd = fd_fileopen(fname, O_WRONLY|O_CREAT)) == -1)
 	{
 		config_error("%s:%i: Couldn't open logfile (%s) for writing: %s",
 			ce->ce_fileptr->cf_filename, ce->ce_varlinenum,
-			ce->ce_vardata, strerror(errno));
+			fname, strerror(errno));
 		errors++;
-	}
-	else
+	} else
+	{
 		fd_close(fd);
+	}
 
 	return errors;
 }
@@ -6622,7 +6628,7 @@ int     _conf_ban(ConfigFile *conf, ConfigEntry *ce)
 		else if (!strcmp(cep->ce_varname, "reason"))
 			safe_strdup(ca->reason, cep->ce_vardata);
 		else if (!strcmp(cep->ce_varname, "action"))
-			ca ->action = banact_stringtoval(cep->ce_vardata);
+			ca->action = banact_stringtoval(cep->ce_vardata);
 	}
 	AddListItem(ca, conf_ban);
 	return 0;
@@ -7498,11 +7504,20 @@ int	_conf_set(ConfigFile *conf, ConfigEntry *ce)
 			}
 		}
 		else if (!strcmp(cep->ce_varname, "anti-flood")) {
-			for (cepp = cep->ce_entries; cepp; cepp = cepp->ce_next) {
-				if (!strcmp(cepp->ce_varname, "unknown-flood-bantime"))
-					tempiConf.unknown_flood_bantime = config_checkval(cepp->ce_vardata,CFG_TIME);
-				else if (!strcmp(cepp->ce_varname, "unknown-flood-amount"))
-					tempiConf.unknown_flood_amount = atol(cepp->ce_vardata);
+			for (cepp = cep->ce_entries; cepp; cepp = cepp->ce_next)
+			{
+				if (!strcmp(cepp->ce_varname, "handshake-data-flood"))
+				{
+					for (ceppp = cepp->ce_entries; ceppp; ceppp = ceppp->ce_next)
+					{
+						if (!strcmp(ceppp->ce_varname, "amount"))
+							tempiConf.handshake_data_flood_amount = config_checkval(ceppp->ce_vardata, CFG_SIZE);
+						else if (!strcmp(ceppp->ce_varname, "ban-time"))
+							tempiConf.handshake_data_flood_ban_time = config_checkval(ceppp->ce_vardata, CFG_TIME);
+						else if (!strcmp(ceppp->ce_varname, "ban-action"))
+							tempiConf.handshake_data_flood_ban_action = banact_stringtoval(ceppp->ce_vardata);
+					}
+				}
 				else if (!strcmp(cepp->ce_varname, "away-count"))
 					tempiConf.away_count = atol(cepp->ce_vardata);
 				else if (!strcmp(cepp->ce_varname, "away-period"))
@@ -8321,8 +8336,10 @@ int	_test_set(ConfigFile *conf, ConfigEntry *ce)
 			need_34_upgrade = 1;
 			continue;
 		}
-		else if (!strcmp(cep->ce_varname, "anti-flood")) {
-			for (cepp = cep->ce_entries; cepp; cepp = cepp->ce_next) {
+		else if (!strcmp(cep->ce_varname, "anti-flood"))
+		{
+			for (cepp = cep->ce_entries; cepp; cepp = cepp->ce_next)
+			{
 				if (!strcmp(cepp->ce_varname, "max-concurrent-conversations"))
 				{
 					for (ceppp = cepp->ce_entries; ceppp; ceppp = ceppp->ce_next)
@@ -8359,15 +8376,56 @@ int	_test_set(ConfigFile *conf, ConfigEntry *ce)
 					}
 					continue; /* required here, due to checknull directly below */
 				}
-				if (!strcmp(cepp->ce_varname, "unknown-flood-bantime"))
+				else if (!strcmp(cepp->ce_varname, "unknown-flood-amount") ||
+				         !strcmp(cepp->ce_varname, "unknown-flood-bantime"))
 				{
-					CheckNull(cepp);
-					CheckDuplicate(cepp, anti_flood_unknown_flood_bantime, "anti-flood::unknown-flood-bantime");
+					config_error("%s:%i: set::anti-flood::%s: this setting has been moved. "
+					             "See https://www.unrealircd.org/docs/Set_block#set::anti-flood::handshake-data-flood",
+					             cepp->ce_fileptr->cf_filename, cepp->ce_varlinenum, cepp->ce_varname);
+					errors++;
+					continue;
 				}
-				else if (!strcmp(cepp->ce_varname, "unknown-flood-amount"))
+				else if (!strcmp(cepp->ce_varname, "handshake-data-flood"))
 				{
-					CheckNull(cepp);
-					CheckDuplicate(cepp, anti_flood_unknown_flood_amount, "anti-flood::unknown-flood-amount");
+					for (ceppp = cepp->ce_entries; ceppp; ceppp = ceppp->ce_next)
+					{
+						if (!strcmp(ceppp->ce_varname, "amount"))
+						{
+							long v;
+							CheckNull(ceppp);
+							CheckDuplicate(ceppp, anti_flood_handshake_data_flood_amount, "anti-flood::handshake-data-flood::amount");
+							v = config_checkval(ceppp->ce_vardata, CFG_SIZE);
+							if (v < 1024)
+							{
+								config_error("%s:%i: set::anti-flood::handshake-data-flood::amount must be at least 1024 bytes",
+									ceppp->ce_fileptr->cf_filename, ceppp->ce_varlinenum);
+								errors++;
+							}
+						} else
+						if (!strcmp(ceppp->ce_varname, "ban-action"))
+						{
+							CheckNull(ceppp);
+							CheckDuplicate(ceppp, anti_flood_handshake_data_flood_ban_action, "anti-flood::handshake-data-flood::ban-action");
+							if (!banact_stringtoval(ceppp->ce_vardata))
+							{
+								config_error("%s:%i: set::anti-flood::handshake-data-flood::ban-action has unknown action type '%s'",
+									ceppp->ce_fileptr->cf_filename, ceppp->ce_varlinenum,
+									ceppp->ce_vardata);
+								errors++;
+							}
+						} else
+						if (!strcmp(ceppp->ce_varname, "ban-time"))
+						{
+							CheckNull(ceppp);
+							CheckDuplicate(ceppp, anti_flood_handshake_data_flood_ban_time, "anti-flood::handshake-data-flood::ban-time");
+						} else
+						{
+							config_error_unknownopt(ceppp->ce_fileptr->cf_filename,
+								ceppp->ce_varlinenum, "set::anti-flood::handshake-data-flood",
+								ceppp->ce_varname);
+							errors++;
+						}
+					}
 				}
 				else if (!strcmp(cepp->ce_varname, "away-count"))
 				{

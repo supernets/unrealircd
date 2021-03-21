@@ -14,8 +14,15 @@ ModuleHeader MOD_HEADER = {
 	"unrealircd-5",
 };
 
+/* Database version */
 #define CHANNELDB_VERSION 100
-#define CHANNELDB_SAVE_EVERY 299
+/* Save channels to file every <this> seconds */
+#define CHANNELDB_SAVE_EVERY 300
+/* The very first save after boot, apply this delta, this
+ * so we don't coincide with other (potentially) expensive
+ * I/O events like saving tkldb.
+ */
+#define CHANNELDB_SAVE_EVERY_DELTA -15
 
 #define MAGIC_CHANNEL_START	0x11111111
 #define MAGIC_CHANNEL_END	0x22222222
@@ -102,7 +109,7 @@ MOD_LOAD()
 			else
 				config_warn("[channeldb] Failed to rename database from %s to %s: %s", cfg.database, fname, strerror(errno));
 		}
-		channeldb_next_event = TStime() + CHANNELDB_SAVE_EVERY;
+		channeldb_next_event = TStime() + CHANNELDB_SAVE_EVERY + CHANNELDB_SAVE_EVERY_DELTA;
 	}
 	EventAdd(modinfo->handle, "channeldb_write_channeldb", write_channeldb_evt, NULL, 1000, 0);
 	if (ModuleGetError(modinfo->handle) != MODERR_NOERROR)
@@ -209,7 +216,7 @@ int write_channeldb(void)
 #endif
 
 	// Write to a tempfile first, then rename it if everything succeeded
-	snprintf(tmpfname, sizeof(tmpfname), "%s.tmp", cfg.database);
+	snprintf(tmpfname, sizeof(tmpfname), "%s.%x.tmp", cfg.database, getrandom32());
 	fd = fopen(tmpfname, "wb");
 	if (!fd)
 	{

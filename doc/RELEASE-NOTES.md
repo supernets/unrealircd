@@ -1,5 +1,68 @@
-UnrealIRCd 5.0.8 Release Notes
+UnrealIRCd 5.0.9 Release Notes
 ===============================
+
+This release comes with several nice feature enhancements. There are no major bug fixes.
+
+Enhancements:
+* Changes to the "Client connecting" notice on IRC (for IRCOps):
+  * The format changed slightly, instead of ```{clients}``` it
+    now shows ```[class: clients]```
+  * SSL/TLS information is still shown via ```[secure]```
+  * New: ```[reputation: NNN]``` to show the current
+    [reputation score](https://www.unrealircd.org/docs/Reputation_score)
+  * New: ```[account: abcdef]``` to show the services account,
+    but only if [SASL](https://www.unrealircd.org/docs/SASL) was used.
+* In the log file the format also changed slightly:
+  * IP information is now added as ```[127.0.0.1]``` in both the
+    connect and disconnect log messages.
+  * The vhost is logged as ```[vhost: xyz]``` instead of ```[VHOST xyz]```
+  * All the other values are now logged as well on-connect,
+    similar to the "Client connecting" notice, so: secure, reputation,
+    account (if applicable).
+* New option [allow::global-maxperip](https://www.unrealircd.org/docs/Allow_block):
+  this imposes a global (network-wide) restriction on the number of
+  connections per IP address.
+  If you don't have a global-maxperip setting in the allow block then it
+  will default to maxperip plus one. So, if you currently have an
+  allow::maxperip of 3 then global-maxperip will be 4.
+* [Handshake delay](https://www.unrealircd.org/docs/Set_block#set::handshake-delay)
+  is automatically disabled for users that are exempt from blacklist checking.
+* Always exempt 127.* from gline, kline, etc.
+* You can now have dated logfiles thanks to strftime formatting.
+  For example ```log "ircd.%Y-%m-%d.log" { }``` will create a log
+  file like called ircd.2020-01-31.log, a new one every day.
+* The Windows build now supports TLSv1.3 too.
+
+Fixes:
+* Windows: some warnings and error messages on boot were previously
+  missing.
+
+Changes:
+* Add doc/KEYS which contains the public key(s) used to sign UnrealIRCd releases
+* The options set::anti-flood::unknown-flood-* have been renamed and
+integrated in a new block called
+[set::anti-flood::handshake-data-flood](https://www.unrealircd.org/docs/Set_block#set::anti-flood::handshake-data-flood).
+The ban-action can now also be changed. Note that almost nobody will have to
+change this setting since it has a good default.
+* On *NIX bump the default maximum connections from 8192 to 16384.
+That is, when in "auto" mode, which is like for 99% of the users.
+Note that the system may still limit the actual number of connections
+to a lower value, epending on the value of ```ulimit -n -H```.
+
+Reminder: UnrealIRCd 4 is no longer supported
+----------------------------------------------
+
+UnrealIRCd 4.x is [no longer supported](https://www.unrealircd.org/docs/UnrealIRCd_4_EOL).
+Admins must upgrade to UnrealIRCd 5.
+
+Upgrading from 4.x to 5.x?
+Then check out the *UnrealIRCd 5* release notes [further down](#unrealircd-5).
+Or, at the very least, check out
+[Upgrading from 4.x](https://www.unrealircd.org/docs/Upgrading_from_4.x).
+
+
+UnrealIRCd 5.0.8
+-----------------
 
 The main purpose of this release is to enhance the
 [reputation](https://www.unrealircd.org/docs/Reputation_score)
@@ -52,17 +115,6 @@ Module coders / Developers:
   have been improved, in particular the 
   [Hook API](https://www.unrealircd.org/api/5/group__HookAPI.html)
   is now 100% documented.
-
-Reminder: UnrealIRCd 4 is no longer supported
-----------------------------------------------
-
-UnrealIRCd 4.x is [no longer supported](https://www.unrealircd.org/docs/UnrealIRCd_4_EOL).
-Admins must upgrade to UnrealIRCd 5.
-
-Upgrading from 4.x to 5.x?
-Then check out the *UnrealIRCd 5* release notes [further down](#unrealircd-5).
-Or, at the very least, check out
-[Upgrading from 4.x](https://www.unrealircd.org/docs/Upgrading_from_4.x).
 
 UnrealIRCd 5.0.7
 -----------------

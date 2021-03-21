@@ -117,6 +117,7 @@ CMD_FUNC(reputationunperm);
 int reputation_whois(Client *client, Client *target);
 int reputation_set_on_connect(Client *client);
 int reputation_pre_lconnect(Client *client);
+int reputation_connect_extinfo(Client *client, NameValuePrioList **list);
 int reputation_config_test(ConfigFile *cf, ConfigEntry *ce, int type, int *errs);
 int reputation_config_run(ConfigFile *cf, ConfigEntry *ce, int type);
 int reputation_config_posttest(int *errs);
@@ -165,6 +166,7 @@ MOD_INIT()
 	HookAdd(modinfo->handle, HOOKTYPE_HANDSHAKE, 0, reputation_set_on_connect);
 	HookAdd(modinfo->handle, HOOKTYPE_PRE_LOCAL_CONNECT, 2000000000, reputation_pre_lconnect); /* (prio: last) */
 	HookAdd(modinfo->handle, HOOKTYPE_REMOTE_CONNECT, -1000000000, reputation_set_on_connect); /* (prio: near-first) */
+	HookAdd(modinfo->handle, HOOKTYPE_CONNECT_EXTINFO, 0, reputation_connect_extinfo); /* (prio: near-first) */
 	CommandAdd(ModInf.handle, "REPUTATION", reputation_cmd, MAXPARA, CMD_USER|CMD_SERVER);
 	CommandAdd(ModInf.handle, "REPUTATIONUNPERM", reputationunperm, MAXPARA, CMD_USER|CMD_SERVER);
 	return MOD_SUCCESS;
@@ -399,7 +401,7 @@ void save_db(void)
 #endif
 
 	/* We write to a temporary file. Only to rename it later if everything was ok */
-	snprintf(tmpfname, sizeof(tmpfname), "%s.tmp", cfg.database);
+	snprintf(tmpfname, sizeof(tmpfname), "%s.%x.tmp", cfg.database, getrandom32());
 	
 	fd = fopen(tmpfname, "w");
 	if (!fd)
@@ -667,6 +669,12 @@ CMD_FUNC(reputationunperm)
 	sendto_realops("%s used /REPUTATIONUNPERM. On next REHASH the module can be RELOADED or UNLOADED. "
 	               "Note however that for a few minutes the scoring may be skipped, so don't do this too often.",
 	               client->name);
+}
+
+int reputation_connect_extinfo(Client *client, NameValuePrioList **list)
+{
+	add_fmt_nvplist(list, 0, "reputation", "%d", GetReputation(client));
+	return 0;
 }
 
 int count_reputation_records(void)

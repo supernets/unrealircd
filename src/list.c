@@ -244,11 +244,6 @@ Server *make_server(Client *client)
 		del_from_id_hash_table(client->id, client);
 		*client->id = '\0';
 	}
-	if (MyConnect(client) && (client->local->fd >= 0))
-	{
-		/* Give servers a large socket buffer for performance */
-		set_socket_buffers(client->local->fd, SERVER_SOCKET_RECEIVE_BUFFER, SERVER_SOCKET_SEND_BUFFER);
-	}
 	return client->serv;
 }
 
@@ -550,7 +545,7 @@ NameList *find_name_list(NameList *list, char *name)
 	return NULL;
 }
 
-/** Find an entry in a NameList by running match_simpl() on it.
+/** Find an entry in a NameList by running match_simple() on it.
  * @ingroup ListFunctions
  */
 NameList *find_name_list_match(NameList *list, char *name)
@@ -567,3 +562,52 @@ NameList *find_name_list_match(NameList *list, char *name)
 	return NULL;
 }
 
+void add_nvplist(NameValuePrioList **lst, int priority, char *name, char *value)
+{
+	va_list vl;
+	NameValuePrioList *e = safe_alloc(sizeof(NameValuePrioList));
+	safe_strdup(e->name, name);
+	if (value && *value)
+		safe_strdup(e->value, value);
+	AddListItemPrio(e, *lst, priority);
+}
+
+NameValuePrioList *find_nvplist(NameValuePrioList *list, char *name)
+{
+	NameValuePrioList *e;
+
+	for (e = list; e; e = e->next)
+	{
+		if (!strcasecmp(e->name, name))
+		{
+			return e;
+		}
+	}
+	return NULL;
+}
+
+void add_fmt_nvplist(NameValuePrioList **lst, int priority, char *name, FORMAT_STRING(const char *format), ...)
+{
+	char value[512];
+	va_list vl;
+	*value = '\0';
+	if (format)
+	{
+		va_start(vl, format);
+		vsnprintf(value, sizeof(value), format, vl);
+		va_end(vl);
+	}
+	add_nvplist(lst, priority, name, value);
+}
+
+void free_nvplist(NameValuePrioList *lst)
+{
+	NameValuePrioList *e, *e_next;
+	for (e = lst; e; e = e_next)
+	{
+		e_next = e->next;
+		safe_free(e->name);
+		safe_free(e->value);
+		safe_free(e);
+	}
+}

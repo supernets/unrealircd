@@ -113,7 +113,6 @@ extern void config_error_empty(const char *filename, int line, const char *block
 extern void config_warn_duplicate(const char *filename, int line, const char *entry);
 extern int config_is_blankorempty(ConfigEntry *cep, const char *block);
 extern MODVAR int config_verbose;
-extern void config_progress(FORMAT_STRING(const char *format), ...) __attribute__((format(printf,1,2)));
 extern void config_entry_free(ConfigEntry *ce);
 extern void config_entry_free_all(ConfigEntry *ce);
 extern ConfigFile *config_load(char *filename, char *displayname);
@@ -886,7 +885,6 @@ extern CMD_FUNC(cmd_rehash);
 extern CMD_FUNC(cmd_die);
 extern CMD_FUNC(cmd_restart);
 extern void cmd_alias(Client *client, MessageTag *recv_mtags, int parc, char *parv[], char *cmd); /* special! */
-extern void ban_flooder(Client *cptr);
 extern char *pcre2_version(void);
 extern int get_terminal_width(void);
 extern int has_common_channels(Client *c1, Client *c2);
@@ -1000,3 +998,9 @@ extern void free_security_group(SecurityGroup *s);
 extern void set_security_group_defaults(void);
 extern int user_allowed_by_security_group(Client *client, SecurityGroup *s);
 extern int user_allowed_by_security_group_name(Client *client, char *secgroupname);
+extern void add_nvplist(NameValuePrioList **lst, int priority, char *name, char *value);
+extern void add_fmt_nvplist(NameValuePrioList **lst, int priority, char *name, FORMAT_STRING(const char *format), ...) __attribute__((format(printf,4,5)));
+extern NameValuePrioList *find_nvplist(NameValuePrioList *list, char *name);
+extern void free_nvplist(NameValuePrioList *lst);
+extern char *get_connect_extinfo(Client *client);
+extern char *unreal_strftime(char *str);
