@@ -81,16 +81,17 @@ typedef struct {
 } SpamfilterTargetTable;
 
 SpamfilterTargetTable spamfiltertargettable[] = {
-	{ SPAMF_CHANMSG,	'c',	"channel",			"PRIVMSG" },
-	{ SPAMF_USERMSG,	'p',	"private",			"PRIVMSG" },
+	{ SPAMF_CHANMSG,	'c',	"channel",		"PRIVMSG" },
+	{ SPAMF_USERMSG,	'p',	"private",		"PRIVMSG" },
 	{ SPAMF_USERNOTICE,	'n',	"private-notice",	"NOTICE" },
 	{ SPAMF_CHANNOTICE,	'N',	"channel-notice",	"NOTICE" },
-	{ SPAMF_PART,		'P',	"part",				"PART" },
-	{ SPAMF_QUIT,		'q',	"quit",				"QUIT" },
-	{ SPAMF_DCC,		'd',	"dcc",				"PRIVMSG" },
-	{ SPAMF_USER,		'u',	"user",				"NICK" },
-	{ SPAMF_AWAY,		'a',	"away",				"AWAY" },
-	{ SPAMF_TOPIC,		't',	"topic",			"TOPIC" },
+	{ SPAMF_PART,		'P',	"part",			"PART" },
+	{ SPAMF_QUIT,		'q',	"quit",			"QUIT" },
+	{ SPAMF_DCC,		'd',	"dcc",			"PRIVMSG" },
+	{ SPAMF_USER,		'u',	"user",			"NICK" },
+	{ SPAMF_AWAY,		'a',	"away",			"AWAY" },
+	{ SPAMF_TOPIC,		't',	"topic",		"TOPIC" },
+	{ SPAMF_MTAG,		'T',	"message-tag",		"message-tag" },
 	{ 0, 0, 0, 0 }
 };
 
@@ -583,7 +584,7 @@ static void recurse_send_quits(Client *cptr, Client *client, Client *from, Clien
 		recurse_send_quits(cptr, acptr, from, to, mtags, comment, splitstr);
 	}
 
-	if (cptr == client && to != from)
+	if (cptr == client && to != from && !(to->direction && (to->direction == from)))
 		sendto_one(to, mtags, "SQUIT %s :%s", client->name, comment);
 }
 
@@ -700,6 +701,16 @@ static void exit_one_client(Client *client, MessageTag *mtags_i, const char *com
  */
 void exit_client(Client *client, MessageTag *recv_mtags, char *comment)
 {
+	exit_client_ex(client, client->direction, recv_mtags, comment);
+}
+
+/** Exit this IRC client, and all the dependents (users, servers) if this is a server.
+ * @param client        The client to exit.
+ * @param recv_mtags  Message tags to use as a base (if any).
+ * @param comment     The (s)quit message
+ */
+void exit_client_ex(Client *client, Client *origin, MessageTag *recv_mtags, char *comment)
+{
 	long long on_for;
 	ConfigItem_listen *listen_conf;
 	MessageTag *mtags_generated = NULL;
@@ -812,7 +823,7 @@ void exit_client(Client *client, MessageTag *recv_mtags, char *comment)
 		else
 			ircsnprintf(splitstr, sizeof splitstr, "%s %s", client->srvptr->name, client->name);
 
-		remove_dependents(client, client->direction, recv_mtags, comment, splitstr);
+		remove_dependents(client, origin, recv_mtags, comment, splitstr);
 
 		RunHook2(HOOKTYPE_SERVER_QUIT, client, recv_mtags);
 	}
@@ -1187,6 +1198,7 @@ char *our_strcasestr(char *haystack, char *needle)
  * @param tag		A tag used internally and for server-to-server traffic,
  *			not visible to end-users.
  * @param priority	Priority - for ordering multiple swhois entries
+ *                      (lower number = further up in the swhoises list in WHOIS)
  * @param swhois	The actual special whois title (string) you want to add to the user
  * @param from		Who added this entry
  * @param skip		Which server(-side) to skip broadcasting this entry to.
@@ -1785,6 +1797,23 @@ int read_str(FILE *fd, char **x)
 	return 1;
 }
 
+/** Convert binary 'data' of size 'len' to a hexadecimal string 'str'.
+ * The caller is responsible to ensure that 'str' is sufficiently large.
+ */
+void binarytohex(void *data, size_t len, char *str)
+{
+	const char hexchars[16] = "0123456789abcdef";
+	char *datastr = (char *)data;
+	int i, n = 0;
+
+	for (i=0; i<len; i++)
+	{
+		str[n++] = hexchars[(datastr[i] >> 4) & 0xF];
+		str[n++] = hexchars[datastr[i] & 0xF];
+	}
+	str[n] = '\0';
+}
+
 /** Generates an MD5 checksum.
  * @param mdout[out] Buffer to store result in, the result will be 16 bytes in binary
  *                   (not ascii printable!).
@@ -1809,31 +1838,27 @@ void DoMD5(char *mdout, const char *src, unsigned long n)
 char *md5hash(char *dst, const char *src, unsigned long n)
 {
 	char tmp[16];
-	SHA256_CTX hash;
 
 	DoMD5(tmp, src, n);
-	sprintf(dst, "%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x",
-		tmp[0], tmp[1], tmp[2], tmp[3], tmp[4], tmp[5], tmp[6], tmp[7], tmp[8],
-		tmp[9], tmp[10], tmp[11], tmp[12], tmp[13], tmp[14], tmp[15]);
-
+	binarytohex(tmp, sizeof(tmp), dst);
 	return dst;
 }
 
-/** Convert binary 'data' of size 'len' to a hexadecimal string 'str'.
- * The caller is responsible to ensure that 'str' is sufficiently large.
+/** Generates a SHA256 checksum - ASCII printable string (0011223344..etc..).
+ * @param dst[out]  Buffer to store result in, which needs to be 65 bytes minimum.
+ * @param src[in]   The input data used to generate the checksum.
+ * @param n[in]     Length of data.
  */
-void binarytohex(void *data, size_t len, char *str)
+char *sha256hash(char *dst, const char *src, unsigned long n)
 {
-	const char hexchars[16] = "0123456789abcdef";
-	char *datastr = (char *)data;
-	int i, n = 0;
+	SHA256_CTX hash;
+	char binaryhash[SHA256_DIGEST_LENGTH];
 
-	for (i=0; i<len; i++)
-	{
-		str[n++] = hexchars[(datastr[i] >> 4) & 0xF];
-		str[n++] = hexchars[datastr[i] & 0xF];
-	}
-	str[n] = '\0';
+	SHA256_Init(&hash);
+	SHA256_Update(&hash, src, n);
+	SHA256_Final(binaryhash, &hash);
+	binarytohex(binaryhash, sizeof(binaryhash), dst);
+	return dst;
 }
 
 /** Calculate the SHA256 checksum of a file */
@@ -1972,4 +1997,102 @@ char *sendtype_to_cmd(SendType sendtype)
 	if (sendtype == SEND_TYPE_TAGMSG)
 		return "TAGMSG";
 	return NULL;
+}
+
+/** Check password strength.
+ * @param pass		The password to check
+ * @param min_length	The minimum length of the password
+ * @param strict	Whether to require UPPER+lower+digits
+ * @returns 1 if good, 0 if not.
+ */
+int check_password_strength(char *pass, int min_length, int strict, char **err)
+{
+	char has_lowercase=0, has_uppercase=0, has_digit=0;
+	char *p;
+	static char buf[256];
+
+	if (err)
+		*err = NULL;
+
+	if (strlen(pass) < min_length)
+	{
+		if (err)
+		{
+			snprintf(buf, sizeof(buf), "Password must be at least %d characters", min_length);
+			*err = buf;
+		}
+		return 0;
+	}
+
+	for (p=pass; *p; p++)
+	{
+		if (islower(*p))
+			has_lowercase = 1;
+		else if (isupper(*p))
+			has_uppercase = 1;
+		else if (isdigit(*p))
+			has_digit = 1;
+	}
+
+	if (strict)
+	{
+		if (!has_lowercase)
+		{
+			if (err)
+				*err = "Password must contain at least 1 lowercase character";
+			return 0;
+		} else
+		if (!has_uppercase)
+		{
+			if (err)
+				*err = "Password must contain at least 1 UPPERcase character";
+			return 0;
+		} else
+		if (!has_digit)
+		{
+			if (err)
+				*err = "Password must contain at least 1 digit (number)";
+			return 0;
+		}
+	}
+
+	return 1;
+}
+
+int valid_secret_password(char *pass, char **err)
+{
+	return check_password_strength(pass, 10, 1, err);
+}
+
+int running_interactively(void)
+{
+#ifndef _WIN32
+	char *s;
+
+	if (!isatty(0))
+		return 0;
+
+	s = getenv("TERM");
+	if (!s || !strcasecmp(s, "dumb") || !strcasecmp(s, "none"))
+		return 0;
+
+	return 1;
+#else
+	return IsService ? 0 : 1;
+#endif
+}
+
+/** Skip whitespace (if any) */
+void skip_whitespace(char **p)
+{
+	for (; **p == ' ' || **p == '\t'; *p = *p + 1);
+}
+
+/** Keep reading '*p' until we hit any of the 'stopchars'.
+ * Actually behaves like strstr() but then hit the end
+ * of the string (\0) i guess?
+ */
+void read_until(char **p, char *stopchars)
+{
+	for (; **p && !strchr(stopchars, **p); *p = *p + 1);
 }

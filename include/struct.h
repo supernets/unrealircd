@@ -109,6 +109,7 @@ typedef struct ConfigItem_blacklist_module ConfigItem_blacklist_module;
 typedef struct ConfigItem_help ConfigItem_help;
 typedef struct ConfigItem_offchans ConfigItem_offchans;
 typedef struct SecurityGroup SecurityGroup;
+typedef struct Secret Secret;
 typedef struct ListStruct ListStruct;
 typedef struct ListStructPrio ListStructPrio;
 
@@ -120,7 +121,7 @@ typedef struct Watch Watch;
 typedef struct Client Client;
 typedef struct LocalClient LocalClient;
 typedef struct Channel Channel;
-typedef struct User ClientUser;
+typedef struct User User;
 typedef struct Server Server;
 typedef struct Link Link;
 typedef struct Ban Ban;
@@ -211,7 +212,7 @@ typedef OperPermission (*OperClassEntryEvalCallback)(OperClassACLEntryVar* varia
 #define LOG_CHGCMDS 0x0100
 #define LOG_OVERRIDE 0x0200
 #define LOG_SPAMFILTER 0x0400
-#define LOG_DBG    0x0800 /* fixme */
+#define LOG_FLOOD 0x0800
 
 /*
 ** 'offsetof' is defined in ANSI-C. The following definition
@@ -239,6 +240,14 @@ typedef OperPermission (*OperClassEntryEvalCallback)(OperClassACLEntryVar* varia
  * DO NOT CHANGE THIS as the siphash code depends on it.
  */
 #define SIPHASH_KEY_LENGTH 16
+
+/** The length of a standard 'msgid' tag (note that special
+ * msgid tags will be longer).
+ * The 22 alphanumeric characters provide slightly more
+ * than 128 bits of randomness (62^22 > 2^128).
+ * See mtag_add_or_inherit_msgid() for more information.
+ */
+#define MSGIDLEN	22
 
 /** This specifies the current client status or the client type - see @link ClientStatus @endlink in particular.
  * You may think "server" or "client" are the only choices here, but there are many more
@@ -661,6 +670,7 @@ struct ListStructPrio {
 						CHECK_PRIO_LIST_ENTRY(list) \
 						CHECK_PRIO_LIST_ENTRY(item) \
 						CHECK_NULL_LIST_ITEM(item) \
+						item->priority = prio; \
 						add_ListItemPrio((ListStructPrio *)item, (ListStructPrio **)&list, prio); \
 					} while(0)
 
@@ -754,6 +764,7 @@ struct LoopStruct {
 	unsigned do_bancheck_spamf_user : 1; /* perform 'user' spamfilter bancheck */
 	unsigned do_bancheck_spamf_away : 1; /* perform 'away' spamfilter bancheck */
 	unsigned ircd_rehashing : 1;
+	unsigned ircd_terminating : 1;
 	unsigned tainted : 1;
 	Client *rehash_save_cptr, *rehash_save_client;
 	int rehash_save_sig;
@@ -862,6 +873,97 @@ typedef void (*CmdFunc)(Client *client, MessageTag *mtags, int parc, char *parv[
 typedef void (*AliasCmdFunc)(Client *client, MessageTag *mtags, int parc, char *parv[], char *cmd);
 typedef void (*OverrideCmdFunc)(CommandOverride *ovr, Client *client, MessageTag *mtags, int parc, char *parv[]);
 
+#include <sodium.h>
+
+/* This is the 'chunk size', the size of encryption blocks.
+ * We choose 4K here since that is a decent amount as of 2021 and
+ * more would not benefit performance anyway.
+ * Note that you cannot change this value easily afterwards
+ * (you cannot read files with a different chunk size).
+ */
+#define UNREALDB_CRYPT_FILE_CHUNK_SIZE 4096
+
+/** The salt length. Don't change. */
+#define UNREALDB_SALT_LEN 16
+
+/** Database modes of operation (read or write)
+ * @ingroup UnrealDBFunctions
+ */
+typedef enum UnrealDBMode {
+	UNREALDB_MODE_READ = 0,
+	UNREALDB_MODE_WRITE = 1
+} UnrealDBMode;
+
+typedef enum UnrealDBCipher {
+	UNREALDB_CIPHER_XCHACHA20 = 0x0001
+} UnrealDBCipher;
+
+typedef enum UnrealDBKDF {
+	UNREALDB_KDF_ARGON2ID = 0x0001
+} UnrealDBKDF;
+
+/** Database configuration for a particular file */
+typedef struct UnrealDBConfig {
+	uint16_t kdf;					/**< Key derivation function (always 0x01) */
+	uint16_t t_cost;				/**< Time cost (number of rounds) */
+	uint16_t m_cost; 				/**< Memory cost (in number of bitshifts, eg 15 means 1<<15=32M) */
+	uint16_t p_cost;				/**< Parallel cost (number of concurrent threads) */
+	uint16_t saltlen;				/**< Length of the salt (normally UNREALDB_SALT_LEN) */
+	char *salt;					/**< Salt */
+	uint16_t cipher;				/**< Encryption cipher (always 0x01) */
+	uint16_t keylen;				/**< Key length */
+	char *key;					/**< The key used for encryption/decryption */
+} UnrealDBConfig;
+
+/** Error codes returned by @ref UnrealDBFunctions
+ * @ingroup UnrealDBFunctions
+ */
+typedef enum UnrealDBError {
+	UNREALDB_ERROR_SUCCESS = 0,			/**< Success, not an error */
+	UNREALDB_ERROR_FILENOTFOUND = 1,		/**< File does not exist */
+	UNREALDB_ERROR_CRYPTED = 2,			/**< File is crypted but no password provided */
+	UNREALDB_ERROR_NOTCRYPTED = 3,			/**< File is not crypted and a password was provided */
+	UNREALDB_ERROR_HEADER = 4,			/**< Header is corrupt, invalid or unknown format */
+	UNREALDB_ERROR_SECRET = 5,			/**< Invalid secret { } block provided - either does not exist or does not meet requirements */
+	UNREALDB_ERROR_PASSWORD = 6,			/**< Invalid password provided */
+	UNREALDB_ERROR_IO = 7,				/**< I/O error */
+	UNREALDB_ERROR_API = 8,				/**< API call violation, eg requesting to write on a file opened for reading */
+	UNREALDB_ERROR_INTERNAL = 9,			/**< Internal error, eg crypto routine returned something unexpected */
+} UnrealDBError;
+
+/** Database handle
+ * This is returned by unrealdb_open() and used by all other @ref UnrealDBFunctions
+ * @ingroup UnrealDBFunctions
+ */
+typedef struct UnrealDB {
+	FILE *fd;					/**< File descriptor */
+	UnrealDBMode mode;				/**< UNREALDB_MODE_READ / UNREALDB_MODE_WRITE */
+	int crypted;					/**< Are we doing any encryption or just plaintext? */
+	uint64_t creationtime;				/**< When this file was created/updates */
+	crypto_secretstream_xchacha20poly1305_state st; /**< Internal state for crypto engine */
+	char buf[UNREALDB_CRYPT_FILE_CHUNK_SIZE];	/**< Buffer used for reading/writing */
+	int buflen;					/**< Length of current data in buffer */
+	UnrealDBError error_code;			/**< Last error code. Whenever this happens we will set this, never overwrite, and block further I/O */
+	char *error_string;				/**< Error string upon failure */
+	UnrealDBConfig *config;				/**< Config */
+} UnrealDB;
+
+/** Used for speeding up reading/writing of DBs (so we don't have to run argon2 repeatedly) */
+typedef struct SecretCache SecretCache;
+struct SecretCache {
+	SecretCache *prev, *next;
+	UnrealDBConfig *config;
+	time_t cache_hit;
+};
+
+/** Used for storing secret { } blocks */
+struct Secret {
+	Secret *prev, *next;
+	char *name;
+	char *password;
+	SecretCache *cache;
+};
+
 
 /* tkl:
  *   TKL_KILL|TKL_GLOBAL 	= Global K-Line (GLINE)
@@ -898,12 +1000,13 @@ typedef void (*OverrideCmdFunc)(CommandOverride *ovr, Client *client, MessageTag
 #define SPAMF_USERMSG		0x0002 /* p */
 #define SPAMF_USERNOTICE	0x0004 /* n */
 #define SPAMF_CHANNOTICE	0x0008 /* N */
-#define SPAMF_PART			0x0010 /* P */
-#define SPAMF_QUIT			0x0020 /* q */
-#define SPAMF_DCC			0x0040 /* d */
-#define SPAMF_USER			0x0080 /* u */
-#define SPAMF_AWAY			0x0100 /* a */
-#define SPAMF_TOPIC			0x0200 /* t */
+#define SPAMF_PART		0x0010 /* P */
+#define SPAMF_QUIT		0x0020 /* q */
+#define SPAMF_DCC		0x0040 /* d */
+#define SPAMF_USER		0x0080 /* u */
+#define SPAMF_AWAY		0x0100 /* a */
+#define SPAMF_TOPIC		0x0200 /* t */
+#define SPAMF_MTAG		0x0400 /* m */
 
 /* Other flags only for function calls: */
 #define SPAMFLAG_NOWARN		0x0001
@@ -1107,6 +1210,25 @@ extern void unload_all_unused_moddata(void);
 #define TLSFLAG_NOSTARTTLS	0x8
 #define TLSFLAG_DISABLECLIENTCERT 0x10
 
+/** Flood counters for local clients */
+typedef struct FloodCounter {
+	int count;
+	long t;
+} FloodCounter;
+
+/** This is the list of different flood counters that we keep for local clients. */
+/* IMPORTANT: If you change this, update floodoption_names[] in src/user.c too !!!!!!!!!!!! */
+typedef enum FloodOption {
+	FLD_NICK		= 0,	/**< nick-flood */
+	FLD_JOIN		= 1,	/**< join-flood */
+	FLD_AWAY		= 2,	/**< away-flood */
+	FLD_INVITE		= 3,	/**< invite-flood */
+	FLD_KNOCK		= 4,	/**< knock-flood */
+	FLD_CONVERSATIONS	= 5,	/**< max-concurrent-conversations */
+} FloodOption;
+#define MAXFLOODOPTIONS 10
+
+
 /** This shows the Client struct (any client), the User struct (a user), Server (a server) that are commonly accessed both in the core and by 3rd party coders.
  * @defgroup CommonStructs Common structs
  * @{
@@ -1119,7 +1241,7 @@ struct Client {
 	struct list_head lclient_node;		/**< For local client list (lclient_list) */
 	struct list_head special_node;		/**< For special lists (server || unknown || oper) */
 	LocalClient *local;			/**< Additional information regarding locally connected clients */
-	ClientUser *user;			/**< Additional information, if this client is a user */
+	User *user;				/**< Additional information, if this client is a user */
 	Server *serv;				/**< Additional information, if this is a server */
 	ClientStatus status;			/**< Client status, one of CLIENT_STATUS_* */
 	struct list_head client_hash;		/**< For name hash table (clientTable) */
@@ -1186,6 +1308,7 @@ struct LocalClient {
 	struct hostent *hostp;		/**< Host record for this client (used by DNS code) */
 	char sockhost[HOSTLEN + 1];	/**< Hostname from the socket */
 	u_short port;			/**< Remote TCP port of client */
+	FloodCounter flood[MAXFLOODOPTIONS];
 };
 
 /** User information (persons, not servers), you use client->user to access these (see also @link Client @endlink).
@@ -1208,11 +1331,9 @@ struct User {
 	char *operlogin;		/**< Which oper { } block was used to oper up, otherwise NULL - used by oper::maxlogins */
 	struct {
 		time_t nick_t;		/**< For set::anti-flood::nick-flood: time */
-		time_t away_t;		/**< For set::anti-flood::away-flood: time */
 		time_t knock_t;		/**< For set::anti-flood::knock-flood: time */
 		time_t invite_t;	/**< For set::anti-flood::invite-flood: time */
 		unsigned char nick_c;	/**< For set::anti-flood::nick-flood: counter */
-		unsigned char away_c;	/**< For set::anti-flood::away-flood: counter */
 		unsigned char knock_c;	/**< For set::anti-flood::knock-flood: counter */
 		unsigned char invite_c;	/**< For set::anti-flood::invite-flood: counter */
 	} flood;			/**< Anti-flood counters */

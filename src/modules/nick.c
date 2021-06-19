@@ -214,11 +214,10 @@ CMD_FUNC(cmd_nick_remote)
 		sendto_snomask(SNO_FNICKCHANGE, "*** %s (%s@%s) has changed their nickname to %s",
 			client->name, client->user->username, client->user->realhost, nick);
 
-	RunHook2(HOOKTYPE_REMOTE_NICKCHANGE, client, nick);
-
+	new_message(client, recv_mtags, &mtags);
+	RunHook3(HOOKTYPE_REMOTE_NICKCHANGE, client, mtags, nick);
 	client->lastnick = lastnick ? lastnick : TStime();
 	add_history(client, 1);
-	new_message(client, recv_mtags, &mtags);
 	sendto_server(client, 0, 0, mtags, ":%s NICK %s %lld",
 	    client->id, nick, (long long)client->lastnick);
 	sendto_local_common_channels(client, client, 0, mtags, ":%s NICK :%s", client->name, nick);
@@ -275,19 +274,6 @@ CMD_FUNC(cmd_nick_local)
 		return;
 	}
 
-	/* set::anti-flood::nick-flood */
-	if (client->user && !ValidatePermissionsForPath("immune:nick-flood",client,NULL,NULL,NULL))
-	{
-		if ((client->user->flood.nick_c >= NICK_COUNT) &&
-		    (TStime() - client->user->flood.nick_t < NICK_PERIOD))
-		{
-			/* Throttle... */
-			sendnumeric(client, ERR_NCHANGETOOFAST, nick,
-				(int)(NICK_PERIOD - (TStime() - client->user->flood.nick_t)));
-			return;
-		}
-	}
-
 	/* Check for collisions / in use */
 	if (!strcasecmp("ircd", nick) || !strcasecmp("irc", nick))
 	{
@@ -299,7 +285,7 @@ CMD_FUNC(cmd_nick_local)
 	{
 		/* Local client changing nick: check spamfilter */
 		spamfilter_build_user_string(spamfilter_user, nick, client);
-		if (match_spamfilter(client, spamfilter_user, SPAMF_USER, NULL, 0, NULL))
+		if (match_spamfilter(client, spamfilter_user, SPAMF_USER, "NICK", NULL, 0, NULL))
 			return;
 	}
 
@@ -320,6 +306,16 @@ CMD_FUNC(cmd_nick_local)
 			return;	/* NICK message ignored */
 		}
 		/* fallthrough for ircops that have sufficient privileges */
+	}
+
+	/* set::anti-flood::nick-flood */
+	if (client->user &&
+	    !ValidatePermissionsForPath("immune:nick-flood",client,NULL,NULL,NULL) &&
+	    flood_limit_exceeded(client, FLD_NICK))
+	{
+		/* Throttle... */
+		sendnumeric(client, ERR_NCHANGETOOFAST, nick);
+		return;
 	}
 
 	if (!ValidatePermissionsForPath("immune:nick-flood",client,NULL,NULL,NULL))
@@ -440,20 +436,13 @@ CMD_FUNC(cmd_nick_local)
 			}
 		}
 
-		if (TStime() - client->user->flood.nick_t >= NICK_PERIOD)
-		{
-			client->user->flood.nick_t = TStime();
-			client->user->flood.nick_c = 1;
-		} else
-			client->user->flood.nick_c++;
-
 		sendto_snomask(SNO_NICKCHANGE, "*** %s (%s@%s) has changed their nickname to %s",
 			client->name, client->user->username, client->user->realhost, nick);
 
-		RunHook2(HOOKTYPE_LOCAL_NICKCHANGE, client, nick);
+		new_message(client, recv_mtags, &mtags);
+		RunHook3(HOOKTYPE_LOCAL_NICKCHANGE, client, mtags, nick);
 		client->lastnick = TStime();
 		add_history(client, 1);
-		new_message(client, recv_mtags, &mtags);
 		sendto_server(client, 0, 0, mtags, ":%s NICK %s %lld",
 		    client->id, nick, (long long)client->lastnick);
 		sendto_local_common_channels(client, client, 0, mtags, ":%s NICK :%s", client->name, nick);
@@ -681,7 +670,12 @@ nickkill2done:
 		return;
 
 	if (client->user->svid[0] != '0')
+	{
 		user_account_login(recv_mtags, client);
+		/* no need to check for kill upon user_account_login() here
+		 * since that can only happen for local users.
+		 */
+	}
 
 	RunHook(HOOKTYPE_REMOTE_CONNECT, client);
 
@@ -721,7 +715,7 @@ int _register_user(Client *client, char *nick, char *username, char *umode, char
 	    userbad[USERLEN * 2 + 1], *ubad = userbad, noident = 0;
 	int i, xx;
 	Hook *h;
-	ClientUser *user = client->user;
+	User *user = client->user;
 	char *tkllayer[9] = {
 		me.name,	/*0  server.name */
 		"+",		/*1  +|- */
@@ -879,7 +873,7 @@ int _register_user(Client *client, char *nick, char *username, char *umode, char
 		find_shun(client);
 
 		spamfilter_build_user_string(spamfilter_user, client->name, client);
-		if (match_spamfilter(client, spamfilter_user, SPAMF_USER, NULL, 0, &savetkl))
+		if (match_spamfilter(client, spamfilter_user, SPAMF_USER, NULL, NULL, 0, &savetkl))
 		{
 			if (savetkl && ((savetkl->ptr.spamfilter->action == BAN_ACT_VIRUSCHAN) ||
 			                (savetkl->ptr.spamfilter->action == BAN_ACT_SOFT_VIRUSCHAN)))

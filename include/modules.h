@@ -241,14 +241,15 @@ typedef struct {
 	 *
 	 * This function pointer is NULL (unused) for modes without parameters.
 	 * @param para		The input parameter.
-	 * @param client	The client that the mode request came from (can be NULL)
+	 * @param client	The client that the mode request came from (can be NULL!)
+	 * @param channel	The channel that the mode request came from (can be NULL!)
 	 * @returns pointer to output string (temporary storage)
 	 * @note The 'client' field will be NULL if for example called for set::modes-on-join.
-	 * @note You should probably not use 'client' in most cases.
+	 * @note You should probably not use 'client' or 'channel' in most cases.
 	 *       In particular you MUST NOT SEND ERRORS to the client.
 	 *       This should be done in is_ok() and not in conv_param().
 	 */
-	char *(*conv_param)(char *para, Client *client);
+	char *(*conv_param)(char *para, Client *client, Channel *channel);
 
 	/** Free and remove parameter from list.
 	 * This function pointer is NULL (unused) for modes without parameters.
@@ -309,7 +310,7 @@ typedef struct {
 	int		(*is_ok)(Client *,Channel *, char mode, char *para, int, int);
 	void *	(*put_param)(void *, char *);
 	char *		(*get_param)(void *);
-	char *		(*conv_param)(char *, Client *);
+	char *		(*conv_param)(char *, Client *, Channel *);
 	void		(*free_param)(void *);
 	void *	(*dup_struct)(void *);
 	int		(*sjoin_check)(Channel *, void *, void *);
@@ -486,11 +487,43 @@ typedef struct {
 
 /** @} */
 
+/** Filter for history: the command / type of the request */
+typedef enum HistoryFilterCommand {
+        HFC_SIMPLE=1,		/**< Simple history request for lines / unixtime */
+        HFC_BEFORE=2,		/**< CHATHISTORY BEFORE */
+        HFC_AFTER=3,		/**< CHATHISTORY AFTER */
+        HFC_LATEST=4,		/**< CHATHISTORY LATEST */
+        HFC_AROUND=5,		/**< CHATHISTORY AROUND */
+        HFC_BETWEEN=6		/**< CHATHISTORY BETWEEN */
+} HistoryFilterCommand;
+
 /** Filter for history get requests */
 typedef struct HistoryFilter HistoryFilter;
 struct HistoryFilter {
-    int last_lines;
-    int last_seconds;
+        HistoryFilterCommand cmd;	/**< Filter command, one of HistoryFilterCommand */
+        int last_lines;			/**< Used by HFC_SIMPLE */
+        int last_seconds;		/**< Used by HFC_SIMPLE */
+        char *timestamp_a;		/**< First parameter of HFC_* (either this or msgid_a) */
+        char *msgid_a;			/**< First parameter of HFC_* (either this or timestamp_a) */
+        char *timestamp_b;		/**< Second parameter of HFC_BETWEEN (either this or msgid_b) */
+        char *msgid_b;			/**< Second parameter of HFC_BETWEEN (either this or timestamp_b) */
+        int limit;			/**< Maximum number of lines to return */
+};
+
+/** History log lines, used by HistoryResult among others */
+typedef struct HistoryLogLine HistoryLogLine;
+struct HistoryLogLine {
+	HistoryLogLine *prev, *next;
+	time_t t;
+	MessageTag *mtags;
+	char line[1];
+};
+
+typedef struct HistoryResult HistoryResult;
+struct HistoryResult {
+        char *object;					/**< Name of the history object, eg '#test' */
+        HistoryLogLine *log;				/**< The resulting log lines */
+        HistoryLogLine *log_tail;			/**< Last entry in the log lines */
 };
 
 /** History Backend */
@@ -500,7 +533,7 @@ struct HistoryBackend {
 	char *name;                                   /**< The name of the history backend (eg: "mem") */
 	int (*history_set_limit)(char *object, int max_lines, long max_time); /**< Impose a limit on a history object */
 	int (*history_add)(char *object, MessageTag *mtags, char *line); /**< Add to history */
-	int (*history_request)(Client *acptr, char *object, HistoryFilter *filter);  /**< Request history */
+	HistoryResult *(*history_request)(char *object, HistoryFilter *filter);  /**< Request history */
 	int (*history_destroy)(char *object);  /**< Destroy history of this object completely */
 	Module *owner;                                /**< Module introducing this */
 	char unloaded;                                /**< Internal flag to indicate module is being unloaded */
@@ -513,7 +546,7 @@ typedef struct {
 	char *name;
 	int (*history_set_limit)(char *object, int max_lines, long max_time);
 	int (*history_add)(char *object, MessageTag *mtags, char *line);
-	int (*history_request)(Client *acptr, char *object, HistoryFilter *filter);
+	HistoryResult *(*history_request)(char *object, HistoryFilter *filter);
 	int (*history_destroy)(char *object);
 } HistoryBackendInfo;
 
@@ -614,11 +647,12 @@ typedef struct ModuleObject {
 extern unsigned int ModuleGetError(Module *module);
 extern const char *ModuleGetErrorStr(Module *module);
 extern unsigned int ModuleGetOptions(Module *module);
-extern unsigned int ModuleSetOptions(Module *module, unsigned int options, int action);
+extern void ModuleSetOptions(Module *module, unsigned int options, int action);
 
 struct Module
 {
 	struct Module *prev, *next;
+	int priority;
 	ModuleHeader    *header; /* The module's header */
 #ifdef _WIN32
 	HMODULE dll;		/* Return value of LoadLibrary */
@@ -644,6 +678,7 @@ struct Module
 #define MOD_OPT_OFFICIAL	0x0002 /* Official module, do not set "tainted" */
 #define MOD_OPT_PERM_RELOADABLE	0x0004 /* Module is semi-permanent: it can be re-loaded but not un-loaded */
 #define MOD_OPT_GLOBAL		0x0008 /* Module is required to be loaded globally (i.e. across the entire network) */
+#define MOD_OPT_UNLOAD_PRIORITY	0x1000 /* Module wants a higher or lower unload priority */
 #define MOD_Dep(name, container,module) {#name, (vFP *) &container, module}
 
 /** Event structs */
@@ -1223,17 +1258,19 @@ int hooktype_server_quit(Client *client, MessageTag *mtags);
 
 /** Called when a local user changes the nick name (function prototype for HOOKTYPE_LOCAL_NICKCHANGE).
  * @param client		The client
+ * @param mtags         	Message tags associated with the event
  * @param newnick		The new nick name
  * @return The return value is ignored (use return 0)
  */
-int hooktype_local_nickchange(Client *client, char *newnick);
+int hooktype_local_nickchange(Client *client, MessageTag *mtags, char *newnick);
 
 /** Called when a remote user changes the nick name (function prototype for HOOKTYPE_REMOTE_NICKCHANGE).
  * @param client		The client
+ * @param mtags         	Message tags associated with the event
  * @param newnick		The new nick name
  * @return The return value is ignored (use return 0)
  */
-int hooktype_remote_nickchange(Client *client, char *newnick);
+int hooktype_remote_nickchange(Client *client, MessageTag *mtags, char *newnick);
 
 /** Called when a user wants to join a channel, may the user join? (function prototype for HOOKTYPE_CAN_JOIN).
  * @param client		The client
@@ -2222,8 +2259,9 @@ enum EfunctionType {
 	EFUNC_TKL_SYNCH,
 	EFUNC_CMD_TKL,
 	EFUNC_PLACE_HOST_BAN,
-	EFUNC_DOSPAMFILTER,
-	EFUNC_DOSPAMFILTER_VIRUSCHAN,
+	EFUNC_MATCH_SPAMFILTER,
+	EFUNC_MATCH_SPAMFILTER_MTAGS,
+	EFUNC_JOIN_VIRUSCHAN,
 	EFUNC_FIND_TKLINE_MATCH_ZAP_EX,
 	EFUNC_SEND_LIST,
 	EFUNC_STRIPCOLORS,
@@ -2308,6 +2346,7 @@ enum EfunctionType {
 #define CONFIG_REQUIRE 9
 #define CONFIG_LISTEN 10
 #define CONFIG_LISTEN_OPTIONS 11
+#define CONFIG_SET_HISTORY_CHANNEL 12
 
 #define MOD_HEADER Mod_Header
 #define MOD_TEST() DLLFUNC int Mod_Test(ModuleInfo *modinfo)

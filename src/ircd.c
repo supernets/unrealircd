@@ -19,6 +19,7 @@
  */
 
 #include "unrealircd.h"
+#include <ares.h>
 
 #ifdef __FreeBSD__
 char *malloc_options = "h" MALLOC_FLAGS_EXTRA;
@@ -60,6 +61,7 @@ static void open_debugfile(), setup_signals();
 extern void init_glines(void);
 extern void tkl_init(void);
 extern void process_clients(void);
+extern void unrealdb_test(void);
 
 #ifndef _WIN32
 MODVAR char **myargv;
@@ -80,6 +82,7 @@ void s_die()
 	Client *client;
 	if (!IsService)
 	{
+		loop.ircd_terminating = 1;
 		unload_all_modules();
 
 		list_for_each_entry(client, &lclient_list, lclient_node)
@@ -94,6 +97,7 @@ void s_die()
 		ControlService(hService, SERVICE_CONTROL_STOP, &status);
 	}
 #else
+	loop.ircd_terminating = 1;
 	unload_all_modules();
 	unlink(conf_files ? conf_files->pid_file : IRCD_PIDFILE);
 	exit(0);
@@ -366,7 +370,7 @@ int match_tkls(Client *client)
 
 	if (loop.do_bancheck_spamf_away && IsUser(client) &&
 	    client->user->away != NULL &&
-	    match_spamfilter(client, client->user->away, SPAMF_AWAY, NULL, SPAMFLAG_NOWARN, NULL))
+	    match_spamfilter(client, client->user->away, SPAMF_AWAY, "AWAY", NULL, SPAMFLAG_NOWARN, NULL))
 	{
 		return 1;
 	}
@@ -571,84 +575,6 @@ char buf[1024];
 #else
 	win_log("[!!!] %s", buf);
 #endif
-}
-
-/** Ugly version checker that ensures ssl/curl runtime libraries match the
- * version we compiled for.
- */
-static void do_version_check()
-{
-	const char *compiledfor, *runtime;
-	int error = 0;
-	char *p;
-
-	/* OPENSSL:
-	 * Nowadays (since openssl 1.0.0) they retain binary compatibility
-	 * when the first two version numbers are the same: eg 1.0.0 and 1.0.2
-	 */
-	compiledfor = OPENSSL_VERSION_TEXT;
-	runtime = SSLeay_version(SSLEAY_VERSION);
-	p = strchr(compiledfor, '.');
-	if (p)
-	{
-		p = strchr(p+1, '.');
-		if (p)
-		{
-			int versionlen = p - compiledfor + 1;
-
-			if (strncasecmp(compiledfor, runtime, versionlen))
-			{
-				version_check_logerror("OpenSSL version mismatch: compiled for '%s', library is '%s'",
-					compiledfor, runtime);
-				error=1;
-			}
-		}
-	}
-
-
-#ifdef USE_LIBCURL
-	/* Perhaps someone should tell them to do this a bit more easy ;)
-	 * problem is runtime output is like: 'libcurl/7.11.1 c-ares/1.2.0'
-	 * while header output is like: '7.11.1'.
-	 */
-	{
-		char buf[128], *p;
-
-		runtime = curl_version();
-		compiledfor = LIBCURL_VERSION;
-		if (!strncmp(runtime, "libcurl/", 8))
-		{
-			strlcpy(buf, runtime+8, sizeof(buf));
-			p = strchr(buf, ' ');
-			if (p)
-			{
-				*p = '\0';
-				if (strcmp(compiledfor, buf))
-				{
-					version_check_logerror("Curl version mismatch: compiled for '%s', library is '%s'",
-						compiledfor, buf);
-					error = 1;
-				}
-			}
-		}
-	}
-#endif
-
-	if (error)
-	{
-#ifndef _WIN32
-		version_check_logerror("Header<->library mismatches can make UnrealIRCd *CRASH*! "
-		                "Make sure you don't have multiple versions of openssl installed (eg: "
-		                "one in /usr and one in /usr/local). And, if you recently upgraded them, "
-		                "be sure to recompile UnrealIRCd.");
-#else
-		version_check_logerror("Header<->library mismatches can make UnrealIRCd *CRASH*! "
-		                "This should never happen with official Windows builds... unless "
-		                "you overwrote any .dll files with newer/older ones or something.");
-		win_error();
-#endif
-		tainted = 1;
-	}
 }
 
 extern void applymeblock(void);
@@ -927,6 +853,11 @@ int InitUnrealIRCd(int argc, char *argv[])
 	safe_strdup(configfile, CONFIGFILE);
 
 	init_random(); /* needs to be done very early!! */
+	if (sodium_init() < 0)
+	{
+		fprintf(stderr, "Failed to initialize sodium library -- error accessing random device?\n");
+		exit(-1);
+	}
 
 	memset(&botmotd, '\0', sizeof(MOTDFile));
 	memset(&rules, '\0', sizeof(MOTDFile));
@@ -1070,9 +1001,10 @@ int InitUnrealIRCd(int argc, char *argv[])
 			  exit(0);
 		  }
 #endif
-#if 0
+#if 1
 		case 'S':
-			charsys_dump_table(p ? p : "*");
+			//charsys_dump_table(p ? p : "*");
+			unrealdb_test();
 			exit(0);
 #endif
 #ifndef _WIN32
@@ -1165,8 +1097,6 @@ int InitUnrealIRCd(int argc, char *argv[])
 		}
 	}
 
-	do_version_check();
-
 #if !defined(_WIN32)
 #ifndef _WIN32
 	mkdir(TMPDIR, S_IRUSR|S_IWUSR|S_IXUSR); /* Create the tmp dir, if it doesn't exist */
@@ -1215,11 +1145,13 @@ int InitUnrealIRCd(int argc, char *argv[])
 	fprintf(stderr, "UnrealIRCd is brought to you by Bram Matthys (Syzop), Gottem and i\n\n");
 
 	fprintf(stderr, "Using the following libraries:\n");
-	fprintf(stderr, "* %s\n", pcre2_version());
 	fprintf(stderr, "* %s\n", SSLeay_version(SSLEAY_VERSION));
+	fprintf(stderr, "* libsodium %s\n", sodium_version_string());
 #ifdef USE_LIBCURL
 	fprintf(stderr, "* %s\n", curl_version());
 #endif
+	fprintf(stderr, "* c-ares %s\n", ares_version(NULL));
+	fprintf(stderr, "* %s\n", pcre2_version());
 #endif
 	check_user_limit();
 #ifndef _WIN32

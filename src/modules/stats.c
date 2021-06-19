@@ -376,8 +376,14 @@ CMD_FUNC(cmd_stats)
 	else
 		stat->func(client, NULL);
 
-	/* Modules can append data: */
-	RunHook2(HOOKTYPE_STATS, client, flags);
+	/* Modules can append data:
+	 * ('STATS S' already has special code for this that
+	 *  maintains certain ordering, so not included here)
+	 */
+	if (stat->flag != 'S')
+	{
+		RunHook2(HOOKTYPE_STATS, client, flags);
+	}
 
 	sendnumeric(client, RPL_ENDOFSTATS, stat->flag);
 
@@ -772,9 +778,33 @@ int stats_officialchannels(Client *client, char *para)
 
 #define SafePrint(x)   ((x) ? (x) : "")
 
+/** Helper for stats_set() */
+static void stats_set_anti_flood(Client *client, FloodSettings *f)
+{
+	int i;
+
+	for (i=0; floodoption_names[i]; i++)
+	{
+		if (i == FLD_CONVERSATIONS)
+		{
+			sendtxtnumeric(client, "anti-flood::%s::%s: %d users, new user every %s",
+				f->name, floodoption_names[i],
+				(int)f->limit[i], pretty_time_val(f->period[i]));
+		}
+		else
+		{
+			sendtxtnumeric(client, "anti-flood::%s::%s: %d per %s",
+				f->name, floodoption_names[i],
+				(int)f->limit[i], pretty_time_val(f->period[i]));
+		}
+	}
+}
+
 int stats_set(Client *client, char *para)
 {
 	char *uhallow;
+	SecurityGroup *s;
+	FloodSettings *f;
 
 	if (!ValidatePermissionsForPath("server:info:stats",client,NULL,NULL,NULL))
 	{
@@ -875,9 +905,17 @@ int stats_set(Client *client, char *para)
 	sendtxtnumeric(client, "anti-flood::handshake-data-flood::amount: %ld bytes", iConf.handshake_data_flood_amount);
 	sendtxtnumeric(client, "anti-flood::handshake-data-flood::ban-action: %s", banact_valtostring(iConf.handshake_data_flood_ban_action));
 	sendtxtnumeric(client, "anti-flood::handshake-data-flood::ban-time: %s", pretty_time_val(iConf.handshake_data_flood_ban_time));
-	if (AWAY_PERIOD)
-		sendtxtnumeric(client, "anti-flood::away-flood: %d per %s", AWAY_COUNT, pretty_time_val(AWAY_PERIOD));
-	sendtxtnumeric(client, "anti-flood::nick-flood: %d per %s", NICK_COUNT, pretty_time_val(NICK_PERIOD));
+
+	/* set::anti-flood */
+	for (s = securitygroups; s; s = s->next)
+		if ((f = find_floodsettings_block(s->name)))
+			stats_set_anti_flood(client, f);
+	f = find_floodsettings_block("unknown-users");
+	stats_set_anti_flood(client, f);
+
+	//if (AWAY_PERIOD)
+	//	sendtxtnumeric(client, "anti-flood::away-flood: %d per %s", AWAY_COUNT, pretty_time_val(AWAY_PERIOD));
+	//sendtxtnumeric(client, "anti-flood::nick-flood: %d per %s", NICK_COUNT, pretty_time_val(NICK_PERIOD));
 	sendtxtnumeric(client, "handshake-timeout: %s", pretty_time_val(iConf.handshake_timeout));
 	sendtxtnumeric(client, "sasl-timeout: %s", pretty_time_val(iConf.sasl_timeout));
 	sendtxtnumeric(client, "ident::connect-timeout: %s", pretty_time_val(IDENT_CONNECT_TIMEOUT));
@@ -895,6 +933,10 @@ int stats_set(Client *client, char *para)
 	sendtxtnumeric(client, "outdated-tls-policy::oper: %s", policy_valtostr(iConf.outdated_tls_policy_oper));
 	sendtxtnumeric(client, "outdated-tls-policy::server: %s", policy_valtostr(iConf.outdated_tls_policy_server));
 	RunHook2(HOOKTYPE_STATS, client, "S");
+#ifndef _WIN32
+	sendtxtnumeric(client, "This server can handle %d concurrent sockets (%d clients + %d reserve)",
+		maxclients+CLIENTS_RESERVE, maxclients, CLIENTS_RESERVE);
+#endif
 	return 1;
 }
 

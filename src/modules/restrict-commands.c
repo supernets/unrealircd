@@ -36,6 +36,7 @@ struct RestrictedCommand {
 	int exempt_identified;
 	int exempt_reputation_score;
 	int exempt_webirc;
+	int exempt_tls;
 };
 
 typedef struct {
@@ -179,9 +180,9 @@ int rcmd_configtest(ConfigFile *cf, ConfigEntry *ce, int type, int *errs)
 			if (!strcmp(cep2->ce_varname, "connect-delay"))
 			{
 				long v = config_checkval(cep2->ce_vardata, CFG_TIME);
-				if ((v < 10) || (v > 3600))
+				if ((v < 1) || (v > 3600))
 				{
-					config_error("%s:%i: set::restrict-commands::%s::connect-delay should be in range 10-3600", cep2->ce_fileptr->cf_filename, cep2->ce_varlinenum, cep->ce_varname);
+					config_error("%s:%i: set::restrict-commands::%s::connect-delay should be in range 1-3600", cep2->ce_fileptr->cf_filename, cep2->ce_varlinenum, cep->ce_varname);
 					errors++;
 				}
 				continue;
@@ -189,10 +190,13 @@ int rcmd_configtest(ConfigFile *cf, ConfigEntry *ce, int type, int *errs)
 
 			if (!strcmp(cep2->ce_varname, "exempt-identified"))
 				continue;
-			
+
 			if (!strcmp(cep2->ce_varname, "exempt-webirc"))
 				continue;
-			
+
+			if (!strcmp(cep2->ce_varname, "exempt-tls"))
+				continue;
+
 			if (!strcmp(cep2->ce_varname, "exempt-reputation-score"))
 			{
 				int v = atoi(cep2->ce_vardata);
@@ -279,6 +283,12 @@ int rcmd_configrun(ConfigFile *cf, ConfigEntry *ce, int type)
 				continue;
 			}
 
+			if (!strcmp(cep2->ce_varname, "exempt-tls"))
+			{
+				rcmd->exempt_tls = config_checkval(cep2->ce_vardata, CFG_YESNO);
+				continue;
+			}
+
 			if (!strcmp(cep2->ce_varname, "exempt-reputation-score"))
 			{
 				rcmd->exempt_reputation_score = atoi(cep2->ce_vardata);
@@ -298,6 +308,8 @@ int rcmd_canbypass(Client *client, RestrictedCommand *rcmd)
 	if (rcmd->exempt_identified && IsLoggedIn(client))
 		return 1;
 	if (rcmd->exempt_webirc && moddata_client_get(client, "webirc"))
+		return 1;
+	if (rcmd->exempt_tls && IsSecureConnect(client))
 		return 1;
 	if (rcmd->exempt_reputation_score > 0 && (GetReputation(client) >= rcmd->exempt_reputation_score))
 		return 1;

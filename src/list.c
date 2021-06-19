@@ -76,7 +76,7 @@ void initlists(void)
 
 	client_pool = mp_pool_new(sizeof(Client), 512 * 1024);
 	local_client_pool = mp_pool_new(sizeof(LocalClient), 512 * 1024);
-	user_pool = mp_pool_new(sizeof(ClientUser), 512 * 1024);
+	user_pool = mp_pool_new(sizeof(User), 512 * 1024);
 	link_pool = mp_pool_new(sizeof(Link), 512 * 1024);
 }
 
@@ -184,30 +184,20 @@ void free_client(Client *client)
 ** 'make_user' add's an User information block to a client
 ** if it was not previously allocated.
 */
-ClientUser *make_user(Client *client)
+User *make_user(Client *client)
 {
-	ClientUser *user;
+	User *user;
 
 	user = client->user;
 	if (!user)
 	{
 		user = mp_pool_get(user_pool);
-		memset(user, 0, sizeof(ClientUser));
+		memset(user, 0, sizeof(User));
 
 #ifdef	DEBUGMODE
 		users.inuse++;
 #endif
-		user->swhois = NULL;
-		user->away = NULL;
-		user->flood.away_t = 0;
-		user->flood.away_c = 0;
-		user->joined = 0;
-		user->channel = NULL;
-		user->invited = NULL;
-		user->server = NULL;
 		strlcpy(user->svid, "0", sizeof(user->svid));
-		user->whowas = NULL;
-		user->snomask = 0;
 		if (client->ip)
 		{
 			/* initially set client->user->realhost to IP */
@@ -450,6 +440,8 @@ void del_ListItem(ListStruct *item, ListStruct **list)
 		item->next->prev = item->prev;
 	if (*list == item)
 		*list = item->next; /* new head */
+	/* And update 'item', prev/next should point nowhere anymore */
+	item->prev = item->next = NULL;
 }
 
 /** Add item to list with a 'priority'.

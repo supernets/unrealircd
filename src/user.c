@@ -142,6 +142,8 @@ int target_limit_exceeded(Client *client, void *target, const char *name)
 {
 	u_char hash = hash_target(target);
 	int i;
+	int max_concurrent_conversations_users, max_concurrent_conversations_new_user_every;
+	FloodSettings *settings;
 
 	if (ValidatePermissionsForPath("immune:max-concurrent-conversations",client,NULL,NULL,NULL))
 		return 0;
@@ -149,7 +151,18 @@ int target_limit_exceeded(Client *client, void *target, const char *name)
 	if (client->local->targets[0] == hash)
 		return 0;
 
-	for (i = 1; i < iConf.max_concurrent_conversations_users; i++)
+	settings = get_floodsettings_for_user(client, FLD_CONVERSATIONS);
+	max_concurrent_conversations_users = settings->limit[FLD_CONVERSATIONS];
+	max_concurrent_conversations_new_user_every = settings->period[FLD_CONVERSATIONS];
+
+	if (max_concurrent_conversations_users <= 0)
+		return 0; /* unlimited */
+
+	/* Shouldn't be needed, but better check here than access out-of-bounds memory */
+	if (max_concurrent_conversations_users > MAXCCUSERS)
+		max_concurrent_conversations_users = MAXCCUSERS;
+
+	for (i = 1; i < max_concurrent_conversations_users; i++)
 	{
 		if (client->local->targets[i] == hash)
 		{
@@ -166,6 +179,7 @@ int target_limit_exceeded(Client *client, void *target, const char *name)
 		client->local->nexttarget += 2; /* punish them some more */
 		client->local->since += 2; /* lag them up as well */
 
+		flood_limit_exceeded_log(client, "max-concurrent-conversations");
 		sendnumeric(client, ERR_TARGETTOOFAST, name, client->local->nexttarget - TStime());
 
 		return 1;
@@ -175,15 +189,15 @@ int target_limit_exceeded(Client *client, void *target, const char *name)
 	 * This is so client->local->nexttarget=0 will become client->local->nexttarget=currenttime-...
 	 */
 	if (TStime() > client->local->nexttarget +
-	    (iConf.max_concurrent_conversations_users * iConf.max_concurrent_conversations_new_user_every))
+	    (max_concurrent_conversations_users * max_concurrent_conversations_new_user_every))
 	{
-		client->local->nexttarget = TStime() - ((iConf.max_concurrent_conversations_users-1) * iConf.max_concurrent_conversations_new_user_every);
+		client->local->nexttarget = TStime() - ((max_concurrent_conversations_users-1) * max_concurrent_conversations_new_user_every);
 	}
 
-	client->local->nexttarget += iConf.max_concurrent_conversations_new_user_every;
+	client->local->nexttarget += max_concurrent_conversations_new_user_every;
 
 	/* Add the new target (first move the rest, then add us at position 0 */
-	memmove(&client->local->targets[1], &client->local->targets[0], iConf.max_concurrent_conversations_users - 1);
+	memmove(&client->local->targets[1], &client->local->targets[0], max_concurrent_conversations_users - 1);
 	client->local->targets[0] = hash;
 
 	return 0;
@@ -698,6 +712,12 @@ void make_cloakedhost(Client *client, char *curr, char *buf, size_t buflen)
 /** Called after a user is logged in (or out) of a services account */
 void user_account_login(MessageTag *recv_mtags, Client *client)
 {
+	if (MyConnect(client))
+	{
+		find_shun(client);
+		if (find_tkline_match(client, 0) && IsDead(client))
+			return;
+	}
 	RunHook2(HOOKTYPE_ACCOUNT_LOGIN, client, recv_mtags);
 }
 
@@ -811,6 +831,10 @@ void set_security_group_defaults(void)
 	}
 	securitygroups = NULL;
 
+	/* Default group: webirc */
+	s = add_security_group("webirc-users", 50);
+	s->webirc = 1;
+
 	/* Default group: known-users */
 	s = add_security_group("known-users", 100);
 	s->identified = 1;
@@ -919,3 +943,110 @@ char *get_connect_extinfo(Client *client)
 
 	return retbuf;
 }
+
+/** Log a message that flood protection kicked in for the client.
+ * This sends to the +f snomask at the moment.
+ * @param client	The client to check flood for (local user)
+ * @param opt		The flood option (eg FLD_AWAY)
+ */
+void flood_limit_exceeded_log(Client *client, char *floodname)
+{
+	char buf[1024];
+
+	snprintf(buf, sizeof(buf), "Flood blocked (%s) from %s!%s@%s [%s]",
+		floodname,
+		client->name,
+		client->user->username,
+		client->user->realhost,
+		GetIP(client));
+	ircd_log(LOG_FLOOD, "%s", buf);
+	sendto_snomask_global(SNO_FLOOD, "%s", buf);
+}
+
+/** Is the flood limit exceeded for an option? eg for away-flood.
+ * @param client	The client to check flood for (local user)
+ * @param opt		The flood option (eg FLD_AWAY)
+ * @note This increments the flood counter as well.
+ * @returns 1 if exceeded, 0 if not.
+ */
+int flood_limit_exceeded(Client *client, FloodOption opt)
+{
+	FloodSettings *f;
+
+	if (!MyUser(client))
+		return 0;
+
+	f = get_floodsettings_for_user(client, opt);
+	if (f->limit[opt] <= 0)
+		return 0; /* No limit set or unlimited */
+
+	ircd_log(LOG_ERROR, "Checking flood_limit_exceeded() for '%s', type %d with max %d:%ld...",
+		client->name, (int)opt, (int)f->limit[opt], (long)f->period[opt]);
+
+	/* Ok, let's do the flood check */
+	if ((client->local->flood[opt].t + f->period[opt]) <= timeofday)
+	{
+		/* Time exceeded, reset */
+		client->local->flood[opt].count = 0;
+		client->local->flood[opt].t = timeofday;
+	}
+	if (client->local->flood[opt].count <= f->limit[opt])
+		client->local->flood[opt].count++;
+	if (client->local->flood[opt].count > f->limit[opt])
+	{
+		flood_limit_exceeded_log(client, floodoption_names[opt]);
+		return 1; /* Flood limit hit! */
+	}
+
+	return 0;
+}
+
+/** Get the appropriate anti-flood settings block for this user.
+ * @param client	The client, should be locally connected.
+ * @param opt		The flood option we are interested in
+ * @returns The FloodSettings for this user, never returns NULL.
+ */
+FloodSettings *get_floodsettings_for_user(Client *client, FloodOption opt)
+{
+	SecurityGroup *s;
+	FloodSettings *f;
+
+	/* Go through all security groups by order of priority
+	 * (eg: first "known-users", then "unknown-users").
+	 * For each of these:
+	 * - Check if a set::anti-flood::xxxx block exists for this group
+	 * - Check if the limit is non-zero (eg there is any limit set)
+	 * If any of these are false then we continue with next block
+	 * that matches.
+	 */
+
+	// XXX: alternatively, instead of this double loop,
+	//      do a post-conf thing and sort iConf.floodsettings
+	//      according to the security-group { } order.
+	for (s = securitygroups; s; s = s->next)
+	{
+		if (user_allowed_by_security_group(client, s) &&
+		    ((f = find_floodsettings_block(s->name))) &&
+		    f->limit[opt])
+		{
+			return f;
+		}
+	}
+
+	/* Return default settings block (which may have a zero limit set) */
+	f = find_floodsettings_block("unknown-users");
+	if (!f)
+		abort(); /* impossible */
+
+	return f;
+}
+
+MODVAR char *floodoption_names[] = {
+	"nick-flood",
+	"join-flood",
+	"away-flood",
+	"invite-flood",
+	"knock-flood",
+	"max-concurrent-conversations",
+	NULL
+};

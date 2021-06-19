@@ -82,7 +82,9 @@ void _tkl_stats(Client *client, int type, char *para, int *cnt);
 void _tkl_sync(Client *client);
 CMD_FUNC(_cmd_tkl);
 int _place_host_ban(Client *client, BanAction action, char *reason, long duration);
-int _match_spamfilter(Client *client, char *str_in, int type, char *target, int flags, TKL **rettk);
+int _match_spamfilter(Client *client, char *str_in, int type, char *cmd, char *target, int flags, TKL **rettk);
+int _match_spamfilter_mtags(Client *client, MessageTag *mtags, char *cmd);
+int check_mtag_spamfilters_present(void);
 int _join_viruschan(Client *client, TKL *tk, int type);
 void _spamfilter_build_user_string(char *buf, char *nick, Client *client);
 int _match_user(char *rmask, Client *client, int options);
@@ -109,6 +111,7 @@ struct TKLTypeTable
 	char *log_name;           /**< Used for logging and server notices */
 	unsigned tkltype:1;       /**< Is a type available in cmd_tkl() and friends */
 	unsigned exceptiontype:1; /**< Is a type available for exceptions */
+	unsigned needip:1;        /**< When using this exempt option, only IP addresses are permitted (processed before DNS/ident lookups etc) */
 };
 
 /** This table which defines all TKL types and TKL exception types.
@@ -117,35 +120,35 @@ struct TKLTypeTable
  *
  * IMPORTANT IF YOU ARE ADDING A NEW TYPE TO THIS TABLE:
  * - also update eline_syntax()
- * - also check if eline_type_requires_ip() needs to be updated
  * - update help.conf (HELPOP ELINE)
  * - more?
  */
 TKLTypeTable tkl_types[] = {
-	/* <config name> <letter> <TKL_xxx type>               <logging name> <tkl option?> <exempt option?> */
-	{ "gline",                'G', TKL_KILL       | TKL_GLOBAL, "G-Line",               1, 1 },
-	{ "kline",                'k', TKL_KILL,                    "K-Line",               1, 1 },
-	{ "gzline",               'Z', TKL_ZAP        | TKL_GLOBAL, "Global Z-Line",        1, 1 },
-	{ "zline",                'z', TKL_ZAP,                     "Z-Line",               1, 1 },
-	{ "spamfilter",           'F', TKL_SPAMF      | TKL_GLOBAL, "Spamfilter",           1, 1 },
-	{ "qline",                'Q', TKL_NAME       | TKL_GLOBAL, "Q-Line",               1, 1 },
-	{ "except",               'E', TKL_EXCEPTION  | TKL_GLOBAL, "Exception",            1, 0 },
-	{ "shun",                 's', TKL_SHUN       | TKL_GLOBAL, "Shun",                 1, 1 },
-	{ "local-qline",          'q', TKL_NAME,                    "Local Q-Line",         1, 0 },
-	{ "local-spamfilter",     'e', TKL_EXCEPTION,               "Local Exception",      1, 0 },
-	{ "local-exception",      'f', TKL_SPAMF,                   "Local Spamfilter",     1, 0 },
-	{ "blacklist",            'b', TKL_BLACKLIST,               "Blacklist",            0, 1 },
-	{ "connect-flood",        'c', TKL_CONNECT_FLOOD,           "Connect flood",        0, 1 },
-	{ "maxperip",             'm', TKL_MAXPERIP,                "Max-per-IP",           0, 1 },
-	{ "handshake-data-flood", 'd', TKL_HANDSHAKE_DATA_FLOOD,    "Handshake data flood", 0, 1 },
-	{ "antirandom",           'r', TKL_ANTIRANDOM,              "Antirandom",           0, 1 },
-	{ "antimixedutf8",        '8', TKL_ANTIMIXEDUTF8,           "Antimixedutf8",        0, 1 },
-	{ "ban-version",          'v', TKL_BAN_VERSION,             "Ban Version",          0, 1 },
-	{ NULL,                   '\0', 0,                          NULL,                   0, 0 },
+	/* <config name> <letter> <TKL_xxx type>               <logging name> <tkl option?> <exempt option?> <need ip address?> */
+	{ "gline",                'G', TKL_KILL       | TKL_GLOBAL, "G-Line",               1, 1, 0 },
+	{ "kline",                'k', TKL_KILL,                    "K-Line",               1, 1, 0 },
+	{ "gzline",               'Z', TKL_ZAP        | TKL_GLOBAL, "Global Z-Line",        1, 1, 1 },
+	{ "zline",                'z', TKL_ZAP,                     "Z-Line",               1, 1, 1 },
+	{ "spamfilter",           'F', TKL_SPAMF      | TKL_GLOBAL, "Spamfilter",           1, 1, 0 },
+	{ "qline",                'Q', TKL_NAME       | TKL_GLOBAL, "Q-Line",               1, 1, 0 },
+	{ "except",               'E', TKL_EXCEPTION  | TKL_GLOBAL, "Exception",            1, 0, 0 },
+	{ "shun",                 's', TKL_SHUN       | TKL_GLOBAL, "Shun",                 1, 1, 0 },
+	{ "local-qline",          'q', TKL_NAME,                    "Local Q-Line",         1, 0, 0 },
+	{ "local-spamfilter",     'e', TKL_EXCEPTION,               "Local Exception",      1, 0, 0 },
+	{ "local-exception",      'f', TKL_SPAMF,                   "Local Spamfilter",     1, 0, 0 },
+	{ "blacklist",            'b', TKL_BLACKLIST,               "Blacklist",            0, 1, 1 },
+	{ "connect-flood",        'c', TKL_CONNECT_FLOOD,           "Connect flood",        0, 1, 1 },
+	{ "maxperip",             'm', TKL_MAXPERIP,                "Max-per-IP",           0, 1, 0 },
+	{ "handshake-data-flood", 'd', TKL_HANDSHAKE_DATA_FLOOD,    "Handshake data flood", 0, 1, 1 },
+	{ "antirandom",           'r', TKL_ANTIRANDOM,              "Antirandom",           0, 1, 0 },
+	{ "antimixedutf8",        '8', TKL_ANTIMIXEDUTF8,           "Antimixedutf8",        0, 1, 0 },
+	{ "ban-version",          'v', TKL_BAN_VERSION,             "Ban Version",          0, 1, 0 },
+	{ NULL,                   '\0', 0,                          NULL,                   0, 0, 0 },
 };
 #define ALL_VALID_EXCEPTION_TYPES "kline, gline, zline, gzline, spamfilter, shun, qline, blacklist, connect-flood, handshake-data-flood, antirandom, antimixedutf8, ban-version"
 
 int max_stats_matches = 1000;
+int mtag_spamfilters_present = 0; /**< Are any spamfilters with type SPAMF_MTAG present? */
 
 MOD_TEST()
 {
@@ -178,8 +181,9 @@ MOD_TEST()
 	EfunctionAddVoid(modinfo->handle, EFUNC_TKL_SYNCH, _tkl_sync);
 	EfunctionAddVoid(modinfo->handle, EFUNC_CMD_TKL, _cmd_tkl);
 	EfunctionAdd(modinfo->handle, EFUNC_PLACE_HOST_BAN, _place_host_ban);
-	EfunctionAdd(modinfo->handle, EFUNC_DOSPAMFILTER, _match_spamfilter);
-	EfunctionAdd(modinfo->handle, EFUNC_DOSPAMFILTER_VIRUSCHAN, _join_viruschan);
+	EfunctionAdd(modinfo->handle, EFUNC_MATCH_SPAMFILTER, _match_spamfilter);
+	EfunctionAdd(modinfo->handle, EFUNC_MATCH_SPAMFILTER_MTAGS, _match_spamfilter_mtags);
+	EfunctionAdd(modinfo->handle, EFUNC_JOIN_VIRUSCHAN, _join_viruschan);
 	EfunctionAddVoid(modinfo->handle, EFUNC_SPAMFILTER_BUILD_USER_STRING, _spamfilter_build_user_string);
 	EfunctionAdd(modinfo->handle, EFUNC_MATCH_USER, _match_user);
 	EfunctionAdd(modinfo->handle, EFUNC_TKL_IP_HASH, _tkl_ip_hash);
@@ -213,6 +217,7 @@ MOD_INIT()
 
 MOD_LOAD()
 {
+	check_mtag_spamfilters_present();
 	EventAdd(modinfo->handle, "tklexpire", tkl_check_expire, NULL, 5000, 0);
 	return MOD_SUCCESS;
 }
@@ -1363,6 +1368,15 @@ void cmd_tkl_line(Client *client, int parc, char *parv[], char *type)
 			mask[3] = '\0';
 			usermask = mask; /* eg ~S: */
 			hostmask = mask2buf;
+
+			if (((*type == 'z') || (*type == 'Z')))
+			{
+				sendnotice(client, "ERROR: (g)zlines must be placed at *@\037IPMASK\037. "
+				                   "Extended server bans don't work here because (g)zlines are processed"
+				                   "BEFORE dns and ident lookups are done and before reading any client data. "
+				                   "If you want to use extended server bans then use a KLINE/GLINE instead.");
+				return;
+			}
 		} else {
 			/* Delete: allow any attempt */
 			strlcpy(mask2buf, mask+3, sizeof(mask2buf));
@@ -1543,14 +1557,14 @@ void eline_syntax(Client *client)
  * exception to be placed on *@ip rather than
  * user@host or *@host. For eg zlines.
  */
-int eline_type_requires_ip(char *bantypes)
+TKLTypeTable *eline_type_requires_ip(char *bantypes)
 {
-	if (strchr(bantypes, 'z') || strchr(bantypes, 'Z') ||
-	    strchr(bantypes, 'c') ||
-	    strchr(bantypes, 'b') ||
-	    strchr(bantypes, 'd'))
-		return 1;
-	return 0;
+	int i;
+
+	for (i=0; tkl_types[i].config_name; i++)
+		if (tkl_types[i].needip && strchr(bantypes, tkl_types[i].letter))
+			return &tkl_types[i];
+	return NULL;
 }
 
 /** Checks a string to see if it contains invalid ban exception types */
@@ -1590,6 +1604,7 @@ CMD_FUNC(cmd_eline)
 		"-",			/*9  reason */
 		NULL
 	};
+	TKLTypeTable *t;
 
 	if (IsServer(client))
 		return;
@@ -1673,11 +1688,11 @@ CMD_FUNC(cmd_eline)
 			mask[3] = '\0';
 			usermask = mask; /* eg ~S: */
 			hostmask = mask2buf;
-			if (eline_type_requires_ip(bantypes))
+			if ((t = eline_type_requires_ip(bantypes)))
 			{
-				sendnotice(client, "ERROR: Ban exceptions with type z/Z/c/b do not work on extended server bans. "
-				                   "This is because checking (g)zlines, connect-flood and blacklists is done BEFORE "
-				                   "extended bans can be checked.");
+				sendnotice(client, "ERROR: Ban exception with type '%c' does not work on extended server bans. "
+				                   "This is because checking for %s takes places BEFORE "
+				                   "extended bans can be checked.", t->letter, t->log_name);
 				return;
 			}
 		} else {
@@ -1724,25 +1739,31 @@ CMD_FUNC(cmd_eline)
 				sendnotice(client, "[error] For technical reasons you cannot start the host with a ':', sorry");
 				return;
 			}
-			if (add && eline_type_requires_ip(bantypes))
+			if (add && ((t = eline_type_requires_ip(bantypes))))
 			{
 				/* Trying to exempt a user from a (G)ZLINE,
 				 * make sure the user isn't specifying a host then.
 				 */
 				if (strcmp(usermask, "*"))
 				{
-					sendnotice(client, "ERROR: Ban exceptions with type z/Z/c/b need to be placed at \037*\037@ipmask, not \037user\037@ipmask. "
-							 "This is because checking (g)zlines, connect-flood and blacklists is done BEFORE any dns and ident lookups.");
+					sendnotice(client, "ERROR: Ban exception with type '%c' need to be placed at \037*\037@ipmask, not \037user\037@ipmask. "
+					                   "This is because checking %s takes places (possibly) BEFORE any dns and ident lookups.",
+					                   t->letter,
+					                   t->log_name);
 					return;
 				}
 				for (p=hostmask; *p; p++)
+				{
 					if (isalpha(*p) && !isxdigit(*p))
 					{
-						sendnotice(client, "ERROR: Ban exceptions with type z/Z/c/b need to be placed at *@\037ipmask\037, not *@\037hostmask\037. "
-								 "(so for example *@192.168.* is ok, but *@*.aol.com is not). "
-								 "This is because checking (g)zlines, connect-flood and blacklists is done BEFORE any dns and ident lookups.");
+						sendnotice(client, "ERROR: Ban exception with type '%c' needs to be placed at *@\037ipmask\037, not *@\037hostmask\037. "
+						                   "(so for example *@192.168.* is OK, but *@*.aol.com is not). "
+						                   "This is because checking %s takes places (possibly) BEFORE any dns and ident lookups.",
+						                   t->letter,
+						                   t->log_name);
 						return;
 					}
+				}
 			}
 		}
 		else
@@ -2367,6 +2388,9 @@ TKL *_tkl_add_spamfilter(int type, unsigned short target, BanAction action, Matc
 	index = tkl_hash(tkl_typetochar(type));
 	AddListItem(tkl, tklines[index]);
 
+	if (target & SPAMF_MTAG)
+		mtag_spamfilters_present = 1;
+
 	return tkl;
 }
 
@@ -2637,6 +2661,7 @@ void _tkl_del_line(TKL *tkl)
 
 	/* Finally, free the entry */
 	free_tkl(tkl);
+	check_mtag_spamfilters_present();
 }
 
 /** Add some default ban exceptions - for localhost */
@@ -3052,7 +3077,7 @@ int _find_shun(Client *client)
 		if (!(tkl->type & TKL_SHUN))
 			continue;
 
-		snprintf(uhost, sizeof(uhost), "%s@%s", tkl->ptr.serverban->usermask, tkl->ptr.serverban->hostmask);
+		tkl_uhost(tkl, uhost, sizeof(uhost), NO_SOFT_PREFIX);
 
 		if (match_user(uhost, client, MATCH_CHECK_REAL))
 		{
@@ -3114,7 +3139,7 @@ int _find_spamfilter_user(Client *client, int flags)
 		return 0;
 
 	spamfilter_build_user_string(spamfilter_user, client->name, client);
-	return match_spamfilter(client, spamfilter_user, SPAMF_USER, NULL, flags, NULL);
+	return match_spamfilter(client, spamfilter_user, SPAMF_USER, NULL, NULL, flags, NULL);
 }
 
 /** Check a spamfilter against all local users and print a message.
@@ -4654,6 +4679,7 @@ int _join_viruschan(Client *client, TKL *tkl, int type)
 /** match_spamfilter: executes the spamfilter on the input string.
  * @param str		The text (eg msg text, notice text, part text, quit text, etc
  * @param target	The spamfilter target (SPAMF_*)
+ * @param cmd		The command (eg: "PRIVMSG")
  * @param destination	The destination as a text string (eg: "somenick", can be NULL.. eg for away)
  * @param flags		Any flags (SPAMFLAG_*)
  * @param rettkl	Pointer to an aTKLline struct, _used for special circumstances only_
@@ -4661,7 +4687,7 @@ int _join_viruschan(Client *client, TKL *tkl, int type)
  * 1 if spamfilter matched and it should be blocked (or client exited), 0 if not matched.
  * In case of 1, be sure to check IsDead(client)..
  */
-int _match_spamfilter(Client *client, char *str_in, int target, char *destination, int flags, TKL **rettkl)
+int _match_spamfilter(Client *client, char *str_in, int target, char *cmd, char *destination, int flags, TKL **rettkl)
 {
 	TKL *tkl;
 	TKL *winner_tkl = NULL;
@@ -4675,6 +4701,9 @@ int _match_spamfilter(Client *client, char *str_in, int target, char *destinatio
 
 	if (rettkl)
 		*rettkl = NULL; /* initialize to NULL */
+
+	if (!cmd)
+		cmd = cmdname_by_spamftarget(target);
 
 	if (target == SPAMF_USER)
 		str = str_in;
@@ -4755,7 +4784,7 @@ int _match_spamfilter(Client *client, char *str_in, int target, char *destinatio
 			ircsnprintf(buf, sizeof(buf), "[Spamfilter] %s!%s@%s matches filter '%s': [%s%s: '%s'] [%s]",
 				client->name, client->user->username, client->user->realhost,
 				tkl->ptr.spamfilter->match->str,
-				cmdname_by_spamftarget(target), destinationbuf, str,
+				cmd, destinationbuf, str,
 				unreal_decodespace(tkl->ptr.spamfilter->tkl_reason));
 
 			sendto_snomask_global(SNO_SPAMF, "%s", buf);
@@ -4807,6 +4836,12 @@ int _match_spamfilter(Client *client, char *str_in, int target, char *destinatio
 					me.name, client->name, destination, reason);
 				break;
 			}
+			case SPAMF_MTAG:
+			{
+				sendnumericfmt(client, ERR_CANNOTDOCOMMAND, "%s :Command blocked: %s",
+					cmd, reason);
+				break;
+			}
 			case SPAMF_DCC:
 			{
 				char errmsg[512];
@@ -4837,7 +4872,7 @@ int _match_spamfilter(Client *client, char *str_in, int target, char *destinatio
 	if ((tkl->ptr.spamfilter->action == BAN_ACT_WARN) || (tkl->ptr.spamfilter->action == BAN_ACT_SOFT_WARN))
 	{
 		if ((target != SPAMF_USER) && (target != SPAMF_QUIT))
-			sendnumeric(client, RPL_SPAMCMDFWD, cmdname_by_spamftarget(target), reason);
+			sendnumeric(client, RPL_SPAMCMDFWD, cmd, reason);
 		return 0;
 	} else
 	if ((tkl->ptr.spamfilter->action == BAN_ACT_DCCBLOCK) || (tkl->ptr.spamfilter->action == BAN_ACT_SOFT_DCCBLOCK))
@@ -4873,6 +4908,60 @@ int _match_spamfilter(Client *client, char *str_in, int target, char *destinatio
 	}
 
 	return 0; /* NOTREACHED */
+}
+
+/** Check message-tag spamfilters.
+ * @param client	The client
+ * @param mtags		Message tags sent by client
+ * @param cmd		Command to be executed (can be NULL)
+ * @retval Return 1 to stop processing the command (ignore it) or 0 to allow/continue as normal
+ */
+int _match_spamfilter_mtags(Client *client, MessageTag *mtags, char *cmd)
+{
+	MessageTag *m;
+	char buf[4096];
+	char *str;
+
+	/* This is a shortcut: if there are no spamfilters present
+	 * on message tags then we can return immediately.
+	 * Saves a lot of CPU and it is quite likely too!
+	 */
+	if (mtag_spamfilters_present == 0)
+		return 0;
+
+	for (m = mtags; m; m = m->next)
+	{
+		if (m->value)
+		{
+			snprintf(buf, sizeof(buf), "%s=%s", m->name, m->value);
+			str = buf;
+		} else {
+			str = m->name;
+		}
+		if (match_spamfilter(client, str, SPAMF_MTAG, cmd, NULL, 0, NULL))
+			return 1;
+	}
+	return 0;
+}
+
+/** Updates 'mtag_spamfilters_present' based on if any spamfilters
+ * are present with the SPAMF_MTAG target.
+ */
+int check_mtag_spamfilters_present(void)
+{
+	TKL *tkl;
+
+	for (tkl = tklines[tkl_hash('F')]; tkl; tkl = tkl->next)
+	{
+		if (tkl->ptr.spamfilter->target & SPAMF_MTAG)
+		{
+			mtag_spamfilters_present = 1;
+			return 1;
+		}
+	}
+
+	mtag_spamfilters_present = 0;
+	return 0;
 }
 
 /** CIDR function to compare the first 'mask' bits.

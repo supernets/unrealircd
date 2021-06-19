@@ -275,24 +275,5 @@ CMD_FUNC(cmd_sajoin)
 				strlcat(jbuf, ",", sizeof jbuf);
 			strlcat(jbuf, name, sizeof jbuf);
 		}
-		
-		if (did_anything)
-		{
-			if (!sjmode)
-			{
-				//sendnotice(target, "*** You were forced to join %s", jbuf);
-				sendto_umode_global(UMODE_OPER, "%s used SAJOIN to make %s join %s", client->name, target->name, jbuf);
-				/* Logging function added by XeRXeS */
-				ircd_log(LOG_SACMDS,"SAJOIN: %s used SAJOIN to make %s join %s",
-					client->name, target->name, jbuf);
-			}
-			else
-			{
-				//sendnotice(target, "*** You were forced to join %s with '%c'", jbuf, sjmode);
-				sendto_umode_global(UMODE_OPER, "%s used SAJOIN to make %s join %c%s", client->name, target->name, sjmode, jbuf);
-				ircd_log(LOG_SACMDS,"SAJOIN: %s used SAJOIN to make %s join %c%s",
-					client->name, target->name, sjmode, jbuf);
-			}
-		}
 	}
 }

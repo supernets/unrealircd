@@ -159,22 +159,6 @@ CMD_FUNC(cmd_sapart)
 	parv[0] = target->name; // nick
 	parv[1] = parv[2]; // chan
 	parv[2] = comment ? commentx : NULL; // comment
-	if (comment)
-	{
-		//sendnotice(target, "*** You were forced to part %s (%s)", parv[1], commentx);
-		sendto_umode_global(UMODE_OPER, "%s used SAPART to make %s part %s (%s)",
-				    client->name, target->name, parv[1], comment);
-		ircd_log(LOG_SACMDS,"SAPART: %s used SAPART to make %s part %s (%s)",
-			client->name, target->name, parv[1], comment);
-	}
-	else
-	{
-		//sendnotice(target, "*** You were forced to part %s", parv[1]);
-		sendto_umode_global(UMODE_OPER, "%s used SAPART to make %s part %s",
-				    client->name, target->name, parv[1]);
-		ircd_log(LOG_SACMDS,"SAPART: %s used SAPART to make %s part %s",
-			client->name, target->name, parv[1]);
-	}
 	do_cmd(target, NULL, "PART", comment ? 3 : 2, parv);
 	/* target may be killed now due to the part reason @ spamfilter */
 }
