@@ -32,7 +32,7 @@ ModuleHeader MOD_HEADER
 	"5.0",
 	"command /links", 
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
     };
 
 MOD_INIT()
@@ -69,7 +69,7 @@ CMD_FUNC(cmd_links)
 			sendnumeric(client, RPL_LINKS, acptr->name, me.name,
 			    1, (acptr->info[0] ? acptr->info : "(Unknown Location)"));
 		else
-			sendnumeric(client, RPL_LINKS, acptr->name, acptr->serv->up,
+			sendnumeric(client, RPL_LINKS, acptr->name, acptr->uplink ? acptr->uplink->name : me.name,
 			    acptr->hopcount, (acptr->info[0] ? acptr->info : "(Unknown Location)"));
 	}
 

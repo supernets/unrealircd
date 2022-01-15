@@ -24,7 +24,7 @@ ModuleHeader MOD_HEADER = {
 	"1.10",
 	"Stores active TKL entries (*-Lines) persistently/across IRCd restarts",
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
 };
 
 #define TKLDB_MAGIC 0x10101010
@@ -38,8 +38,7 @@ ModuleHeader MOD_HEADER = {
  */
 #define TKLDB_SAVE_EVERY_DELTA +15
 
-#ifdef DEBUGMODE
- #define BENCHMARK
+// #undef BENCHMARK
 /* Benchmark results (2GHz Xeon Skylake, compiled with -O2, Linux):
  * 100,000 zlines:
  * - load db: 510 ms
@@ -48,7 +47,6 @@ ModuleHeader MOD_HEADER = {
  * which executes every 5 minutes.
  * Of course, exact figures will depend on the machine.
  */
-#endif
 
 #define FreeTKLRead() \
  	do { \
@@ -59,9 +57,10 @@ ModuleHeader MOD_HEADER = {
 
 #define WARN_WRITE_ERROR(fname) \
 	do { \
-		sendto_realops_and_log("[tkldb] Error writing to temporary database file " \
-		                       "'%s': %s (DATABASE NOT SAVED)", \
-		                       fname, unrealdb_get_error_string()); \
+		unreal_log(ULOG_ERROR, "tkldb", "TKLDB_FILE_WRITE_ERROR", NULL, \
+			   "[tkldb] Error writing to temporary database file $filename: $system_error", \
+			   log_data_string("filename", fname), \
+			   log_data_string("system_error", unrealdb_get_error_string())); \
 	} while(0)
 
 #define R_SAFE(x) \
@@ -163,7 +162,7 @@ MOD_LOAD()
 
 MOD_UNLOAD()
 {
-	if (loop.ircd_terminating)
+	if (loop.terminating)
 		write_tkldb();
 	freecfg(&test);
 	freecfg(&cfg);
@@ -199,34 +198,34 @@ int tkldb_config_test(ConfigFile *cf, ConfigEntry *ce, int type, int *errs)
 	if (type != CONFIG_SET)
 		return 0;
 
-	if (!ce || strcmp(ce->ce_varname, "tkldb"))
+	if (!ce || strcmp(ce->name, "tkldb"))
 		return 0;
 
-	for (cep = ce->ce_entries; cep; cep = cep->ce_next)
+	for (cep = ce->items; cep; cep = cep->next)
 	{
-		if (!cep->ce_vardata)
+		if (!cep->value)
 		{
-			config_error("%s:%i: blank set::tkldb::%s without value", cep->ce_fileptr->cf_filename, cep->ce_varlinenum, cep->ce_varname);
+			config_error("%s:%i: blank set::tkldb::%s without value", cep->file->filename, cep->line_number, cep->name);
 			errors++;
 		} else
-		if (!strcmp(cep->ce_varname, "database"))
+		if (!strcmp(cep->name, "database"))
 		{
-			convert_to_absolute_path(&cep->ce_vardata, PERMDATADIR);
-			safe_strdup(test.database, cep->ce_vardata);
+			convert_to_absolute_path(&cep->value, PERMDATADIR);
+			safe_strdup(test.database, cep->value);
 		} else
-		if (!strcmp(cep->ce_varname, "db-secret"))
+		if (!strcmp(cep->name, "db-secret"))
 		{
-			char *err;
-			if ((err = unrealdb_test_secret(cep->ce_vardata)))
+			const char *err;
+			if ((err = unrealdb_test_secret(cep->value)))
 			{
-				config_error("%s:%i: set::tkldb::db-secret: %s", cep->ce_fileptr->cf_filename, cep->ce_varlinenum, err);
+				config_error("%s:%i: set::tkldb::db-secret: %s", cep->file->filename, cep->line_number, err);
 				errors++;
 				continue;
 			}
-			safe_strdup(test.db_secret, cep->ce_vardata);
+			safe_strdup(test.db_secret, cep->value);
 		} else
 		{
-			config_error("%s:%i: unknown directive set::tkldb::%s", cep->ce_fileptr->cf_filename, cep->ce_varlinenum, cep->ce_varname);
+			config_error("%s:%i: unknown directive set::tkldb::%s", cep->file->filename, cep->line_number, cep->name);
 			errors++;
 		}
 	}
@@ -258,15 +257,15 @@ int tkldb_config_run(ConfigFile *cf, ConfigEntry *ce, int type)
 	if (type != CONFIG_SET)
 		return 0;
 
-	if (!ce || strcmp(ce->ce_varname, "tkldb"))
+	if (!ce || strcmp(ce->name, "tkldb"))
 		return 0;
 
-	for (cep = ce->ce_entries; cep; cep = cep->ce_next)
+	for (cep = ce->items; cep; cep = cep->next)
 	{
-		if (!strcmp(cep->ce_varname, "database"))
-			safe_strdup(cfg.database, cep->ce_vardata);
-		else if (!strcmp(cep->ce_varname, "db-secret"))
-			safe_strdup(cfg.db_secret, cep->ce_vardata);
+		if (!strcmp(cep->name, "database"))
+			safe_strdup(cfg.database, cep->value);
+		else if (!strcmp(cep->name, "db-secret"))
+			safe_strdup(cfg.db_secret, cep->value);
 	}
 	return 1;
 }
@@ -370,7 +369,7 @@ int write_tkldb(void)
 #endif
 	if (rename(tmpfname, cfg.database) < 0)
 	{
-		sendto_realops_and_log("[tkldb] Error renaming '%s' to '%s': %s (DATABASE NOT SAVED)", tmpfname, cfg.database, strerror(errno));
+		config_error("[tkldb] Error renaming '%s' to '%s': %s (DATABASE NOT SAVED)", tmpfname, cfg.database, strerror(errno));
 		return 0;
 	}
 #ifdef BENCHMARK
@@ -748,12 +747,13 @@ int read_tkldb(void)
 	unrealdb_close(db);
 
 	if (added_cnt)
-		sendto_realops_and_log("[tkldb] Re-added %d *-Lines", added_cnt);
+		config_status("[tkldb] Re-added %d *-Lines", added_cnt);
 
 #ifdef BENCHMARK
 	gettimeofday(&tv_beta, NULL);
-	ircd_log(LOG_ERROR, "[tkldb] Benchmark: LOAD DB: %lld microseconds",
-		(long long)(((tv_beta.tv_sec - tv_alpha.tv_sec) * 1000000) + (tv_beta.tv_usec - tv_alpha.tv_usec)));
+	unreal_log(ULOG_DEBUG, "tkldb", "TKLDB_BENCHMARK", NULL,
+	           "[tkldb] Benchmark: LOAD DB: $time_msec microseconds",
+	           log_data_integer("time_msec", ((tv_beta.tv_sec - tv_alpha.tv_sec) * 1000000) + (tv_beta.tv_usec - tv_alpha.tv_usec)));
 #endif
 	return 1;
 }

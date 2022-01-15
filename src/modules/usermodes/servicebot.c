@@ -21,8 +21,6 @@
 
 #define IsServiceBot(client)    (client->umodes & UMODE_SERVICEBOT)
 
-#define WHOIS_SERVICE_STRING ":%s 313 %s %s :is a Network Service"
-
 /* Module header */
 ModuleHeader MOD_HEADER
   = {
@@ -30,7 +28,7 @@ ModuleHeader MOD_HEADER
 	"4.2",
 	"User Mode +S",
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
     };
 
 /* Global variables */
@@ -38,11 +36,11 @@ long UMODE_SERVICEBOT = 0L;
 
 /* Forward declarations */
 int servicebot_can_kick(Client *client, Client *target, Channel *channel,
-                    char *comment, long client_flags, long target_flags, char **reject_reason);
+                    const char *comment, const char *client_member_modes, const char *target_member_modes, const char **reject_reason);
 int servicebot_mode_deop(Client *client, Client *target, Channel *channel,
-                    u_int what, int modechar, long my_access, char **reject_reason);
-int servicebot_pre_kill(Client *client, Client *target, char *reason);
-int servicebot_whois(Client *requester, Client *acptr);
+                    u_int what, int modechar, const char *client_access, const char *target_access, const char **reject_reason);
+int servicebot_pre_kill(Client *client, Client *target, const char *reason);
+int servicebot_whois(Client *requester, Client *acptr, NameValuePrioList **list);
 int servicebot_see_channel_in_whois(Client *client, Client *target, Channel *channel);
                     
 MOD_TEST()
@@ -74,8 +72,8 @@ MOD_UNLOAD()
 	return MOD_SUCCESS;
 }
 
-int servicebot_can_kick(Client *client, Client *target, Channel *channel, char *comment,
-                    long client_flags, long target_flags, char **reject_reason)
+int servicebot_can_kick(Client *client, Client *target, Channel *channel, const char *comment,
+                    const char *client_member_modes, const char *target_member_modes, const char **reject_reason)
 {
 	static char errmsg[NICKLEN+256];
 
@@ -96,7 +94,7 @@ int servicebot_can_kick(Client *client, Client *target, Channel *channel, char *
 }
 
 int servicebot_mode_deop(Client *client, Client *target, Channel *channel,
-                    u_int what, int modechar, long my_access, char **reject_reason)
+                    u_int what, int modechar, const char *client_access, const char *target_access, const char **reject_reason)
 {
 	static char errmsg[NICKLEN+256];
 	
@@ -113,7 +111,7 @@ int servicebot_mode_deop(Client *client, Client *target, Channel *channel,
 	return EX_ALLOW;
 }
 
-int servicebot_pre_kill(Client *client, Client *target, char *reason)
+int servicebot_pre_kill(Client *client, Client *target, const char *reason)
 {
 	if (IsServiceBot(target) && !(ValidatePermissionsForPath("services:servicebot:kill",client,target,NULL,NULL) || IsULine(client)))
 	{
@@ -123,12 +121,15 @@ int servicebot_pre_kill(Client *client, Client *target, char *reason)
 	return EX_ALLOW;
 }
 
-int servicebot_whois(Client *requester, Client *acptr)
+int servicebot_whois(Client *client, Client *target, NameValuePrioList **list)
 {
-	int hideoper = (IsHideOper(acptr) && (requester != acptr) && !IsOper(requester)) ? 1 : 0;
+	int hideoper = (IsHideOper(target) && (client != target) && !IsOper(client)) ? 1 : 0;
 
-	if (IsServiceBot(acptr) && !hideoper)
-		sendto_one(requester, NULL, WHOIS_SERVICE_STRING, me.name, requester->name, acptr->name);
+	if (IsServiceBot(target) && !hideoper &&
+	    (whois_get_policy(client, target, "services") > WHOIS_CONFIG_DETAILS_NONE))
+	{
+		add_nvplist_numeric(list, 0, "services", client, RPL_WHOISOPERATOR, target->name, "a Network Service");
+	}
 
 	return 0;
 }

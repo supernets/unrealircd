@@ -27,14 +27,14 @@ ModuleHeader MOD_HEADER
 	"4.2",
 	"Channel Mode +V",
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
     };
 
 Cmode_t EXTCMODE_NOINVITE;
 
-#define IsNoInvite(channel)    (channel->mode.extmode & EXTCMODE_NOINVITE)
+#define IsNoInvite(channel)    (channel->mode.mode & EXTCMODE_NOINVITE)
 
-int noinvite_pre_knock(Client *client, Channel *channel);
+int noinvite_pre_knock(Client *client, Channel *channel, const char **reason);
 int noinvite_pre_invite(Client *client, Client *target, Channel *channel, int *override);
 
 MOD_TEST()
@@ -48,7 +48,7 @@ MOD_INIT()
 
 	memset(&req, 0, sizeof(req));
 	req.paracount = 0;
-	req.flag = 'V';
+	req.letter = 'V';
 	req.is_ok = extcmode_default_requirechop;
 	CmodeAdd(modinfo->handle, req, &EXTCMODE_NOINVITE);
 	
@@ -70,12 +70,12 @@ MOD_UNLOAD()
 }
 
 
-int noinvite_pre_knock(Client *client, Channel *channel)
+int noinvite_pre_knock(Client *client, Channel *channel, const char **reason)
 {
 	if (MyUser(client) && IsNoInvite(channel))
 	{
-		sendnumeric(client, ERR_CANNOTKNOCK,
-				    channel->chname, "The channel does not allow invites (+V)");
+		sendnumeric(client, ERR_CANNOTKNOCK, channel->name,
+		            "The channel does not allow invites (+V)");
 		return HOOK_DENY;
 	}
 
@@ -90,7 +90,7 @@ int noinvite_pre_invite(Client *client, Client *target, Channel *channel, int *o
 		{
 			*override = 1;
 		} else {
-			sendnumeric(client, ERR_NOINVITE, channel->chname);
+			sendnumeric(client, ERR_NOINVITE, channel->name);
 			return HOOK_DENY;
 		}
 	}

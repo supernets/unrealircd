@@ -32,7 +32,7 @@ ModuleHeader MOD_HEADER
 	"5.0", /* Version */
 	"command /oper", /* Short description of module */
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
     };
 
 /* This is called on module init, before Server Ready */
@@ -82,7 +82,7 @@ void set_oper_host(Client *client, char *host)
 CMD_FUNC(cmd_oper)
 {
 	ConfigItem_oper *operblock;
-	char *name, *password;
+	const char *operblock_name, *password;
 	long old_umodes = client->umodes & ALL_UMODES;
 
 	if (!MyUser(client))
@@ -103,24 +103,23 @@ CMD_FUNC(cmd_oper)
 
 	if (IsOper(client))
 	{
-		sendnumeric(client, RPL_YOUREOPER);
-		// TODO: de-confuse this ? ;)
+		sendnotice(client, "You are already an IRC Operator. If you want to re-oper then de-oper first via /MODE yournick -o");
 		return;
 	}
 
-	name = parv[1];
+	operblock_name = parv[1];
 	password = (parc > 2) ? parv[2] : "";
 
 	/* set::plaintext-policy::oper 'deny' */
 	if (!IsSecure(client) && !IsLocalhost(client) && (iConf.plaintext_policy_oper == POLICY_DENY))
 	{
 		sendnotice_multiline(client, iConf.plaintext_policy_oper_message);
-		sendto_snomask_global
-		    (SNO_OPER, "Failed OPER attempt by %s (%s@%s) [not using SSL/TLS]",
-		    client->name, client->user->username, client->local->sockhost);
-		ircd_log(LOG_OPER, "OPER NO-SSL/TLS (%s) by (%s!%s@%s)", name, client->name,
-			client->user->username, client->local->sockhost);
-		client->local->since += 7;
+		unreal_log(ULOG_WARNING, "oper", "OPER_FAILED", client,
+		           "Failed OPER attempt by $client.details [reason: $reason] [oper-block: $oper_block]",
+		           log_data_string("reason", "Not using TLS"),
+		           log_data_string("fail_type", "NO_TLS"),
+		           log_data_string("oper_block", parv[1]));
+		add_fake_lag(client, 7000);
 		return;
 	}
 
@@ -128,36 +127,40 @@ CMD_FUNC(cmd_oper)
 	if (IsSecure(client) && (iConf.outdated_tls_policy_oper == POLICY_DENY) && outdated_tls_client(client))
 	{
 		sendnotice(client, "%s", outdated_tls_client_build_string(iConf.outdated_tls_policy_oper_message, client));
-		sendto_snomask_global
-		    (SNO_OPER, "Failed OPER attempt by %s (%s@%s) [outdated SSL/TLS protocol or cipher]",
-		    client->name, client->user->username, client->local->sockhost);
-		ircd_log(LOG_OPER, "OPER OUTDATED-SSL/TLS (%s) by (%s!%s@%s)", name, client->name,
-			client->user->username, client->local->sockhost);
-		client->local->since += 7;
+		unreal_log(ULOG_WARNING, "oper", "OPER_FAILED", client,
+		           "Failed OPER attempt by $client.details [reason: $reason] [oper-block: $oper_block]",
+		           log_data_string("reason", "Outdated TLS protocol or cipher"),
+		           log_data_string("fail_type", "OUTDATED_TLS_PROTOCOL_OR_CIPHER"),
+		           log_data_string("oper_block", parv[1]));
+		add_fake_lag(client, 7000);
 		return;
 	}
 
-	if (!(operblock = find_oper(name)))
+	if (!(operblock = find_oper(operblock_name)))
 	{
 		sendnumeric(client, ERR_NOOPERHOST);
-		sendto_snomask_global
-		    (SNO_OPER, "Failed OPER attempt by %s (%s@%s) [unknown oper]",
-		    client->name, client->user->username, client->local->sockhost);
-		ircd_log(LOG_OPER, "OPER UNKNOWNOPER (%s) by (%s!%s@%s)", name, client->name,
-			client->user->username, client->local->sockhost);
-		client->local->since += 7;
+		unreal_log(ULOG_WARNING, "oper", "OPER_FAILED", client,
+		           "Failed OPER attempt by $client.details [reason: $reason] [oper-block: $oper_block]",
+		           log_data_string("reason", "Unknown oper operblock_name"),
+		           log_data_string("fail_type", "UNKNOWN_OPER_NAME"),
+		           log_data_string("oper_block", parv[1]));
+		add_fake_lag(client, 7000);
 		return;
 	}
+
+	/* Below here, the oper block exists, any errors here we take (even)
+	 * more seriously, they are logged as errors instead of warnings.
+	 */
 
 	if (!unreal_mask_match(client, operblock->mask))
 	{
 		sendnumeric(client, ERR_NOOPERHOST);
-		sendto_snomask_global
-		    (SNO_OPER, "Failed OPER attempt by %s (%s@%s) using UID %s [host doesnt match]",
-		    client->name, client->user->username, client->local->sockhost, name);
-		ircd_log(LOG_OPER, "OPER NOHOSTMATCH (%s) by (%s!%s@%s)", name, client->name,
-			client->user->username, client->local->sockhost);
-		client->local->since += 7;
+		unreal_log(ULOG_ERROR, "oper", "OPER_FAILED", client,
+		           "Failed OPER attempt by $client.details [reason: $reason] [oper-block: $oper_block]",
+		           log_data_string("reason", "Host does not match"),
+		           log_data_string("fail_type", "NO_HOST_MATCH"),
+		           log_data_string("oper_block", parv[1]));
+		add_fake_lag(client, 7000);
 		return;
 	}
 
@@ -167,12 +170,12 @@ CMD_FUNC(cmd_oper)
 		if (FAILOPER_WARN)
 			sendnotice(client,
 			    "*** Your attempt has been logged.");
-		ircd_log(LOG_OPER, "OPER FAILEDAUTH (%s) by (%s!%s@%s)", name, client->name,
-			client->user->username, client->local->sockhost);
-		sendto_snomask_global
-		    (SNO_OPER, "Failed OPER attempt by %s (%s@%s) using UID %s [FAILEDAUTH]",
-		    client->name, client->user->username, client->local->sockhost, name);
-		client->local->since += 7;
+		unreal_log(ULOG_ERROR, "oper", "OPER_FAILED", client,
+		           "Failed OPER attempt by $client.details [reason: $reason] [oper-block: $oper_block]",
+		           log_data_string("reason", "Authentication failed"),
+		           log_data_string("fail_type", "AUTHENTICATION_FAILED"),
+		           log_data_string("oper_block", parv[1]));
+		add_fake_lag(client, 7000);
 		return;
 	}
 
@@ -185,25 +188,23 @@ CMD_FUNC(cmd_oper)
 	if (operblock->require_modes & ~client->umodes)
 	{
 		sendnumericfmt(client, ERR_NOOPERHOST, ":You are missing user modes required to OPER");
-		sendto_snomask_global
-			(SNO_OPER, "Failed OPER attempt by %s (%s@%s) [lacking modes '%s' in oper::require-modes]",
-			 client->name, client->user->username, client->local->sockhost, get_usermode_string_raw(operblock->require_modes & ~client->umodes));
-		ircd_log(LOG_OPER, "OPER MISSINGMODES (%s) by (%s!%s@%s), needs modes=%s",
-			 name, client->name, client->user->username, client->local->sockhost,
-			 get_usermode_string_raw(operblock->require_modes & ~client->umodes));
-		client->local->since += 7;
+		unreal_log(ULOG_WARNING, "oper", "OPER_FAILED", client,
+		           "Failed OPER attempt by $client.details [reason: $reason] [oper-block: $oper_block]",
+		           log_data_string("reason", "Not matching oper::require-modes"),
+		           log_data_string("fail_type", "REQUIRE_MODES_NOT_SATISFIED"),
+		           log_data_string("oper_block", parv[1]));
+		add_fake_lag(client, 7000);
 		return;
 	}
 
 	if (!find_operclass(operblock->operclass))
 	{
 		sendnotice(client, "ERROR: There is a non-existant oper::operclass specified for your oper block");
-		ircd_log(LOG_ERROR, "OPER MISSINGOPERCLASS (%s) by (%s!%s@%s), oper::operclass does not exist: %s",
-			name, client->name, client->user->username, client->local->sockhost,
-			operblock->operclass);
-		sendto_snomask_global
-			(SNO_OPER, "Failed OPER attempt by %s (%s@%s) [oper::operclass does not exist: '%s']",
-			client->name, client->user->username, client->local->sockhost, operblock->operclass);
+		unreal_log(ULOG_WARNING, "oper", "OPER_FAILED", client,
+		           "Failed OPER attempt by $client.details [reason: $reason] [oper-block: $oper_block]",
+		           log_data_string("reason", "Config error: invalid oper::operclass"),
+		           log_data_string("fail_type", "OPER_OPERCLASS_INVALID"),
+		           log_data_string("oper_block", parv[1]));
 		return;
 	}
 
@@ -212,12 +213,12 @@ CMD_FUNC(cmd_oper)
 		sendnumeric(client, ERR_NOOPERHOST);
 		sendnotice(client, "Your maximum number of concurrent oper logins has been reached (%d)",
 			operblock->maxlogins);
-		sendto_snomask_global
-			(SNO_OPER, "Failed OPER attempt by %s (%s@%s) using UID %s [maxlogins reached]",
-			client->name, client->user->username, client->local->sockhost, name);
-		ircd_log(LOG_OPER, "OPER TOOMANYLOGINS (%s) by (%s!%s@%s)", name, client->name,
-			client->user->username, client->local->sockhost);
-		client->local->since += 4;
+		unreal_log(ULOG_WARNING, "oper", "OPER_FAILED", client,
+		           "Failed OPER attempt by $client.details [reason: $reason] [oper-block: $oper_block]",
+		           log_data_string("reason", "oper::maxlogins limit reached"),
+		           log_data_string("fail_type", "OPER_MAXLOGINS_LIMIT"),
+		           log_data_string("oper_block", parv[1]));
+		add_fake_lag(client, 4000);
 		return;
 	}
 
@@ -258,13 +259,9 @@ CMD_FUNC(cmd_oper)
 		safe_strdup(client->user->virthost, client->user->cloakedhost);
 	}
 
-	sendto_snomask_global(SNO_OPER,
-		"%s (%s@%s) [%s] is now an operator",
-		client->name, client->user->username, client->local->sockhost,
-		parv[1]);
-
-	ircd_log(LOG_OPER, "OPER (%s) by (%s!%s@%s)", name, client->name, client->user->username,
-		client->local->sockhost);
+	unreal_log(ULOG_INFO, "oper", "OPER_SUCCESS", client,
+		   "$client.details is now an IRC Operator [oper-block: $oper_block]",
+		   log_data_string("oper_block", parv[1]));
 
 	/* set oper snomasks */
 	if (operblock->snomask)
@@ -272,19 +269,13 @@ CMD_FUNC(cmd_oper)
 	else
 		set_snomask(client, OPER_SNOMASK); /* set::snomask-on-oper */
 
-	/* some magic to set user mode +s (and snomask +s) if you have any snomasks set */
-	if (client->user->snomask)
-	{
-		client->user->snomask |= SNO_SNOTICE;
-		client->umodes |= UMODE_SERVNOTICE;
-	}
-	
 	send_umode_out(client, 1, old_umodes);
-	sendnumeric(client, RPL_SNOMASK, get_snomask_string(client));
+	if (client->user->snomask)
+		sendnumeric(client, RPL_SNOMASK, client->user->snomask);
 
 	list_add(&client->special_node, &oper_list);
 
-	RunHook2(HOOKTYPE_LOCAL_OPER, client, 1);
+	RunHook(HOOKTYPE_LOCAL_OPER, client, 1, operblock);
 
 	sendnumeric(client, RPL_YOUREOPER);
 
@@ -300,7 +291,7 @@ CMD_FUNC(cmd_oper)
 	if (!BadPtr(OPER_AUTO_JOIN_CHANS) && strcmp(OPER_AUTO_JOIN_CHANS, "0"))
 	{
 		char *chans = strdup(OPER_AUTO_JOIN_CHANS);
-		char *args[3] = {
+		const char *args[3] = {
 			client->name,
 			chans,
 			NULL
@@ -316,17 +307,19 @@ CMD_FUNC(cmd_oper)
 	if (!IsSecure(client) && !IsLocalhost(client) && (iConf.plaintext_policy_oper == POLICY_WARN))
 	{
 		sendnotice_multiline(client, iConf.plaintext_policy_oper_message);
-		sendto_snomask_global
-		    (SNO_OPER, "OPER %s [%s] used an insecure (non-SSL/TLS) connection to /OPER.",
-		    client->name, name);
+		unreal_log(ULOG_WARNING, "oper", "OPER_UNSAFE", client,
+			   "Insecure (non-TLS) connection used to OPER up by $client.details [oper-block: $oper_block]",
+			   log_data_string("oper_block", parv[1]),
+		           log_data_string("warn_type", "NO_TLS"));
 	}
 
 	/* set::outdated-tls-policy::oper 'warn' */
 	if (IsSecure(client) && (iConf.outdated_tls_policy_oper == POLICY_WARN) && outdated_tls_client(client))
 	{
 		sendnotice(client, "%s", outdated_tls_client_build_string(iConf.outdated_tls_policy_oper_message, client));
-		sendto_snomask_global
-		    (SNO_OPER, "OPER %s [%s] used a connection with an outdated SSL/TLS protocol or cipher to /OPER.",
-		    client->name, name);
+		unreal_log(ULOG_WARNING, "oper", "OPER_UNSAFE", client,
+			   "Outdated TLS protocol/cipher used to OPER up by $client.details [oper-block: $oper_block]",
+			   log_data_string("oper_block", parv[1]),
+		           log_data_string("warn_type", "OUTDATED_TLS_PROTOCOL_OR_CIPHER"));
 	}
 }

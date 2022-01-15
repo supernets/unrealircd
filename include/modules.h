@@ -24,7 +24,7 @@
 #define MAXCUSTOMHOOKS  30
 #define MAXHOOKTYPES	150
 #define MAXCALLBACKS	30
-#define MAXEFUNCTIONS	90
+#define MAXEFUNCTIONS	128
 #if defined(_WIN32)
  #define MOD_EXTENSION "dll"
  #define DLLFUNC	_declspec(dllexport)
@@ -95,7 +95,6 @@ typedef enum ModuleObjectType {
 	MOBJ_COMMAND = 3,
 	MOBJ_HOOKTYPE = 4,
 	MOBJ_VERSIONFLAG = 5,
-	MOBJ_SNOMASK = 6,
 	MOBJ_UMODE = 7,
 	MOBJ_COMMANDOVERRIDE = 8,
 	MOBJ_EXTBAN = 9,
@@ -110,23 +109,16 @@ typedef enum ModuleObjectType {
 	MOBJ_HISTORY_BACKEND = 18,
 } ModuleObjectType;
 
-typedef struct {
-        long mode; /**< Mode mask */
-        char flag; /**< Mode character */
-        int unset_on_deoper; /**< When set to 1 then this user mode will be unset on de-oper */
-        int (*allowed)(Client *client, int what); /**< The 'is this user allowed to set this mode?' routine */
-        char unloaded; /**< Internal flag to indicate module is being unloaded */
-        Module *owner; /**< Module that owns this user mode */
-} Umode;
-
-typedef struct {
-        long mode; /**< Snomask mask */
-        char flag; /**< Snomask character */
-        int unset_on_deoper; /**< When set to 1 then this snomask will be unset on de-oper */
-        int (*allowed)(Client *client, int what); /**< The 'is this user allowed to set this snomask?' routine */
-        char unloaded; /**< Internal flag to indicate module is being unloaded */
-        Module *owner; /**< Module that owns this snomask */
-} Snomask;
+typedef struct Umode Umode;
+struct Umode {
+	Umode *prev, *next;
+	long mode; /**< Mode mask */
+	char letter; /**< Mode character */
+	int unset_on_deoper; /**< When set to 1 then this user mode will be unset on de-oper */
+	int (*allowed)(Client *client, int what); /**< The 'is this user allowed to set this mode?' routine */
+	char unloaded; /**< Internal flag to indicate module is being unloaded */
+	Module *owner; /**< Module that owns this user mode */
+};
 
 typedef enum ModDataType {
 	MODDATATYPE_LOCAL_VARIABLE	= 1,
@@ -138,6 +130,11 @@ typedef enum ModDataType {
 	MODDATATYPE_MEMBERSHIP		= 7,
 } ModDataType;
 
+typedef enum ModDataSync {
+	MODDATA_SYNC_NORMAL		= 1, /**< Sync normally via MD command */
+	MODDATA_SYNC_EARLY		= 2, /**< Attempt to (also) sync early in the UID command */
+} ModDataSync;
+
 typedef struct ModDataInfo ModDataInfo;
 
 struct ModDataInfo {
@@ -148,9 +145,11 @@ struct ModDataInfo {
 	int slot; /**< Assigned slot */
 	char unloaded; /**< Module being unloaded? */
 	void (*free)(ModData *m); /**< Function will be called when the data needs to be freed (may be NULL if not using dynamic storage) */
-	char *(*serialize)(ModData *m); /**< Function which converts the data to a string. May return NULL if 'm' contains no data (since for example m->ptr may be NULL). */
-	void (*unserialize)(char *str, ModData *m); /**< Function which converts the string back to data */
-	int sync; /**< Send in netsynch (when servers connect) */
+	const char *(*serialize)(ModData *m); /**< Function which converts the data to a string. May return NULL if 'm' contains no data (since for example m->ptr may be NULL). */
+	void (*unserialize)(const char *str, ModData *m); /**< Function which converts the string back to data */
+	ModDataSync sync; /**< Send in netsynch (when servers connect) */
+	int remote_write; /**< Allow remote servers to set/unset this moddata, even if it they target one of our own clients */
+	int self_write; /**< Allow remote servers to set/unset moddata of their own server object (irc1.example.net writing the MD object of irc1.example.net) */
 };
 
 #define moddata_client(acptr, md)    acptr->moddata[md->slot]
@@ -191,6 +190,17 @@ typedef enum BypassChannelMessageRestrictionType {
 /** Channel mode bit/value */
 typedef unsigned long Cmode_t;
 
+typedef enum CmodeType {
+	CMODE_NORMAL=0,
+	CMODE_MEMBER=1,
+} CmodeType;
+
+#define RANK_CHANOWNER  4000
+#define RANK_CHANADMIN  3000
+#define RANK_CHANOP     2000
+#define RANK_HALFOP     1000
+#define RANK_VOICE        -1
+
 /** Channel mode handler.
  * This struct contains all extended channel mode information,
  * like the flag, mode, their handler functions, etc.
@@ -199,15 +209,36 @@ typedef unsigned long Cmode_t;
  * and set the 'is_ok' function. All the rest is for parameter modes
  * or is optional.
  */
-typedef struct {
-	/** mode character (like 'Z') */
-	char		flag;
+typedef struct Cmode Cmode;
+struct Cmode {
+	Cmode *prev, *next;
 
-	/** unique flag (like 0x10) */
+	/** mode character (like 'Z') */
+	char		letter;
+
+	CmodeType	type;
+
+	/** If type is CMODE_NORMAL, then bitmask (eg: 0x10) that
+	 * is used in channel->mode.mode
+	 */
 	Cmode_t		mode;
 
+	/** If type is CMODE_MEMBER, then the prefix used in NAMES etc (eg @) */
+	char		prefix;
+
+	/** If type is CMODE_MEMBER, then the prefix used in SJOIN (eg @) */
+	char		sjoin_prefix;
+
+	/** If type is CMODE_MEMBER, then the rank of this prefix.
+	 * Higher ranking = more rights.
+	 * This is used, for example, in NAMES without NAMESX when we can only
+	 * show one symbol but not all.
+	 * For the shipped modules vhoaq we use the RANK_* values.
+	 */
+	int		rank;
+
 	/** Number of parameters (1 or 0) */
-	int			paracount;
+	int		paracount;
 
 	/** Check access or parameter of the channel mode.
 	 * @param client	The client
@@ -217,24 +248,24 @@ typedef struct {
 	 * @param what		MODE_ADD or MODE_DEL
 	 * @returns EX_DENY, EX_ALLOW or EX_ALWAYS_DENY
 	 */
-	int (*is_ok)(Client *client, Channel *channel, char mode, char *para, int checkt, int what);
+	int (*is_ok)(Client *client, Channel *channel, char mode, const char *para, int checkt, int what);
 
 	/** Store parameter in memory for channel.
 	 * This function pointer is NULL (unused) for modes without parameters.
-	 * @param list		The list, this usually points to channel->mode.extmodeparams.
+	 * @param list		The list, this usually points to channel->mode.mode_params.
 	 * @param para		The parameter to store.
 	 * @returns the head of the list, RTFS if you wonder why.
 	 * @note IMPORTANT: only allocate a new paramstruct if you need to.
 	 *       Search for any current one first! Eg: in case of mode +y 5 and then +y 6 later without -y.
 	 */
-	void *(*put_param)(void *list, char *para);
+	void *(*put_param)(void *list, const char *para);
 
 	/** Get the stored parameter as a readable/printable string.
 	 * This function pointer is NULL (unused) for modes without parameters.
 	 * @param parastruct	The parameter struct
 	 * @returns a pointer to the string (temporary storage)
 	 */
-	char *(*get_param)(void *parastruct);
+	const char *(*get_param)(void *parastruct);
 
 	/** Convert input parameter to output.
 	 * This converts stuff like where a MODE +l "1aaa" becomes "1".
@@ -249,7 +280,7 @@ typedef struct {
 	 *       In particular you MUST NOT SEND ERRORS to the client.
 	 *       This should be done in is_ok() and not in conv_param().
 	 */
-	char *(*conv_param)(char *para, Client *client, Channel *channel);
+	const char *(*conv_param)(const char *para, Client *client, Channel *channel);
 
 	/** Free and remove parameter from list.
 	 * This function pointer is NULL (unused) for modes without parameters.
@@ -295,24 +326,28 @@ typedef struct {
 	char unloaded;
 	
 	/** Slot number - Can be used instead of GETPARAMSLOT() */
-	int slot;
+	int param_slot;
 	
 	/** Module owner */
         Module *owner;
-} Cmode;
+};
 
 /** The struct used to register a channel mode handler.
  * For documentation, see Cmode struct.
  */
 typedef struct {
-	char		flag;
+	char		letter;
+	CmodeType	type;
+	char		prefix;
+	char		sjoin_prefix;
+	int		rank;
 	int		paracount;
-	int		(*is_ok)(Client *,Channel *, char mode, char *para, int, int);
-	void *	(*put_param)(void *, char *);
-	char *		(*get_param)(void *);
-	char *		(*conv_param)(char *, Client *, Channel *);
+	int		(*is_ok)(Client *,Channel *, char mode, const char *para, int, int);
+	void *		(*put_param)(void *, const char *);
+	const char *	(*get_param)(void *);
+	const char *	(*conv_param)(const char *, Client *, Channel *);
 	void		(*free_param)(void *);
-	void *	(*dup_struct)(void *);
+	void *		(*dup_struct)(void *);
 	int		(*sjoin_check)(Channel *, void *, void *);
 	char		local;
 	char		unset_with_param;
@@ -328,7 +363,7 @@ typedef struct {
 #define GETPARAMHANDLERBYLETTER(x)	ParamTable[GETPARAMSLOT(x)]
 
 /** Get paramter data struct - for like: ((aModejEntry *)GETPARASTRUCT(channel, 'j'))->t */
-#define GETPARASTRUCT(mychannel, mychar)	channel->mode.extmodeparams[GETPARAMSLOT(mychar)]
+#define GETPARASTRUCT(mychannel, mychar)	channel->mode.mode_params[GETPARAMSLOT(mychar)]
 
 #define GETPARASTRUCTEX(v, mychar)	v[GETPARAMSLOT(mychar)]
 
@@ -341,16 +376,20 @@ typedef struct {
 
 /*** Extended bans ***/
 
-// TODO: These should be enums!
+typedef enum ExtbanCheck {
+	EXBCHK_ACCESS=0,	/**< Check access */
+	EXBCHK_ACCESS_ERR=1,	/**< Check access and send error */
+	EXBCHK_PARAM=2		/**< Check if the parameter is valid */
+} ExtbanCheck;
 
-#define EXBCHK_ACCESS		0 /* Check access */
-#define EXBCHK_ACCESS_ERR	1 /* Check access and send error */
-#define EXBCHK_PARAM		2 /* Check if the parameter is valid */
+typedef enum ExtbanType {
+	EXBTYPE_BAN=0,		/**< Ban (channel mode +b) */
+	EXBTYPE_EXCEPT=1,	/**< Ban exception (channel mode +e) */
+	EXBTYPE_INVEX=2,	/**< Invite exception (channel mode +I) */
+	EXBTYPE_TKL=3		/**< TKL or other generic matcher outside banning routines */
+} ExtbanType;
 
-#define EXBTYPE_BAN		0 /* a ban */
-#define EXBTYPE_EXCEPT		1 /* an except */
-#define EXBTYPE_INVEX		2 /* an invite exception */
-#define EXBTYPE_TKL		3 /* TKL or other generic matcher outside banning routines */
+#define BCTX_CONV_OPTION_WRITE_LETTER_BANS	1 /* Always write letter extbans in output of conv_param */
 
 #define EXTBANTABLESZ		32
 
@@ -363,54 +402,66 @@ typedef enum ExtbanOptions {
 } ExtbanOptions;
 
 typedef struct {
-	/** extbans module */
-	Module *owner;
+	Client *client;		/**< Client to check, can be a remote client */
+	Channel *channel;	/**< Channel to check */
+	const char *banstr;	/**< Mask string (ban) */
+	int ban_check_types;	/**< Ban types to check for, one or more of BANCHK_* OR'd together */
+	const char *msg;	/**< Message, only for some BANCHK_* types (for censoring text) */
+	const char *error_msg;	/**< Error message, can be NULL */
+	int no_extbans;		/**< Set to 1 to disable extended bans checking - only nick!user@host allowed */
+	int what;		/**< MODE_ADD or MODE_DEL (for is_ok) */
+	ExtbanType ban_type;	/**< EXBTYPE_BAN or EXBTYPE_EXCEPT (for is_ok) */
+	ExtbanCheck is_ok_check;/**< One of EXBCHK_* (for is_ok) */
+	int conv_options;	/**< One of BCTX_CONV_OPTION_* (for conv_param) */
+} BanContext;
+
+typedef struct Extban Extban;
+
+struct Extban {
+	Extban *prev, *next;
+
 	/** extended ban character */
-	char	flag;
+	char letter;
+
+	/** extended ban name */
+	char *name;
 
 	/** extban options */
 	ExtbanOptions options;
 
-	/** access checking [optional].
-	 * Client *: the client
-	 * Channel *: the channel
-	 * para: the ban parameter
-	 * int: check type (see EXBCHK_*)
-	 * int: what (MODE_ADD or MODE_DEL)
-	 * int: what2 (EXBTYPE_BAN or EXBTYPE_EXCEPT)
-	 * return value: 1=ok, 0=bad
-	 * NOTE: just set this of NULL if you want only +hoaq to place/remove bans as usual.
-	 * NOTE2: This has not been tested yet!!
-	 */
-	int			(*is_ok)(Client *, Channel *, char *para, int, int, int);
+	unsigned int is_banned_events;	/**< Which BANCHK_* events to listen on */
+
+	int (*is_ok)(BanContext *b);
 
 	/** Convert input parameter to output [optional].
 	 * like with normal bans '+b blah' gets '+b blah!*@*', and it allows
-	 * you to limit the length of the ban too. You can set this to NULL however
-	 * to use the value as-is.
-	 * char *: the input parameter.
+	 * you to limit the length of the ban too.
 	 * return value: pointer to output string (temp. storage)
 	 */
-	char *		(*conv_param)(char *);
+	const char *(*conv_param)(BanContext *b, Extban *handler);
 
-	/** Checks if the user is affected by this ban [required].
-	 * Called from is_banned.
-	 * Client *: the client
-	 * Channel *: the channel
-	 * para: the ban entry
-	 * int: a value of BANCHK_* (see struct.h)
-	 * char **: optionally a message, can be NULL!! (for some BANCHK_ types)
-	 * char **: optionally for setting an error message, can be NULL!!
+	/** Checks if the user is affected by this ban [optional].
+	 * This may be set to NULL if you have is_banned_events set to 0 (zero),
+	 * this can be useful if you don't actually ban a user, eg for text bans.
+	 * This function is called from is_banned() and two other places.
 	 */
-	int			(*is_banned)(Client *client, Channel *channel, char *para, int checktype, char **msg, char **errormsg);
-} Extban;
+	int (*is_banned)(BanContext *b);
+
+	/** extbans module */
+	Module *owner;
+
+	/* Set to 1 during rehash when module is unloading (which may be re-used, and then set to 0) */
+	char unloaded;
+};
 
 typedef struct {
-	char	flag;
+	char letter;
+	char *name;
 	ExtbanOptions options;
-	int			(*is_ok)(Client *, Channel *, char *para, int, int, int);
-	char *			(*conv_param)(char *);
-	int			(*is_banned)(Client *, Channel *, char *, int, char **, char **);
+	int (*is_ok)(BanContext *b);
+	const char *(*conv_param)(BanContext *b, Extban *handler);
+	int (*is_banned)(BanContext *b);
+	unsigned int is_banned_events;
 } ExtbanInfo;
 
 
@@ -439,8 +490,8 @@ struct ClientCapability {
 	char *name;                              /**< The name of the CAP */
 	long cap;                                /**< The acptr->user->proto we should set (if any, can be 0, like for sts) */
 	int flags;                               /**< A flag from CLICAP_FLAGS_* */
-	int (*visible)(Client *);               /**< Should the capability be visible? Note: parameter may be NULL. [optional] */
-	char *(*parameter)(Client *);           /**< CAP parameters. Note: parameter may be NULL. [optional] */
+	int (*visible)(Client *);                /**< Should the capability be visible? Note: parameter may be NULL. [optional] */
+	const char *(*parameter)(Client *);      /**< CAP parameters. Note: parameter may be NULL. [optional] */
 	MessageTagHandler *mtag_handler;         /**< For reverse dependency */
 	Module *owner;                           /**< Module introducing this CAP. */
 	char unloaded;                           /**< Internal flag to indicate module is being unloaded */
@@ -450,7 +501,7 @@ typedef struct {
 	char *name;
 	int flags;
 	int (*visible)(Client *);
-	char *(*parameter)(Client *);
+	const char *(*parameter)(Client *);
 } ClientCapabilityInfo;
 
 /** @defgroup MessagetagAPI Message tag API
@@ -465,13 +516,13 @@ typedef struct {
 /** Message Tag Handler */
 struct MessageTagHandler {
 	MessageTagHandler *prev, *next;
-	char *name;                                 /**< The name of the message-tag */
-	int flags;                                  /**< A flag of MTAG_HANDLER_FLAGS_* */
-	int (*is_ok)(Client *, char *, char *);     /**< Verify syntax and access rights */
-	int (*can_send)(Client *);                  /**< Tag may be sent to this client (normally NULL!) */
-	Module *owner;                              /**< Module introducing this CAP. */
-	ClientCapability *clicap_handler;           /**< Client capability handler associated with this */
-	char unloaded;                              /**< Internal flag to indicate module is being unloaded */
+	char *name;                                             /**< The name of the message-tag */
+	int flags;                                              /**< A flag of MTAG_HANDLER_FLAGS_* */
+	int (*is_ok)(Client *, const char *, const char *);     /**< Verify syntax and access rights */
+	int (*should_send_to_client)(Client *);                 /**< Tag may be sent to this client (normally NULL!) */
+	Module *owner;                                          /**< Module introducing this CAP. */
+	ClientCapability *clicap_handler;                       /**< Client capability handler associated with this */
+	char unloaded;                                          /**< Internal flag to indicate module is being unloaded */
 };
 
 /** The struct used to register a message tag handler.
@@ -480,8 +531,8 @@ struct MessageTagHandler {
 typedef struct {
 	char *name;
 	int flags;
-	int (*is_ok)(Client *, char *, char *);
-	int (*can_send)(Client *);
+	int (*is_ok)(Client *, const char *, const char *);
+	int (*should_send_to_client)(Client *);
 	ClientCapability *clicap_handler;
 } MessageTagHandlerInfo;
 
@@ -531,10 +582,10 @@ typedef struct HistoryBackend HistoryBackend;
 struct HistoryBackend {
 	HistoryBackend *prev, *next;
 	char *name;                                   /**< The name of the history backend (eg: "mem") */
-	int (*history_set_limit)(char *object, int max_lines, long max_time); /**< Impose a limit on a history object */
-	int (*history_add)(char *object, MessageTag *mtags, char *line); /**< Add to history */
-	HistoryResult *(*history_request)(char *object, HistoryFilter *filter);  /**< Request history */
-	int (*history_destroy)(char *object);  /**< Destroy history of this object completely */
+	int (*history_set_limit)(const char *object, int max_lines, long max_time); /**< Impose a limit on a history object */
+	int (*history_add)(const char *object, MessageTag *mtags, const char *line); /**< Add to history */
+	HistoryResult *(*history_request)(const char *object, HistoryFilter *filter);  /**< Request history */
+	int (*history_destroy)(const char *object);  /**< Destroy history of this object completely */
 	Module *owner;                                /**< Module introducing this */
 	char unloaded;                                /**< Internal flag to indicate module is being unloaded */
 };
@@ -544,10 +595,10 @@ struct HistoryBackend {
  */
 typedef struct {
 	char *name;
-	int (*history_set_limit)(char *object, int max_lines, long max_time);
-	int (*history_add)(char *object, MessageTag *mtags, char *line);
-	HistoryResult *(*history_request)(char *object, HistoryFilter *filter);
-	int (*history_destroy)(char *object);
+	int (*history_set_limit)(const char *object, int max_lines, long max_time);
+	int (*history_add)(const char *object, MessageTag *mtags, const char *line);
+	HistoryResult *(*history_request)(const char *object, HistoryFilter *filter);
+	int (*history_destroy)(const char *object);
 } HistoryBackendInfo;
 
 struct Hook {
@@ -557,7 +608,8 @@ struct Hook {
 	union {
 		int (*intfunc)();
 		void (*voidfunc)();
-		char *(*pcharfunc)();
+		char *(*stringfunc)();
+		const char *(*conststringfunc)();
 	} func;
 	Module *owner;
 };
@@ -568,7 +620,9 @@ struct Callback {
 	union {
 		int (*intfunc)();
 		void (*voidfunc)();
-		char *(*pcharfunc)();
+		void *(*pvoidfunc)();
+		char *(*stringfunc)();
+		const char *(*conststringfunc)();
 	} func;
 	Module *owner;
 	char willberemoved; /* will be removed on next rehash? (eg the 'old'/'current' one) */
@@ -589,7 +643,8 @@ struct Efunction {
 		int (*intfunc)();
 		void (*voidfunc)();
 		void *(*pvoidfunc)();
-		char *(*pcharfunc)();
+		char *(*stringfunc)();
+		const char *(*conststringfunc)();
 	} func;
 	Module *owner;
 	char willberemoved; /* will be removed on next rehash? (eg the 'old'/'current' one) */
@@ -618,7 +673,6 @@ typedef struct ModuleObject {
 		Command *command;
 		Hooktype *hooktype;
 		Versionflag *versionflag;
-		Snomask *snomask;
 		Umode *umode;
 		CommandOverride *cmdoverride;
 		Extban *extban;
@@ -717,31 +771,29 @@ extern MODVAR Hooktype		Hooktypes[MAXCUSTOMHOOKS];
 extern MODVAR Callback *Callbacks[MAXCALLBACKS], *RCallbacks[MAXCALLBACKS];
 extern MODVAR ClientCapability *clicaps;
 
-extern Event *EventAdd(Module *module, char *name, vFP event, void *data, long every_msec, int count);
+extern Event *EventAdd(Module *module, const char *name, vFP event, void *data, long every_msec, int count);
 extern void   EventDel(Event *event);
 extern Event *EventMarkDel(Event *event);
-extern Event *EventFind(char *name);
+extern Event *EventFind(const char *name);
 extern int EventMod(Event *event, EventInfo *mods);
 extern void DoEvents(void);
 extern void EventStatus(Client *client);
 extern void SetupEvents(void);
 
 
-extern void    Module_Init(void);
-extern char    *Module_Create(char *path);
-extern char    *Module_TransformPath(char *path_);
-extern void    Init_all_testing_modules(void);
-extern void    Unload_all_loaded_modules(void);
-extern void    Unload_all_testing_modules(void);
-extern int     Module_Unload(char *name);
-extern vFP     Module_Sym(char *name);
-extern vFP     Module_SymX(char *name, Module **mptr);
-extern int	Module_free(Module *mod);
-
+extern void Module_Init(void);
+extern const char *Module_Create(const char *path);
+extern const char *Module_TransformPath(const char *path_);
+extern void Init_all_testing_modules(void);
+extern void Unload_all_loaded_modules(void);
+extern void Unload_all_testing_modules(void);
+extern int Module_Unload(const char *name);
+extern vFP Module_Sym(const char *name);
+extern vFP Module_SymX(const char *name, Module **mptr);
+extern int Module_free(Module *mod);
 #ifdef __OpenBSD__
-extern void *obsd_dlsym(void *handle, char *symbol);
+extern void *obsd_dlsym(void *handle, const char *symbol);
 #endif
-
 #ifdef _WIN32
 extern const char *our_dlerror(void);
 #endif
@@ -771,179 +823,115 @@ extern HistoryBackend *HistoryBackendAdd(Module *module, HistoryBackendInfo *mre
 extern void HistoryBackendDel(HistoryBackend *m);
 
 #ifndef GCC_TYPECHECKING
-#define HookAdd(module, hooktype, priority, func) HookAddMain(module, hooktype, priority, func, NULL, NULL)
-#define HookAddVoid(module, hooktype, priority, func) HookAddMain(module, hooktype, priority, NULL, func, NULL)
-#define HookAddPChar(module, hooktype, priority, func) HookAddMain(module, hooktype, priority, NULL, NULL, func)
+#define HookAdd(module, hooktype, priority, func) HookAddMain(module, hooktype, priority, func, NULL, NULL, NULL)
+#define HookAddVoid(module, hooktype, priority, func) HookAddMain(module, hooktype, priority, NULL, func, NULL, NULL)
+#define HookAddString(module, hooktype, priority, func) HookAddMain(module, hooktype, priority, NULL, NULL, func, NULL)
+#define HookAddConstString(module, hooktype, priority, func) HookAddMain(module, hooktype, priority, NULL, NULL, NULL, func)
 #else
 #define HookAdd(module, hooktype, priority, func) \
 __extension__ ({ \
 	ValidateHooks(hooktype, func); \
-    HookAddMain(module, hooktype, priority, func, NULL, NULL); \
+    HookAddMain(module, hooktype, priority, func, NULL, NULL, NULL); \
 })
 
 #define HookAddVoid(module, hooktype, priority, func) \
 __extension__ ({ \
 	ValidateHooks(hooktype, func); \
-    HookAddMain(module, hooktype, priority, NULL, func, NULL); \
+    HookAddMain(module, hooktype, priority, NULL, func, NULL, NULL); \
 })
 
-#define HookAddPChar(module, hooktype, priority, func) \
+#define HookAddString(module, hooktype, priority, func) \
 __extension__ ({ \
 	ValidateHooks(hooktype, func); \
-    HookAddMain(module, hooktype, priority, NULL, NULL, func); \
+    HookAddMain(module, hooktype, priority, NULL, NULL, func, NULL); \
+})
+#define HookAddConstString(module, hooktype, priority, func) \
+__extension__ ({ \
+	ValidateHooks(hooktype, func); \
+    HookAddMain(module, hooktype, priority, NULL, NULL, NULL, func); \
 })
 #endif /* GCC_TYPCHECKING */
 
-extern Hook	*HookAddMain(Module *module, int hooktype, int priority, int (*intfunc)(), void (*voidfunc)(), char *(*pcharfunc)());
+extern Hook	*HookAddMain(Module *module, int hooktype, int priority, int (*intfunc)(), void (*voidfunc)(), char *(*stringfunc)(), const char *(*conststringfunc)());
 extern Hook	*HookDel(Hook *hook);
 
-extern Hooktype *HooktypeAdd(Module *module, char *string, int *type);
+extern Hooktype *HooktypeAdd(Module *module, const char *string, int *type);
 extern void HooktypeDel(Hooktype *hooktype, Module *module);
 
-#define RunHook0(hooktype) do { Hook *h; for (h = Hooks[hooktype]; h; h = h->next)(*(h->func.intfunc))(); } while(0)
-#define RunHook(hooktype,x) do { Hook *h; for (h = Hooks[hooktype]; h; h = h->next) (*(h->func.intfunc))(x); } while(0)
-#define RunHookReturn(hooktype,x,retchk) \
+#define RunHook(hooktype,...) do { Hook *h; for (h = Hooks[hooktype]; h; h = h->next) (*(h->func.intfunc))(__VA_ARGS__); } while(0)
+#define RunHookReturn(hooktype,retchk,...) \
 { \
  int retval; \
  Hook *h; \
  for (h = Hooks[hooktype]; h; h = h->next) \
  { \
-  retval = (*(h->func.intfunc))(x); \
+  retval = (*(h->func.intfunc))(__VA_ARGS__); \
   if (retval retchk) return; \
  } \
 }
-#define RunHookReturn2(hooktype,x,y,retchk) \
+#define RunHookReturnInt(hooktype,retchk,...) \
 { \
  int retval; \
  Hook *h; \
  for (h = Hooks[hooktype]; h; h = h->next) \
  { \
-  retval = (*(h->func.intfunc))(x,y); \
-  if (retval retchk) return; \
- } \
-}
-#define RunHookReturn3(hooktype,x,y,z,retchk) \
-{ \
- int retval; \
- Hook *h; \
- for (h = Hooks[hooktype]; h; h = h->next) \
- { \
-  retval = (*(h->func.intfunc))(x,y,z); \
-  if (retval retchk) return; \
- } \
-}
-#define RunHookReturn4(hooktype,a,b,c,d,retchk) \
-{ \
- int retval; \
- Hook *h; \
- for (h = Hooks[hooktype]; h; h = h->next) \
- { \
-  retval = (*(h->func.intfunc))(a,b,c,d); \
-  if (retval retchk) return; \
- } \
-}
-#define RunHookReturnInt(hooktype,x,retchk) \
-{ \
- int retval; \
- Hook *h; \
- for (h = Hooks[hooktype]; h; h = h->next) \
- { \
-  retval = (*(h->func.intfunc))(x); \
-  if (retval retchk) return retval; \
- } \
-}
-#define RunHookReturnInt2(hooktype,x,y,retchk) \
-{ \
- int retval; \
- Hook *h; \
- for (h = Hooks[hooktype]; h; h = h->next) \
- { \
-  retval = (*(h->func.intfunc))(x,y); \
-  if (retval retchk) return retval; \
- } \
-}
-#define RunHookReturnInt3(hooktype,x,y,z,retchk) \
-{ \
- int retval; \
- Hook *h; \
- for (h = Hooks[hooktype]; h; h = h->next) \
- { \
-  retval = (*(h->func.intfunc))(x,y,z); \
-  if (retval retchk) return retval; \
- } \
-}
-#define RunHookReturnInt4(hooktype,a,b,c,d,retchk) \
-{ \
- int retval; \
- Hook *h; \
- for (h = Hooks[hooktype]; h; h = h->next) \
- { \
-  retval = (*(h->func.intfunc))(a,b,c,d); \
+  retval = (*(h->func.intfunc))(__VA_ARGS__); \
   if (retval retchk) return retval; \
  } \
 }
 
-#define RunHookReturnVoid(hooktype,x,ret) do { Hook *hook; for (hook = Hooks[hooktype]; hook; hook = hook->next) if((*(hook->func.intfunc))(x) ret) return; } while(0)
-#define RunHook2(hooktype,x,y) do { Hook *hook; for (hook = Hooks[hooktype]; hook; hook = hook->next) (*(hook->func.intfunc))(x,y); } while(0)
-#define RunHook3(hooktype,a,b,c) do { Hook *hook; for (hook = Hooks[hooktype]; hook; hook = hook->next) (*(hook->func.intfunc))(a,b,c); } while(0)
-#define RunHook4(hooktype,a,b,c,d) do { Hook *hook; for (hook = Hooks[hooktype]; hook; hook = hook->next) (*(hook->func.intfunc))(a,b,c,d); } while(0)
-#define RunHook5(hooktype,a,b,c,d,e) do { Hook *hook; for (hook = Hooks[hooktype]; hook; hook = hook->next) (*(hook->func.intfunc))(a,b,c,d,e); } while(0)
-#define RunHook6(hooktype,a,b,c,d,e,f) do { Hook *hook; for (hook = Hooks[hooktype]; hook; hook = hook->next) (*(hook->func.intfunc))(a,b,c,d,e,f); } while(0)
-#define RunHook7(hooktype,a,b,c,d,e,f,g) do { Hook *hook; for (hook = Hooks[hooktype]; hook; hook = hook->next) (*(hook->func.intfunc))(a,b,c,d,e,f,g); } while(0)
-#define RunHook8(hooktype,a,b,c,d,e,f,g,h) do { Hook *hook; for (hook = Hooks[hooktype]; hook; hook = hook->next) (*(hook->func.intfunc))(a,b,c,d,e,f,g,h); } while(0)
+#define CallbackAdd(module, cbtype, func) CallbackAddMain(module, cbtype, func, NULL, NULL, NULL, NULL)
+#define CallbackAddVoid(module, cbtype, func) CallbackAddMain(module, cbtype, NULL, func, NULL, NULL, NULL)
+#define CallbackAddPVoid(module, cbtype, func) CallbackAddMain(module, cbtype, NULL, NULL, func, NULL, NULL)
+#define CallbackAddString(module, cbtype, func) CallbackAddMain(module, cbtype, NULL, NULL, NULL, func, NULL)
+#define CallbackAddConstString(module, cbtype, func) CallbackAddMain(module, cbtype, NULL, NULL, NULL, NULL, func)
 
-#define CallbackAdd(cbtype, func) CallbackAddMain(NULL, cbtype, func, NULL, NULL)
-#define CallbackAddEx(module, cbtype, func) CallbackAddMain(module, cbtype, func, NULL, NULL)
-#define CallbackAddVoid(cbtype, func) CallbackAddMain(NULL, cbtype, NULL, func, NULL)
-#define CallbackAddVoidEx(module, cbtype, func) CallbackAddMain(module, cbtype, NULL, func, NULL)
-#define CallbackAddPChar(cbtype, func) CallbackAddMain(NULL, cbtype, NULL, NULL, func)
-#define CallbackAddPCharEx(module, cbtype, func) CallbackAddMain(module, cbtype, NULL, NULL, func)
-
-extern Callback	*CallbackAddMain(Module *module, int cbtype, int (*intfunc)(), void (*voidfunc)(), char *(*pcharfunc)());
+extern Callback *CallbackAddMain(Module *module, int cbtype, int (*func)(), void (*vfunc)(), void *(*pvfunc)(), char *(*stringfunc)(), const char *(*conststringfunc)());
 extern Callback	*CallbackDel(Callback *cb);
 
-#define EfunctionAdd(module, cbtype, func) EfunctionAddMain(module, cbtype, func, NULL, NULL, NULL)
-#define EfunctionAddVoid(module, cbtype, func) EfunctionAddMain(module, cbtype, NULL, func, NULL, NULL)
-#define EfunctionAddPVoid(module, cbtype, func) EfunctionAddMain(module, cbtype, NULL, NULL, func, NULL)
-#define EfunctionAddPChar(module, cbtype, func) EfunctionAddMain(module, cbtype, NULL, NULL, NULL, func)
+#define EfunctionAdd(module, cbtype, func) EfunctionAddMain(module, cbtype, func, NULL, NULL, NULL, NULL)
+#define EfunctionAddVoid(module, cbtype, func) EfunctionAddMain(module, cbtype, NULL, func, NULL, NULL, NULL)
+#define EfunctionAddPVoid(module, cbtype, func) EfunctionAddMain(module, cbtype, NULL, NULL, func, NULL, NULL)
+#define EfunctionAddString(module, cbtype, func) EfunctionAddMain(module, cbtype, NULL, NULL, NULL, func, NULL)
+#define EfunctionAddConstString(module, cbtype, func) EfunctionAddMain(module, cbtype, NULL, NULL, NULL, NULL, func)
 
-extern Efunction *EfunctionAddMain(Module *module, EfunctionType eftype, int (*intfunc)(), void (*voidfunc)(), void *(*pvoidfunc)(), char *(*pcharfunc)());
+extern Efunction *EfunctionAddMain(Module *module, EfunctionType eftype, int (*intfunc)(), void (*voidfunc)(), void *(*pvoidfunc)(), char *(*stringfunc)(), const char *(*conststringfunc)());
 extern Efunction *EfunctionDel(Efunction *cb);
 
-extern Command *CommandAdd(Module *module, char *cmd, CmdFunc func, unsigned char params, int flags);
-extern Command *AliasAdd(Module *module, char *cmd, AliasCmdFunc aliasfunc, unsigned char params, int flags);
+extern Command *CommandAdd(Module *module, const char *cmd, CmdFunc func, unsigned char params, int flags);
+extern Command *AliasAdd(Module *module, const char *cmd, AliasCmdFunc aliasfunc, unsigned char params, int flags);
 extern void CommandDel(Command *command);
 extern void CommandDelX(Command *command, RealCommand *cmd);
-extern int CommandExists(char *name);
-extern CommandOverride *CommandOverrideAdd(Module *module, char *cmd, OverrideCmdFunc func);
-extern CommandOverride *CommandOverrideAddEx(Module *module, char *name, int priority, OverrideCmdFunc func);
+extern int CommandExists(const char *name);
+extern CommandOverride *CommandOverrideAdd(Module *module, const char *name, int priority, OverrideCmdFunc func);
 extern void CommandOverrideDel(CommandOverride *ovr);
-extern void CallCommandOverride(CommandOverride *ovr, Client *client, MessageTag *mtags, int parc, char *parv[]);
+extern void CallCommandOverride(CommandOverride *ovr, Client *client, MessageTag *mtags, int parc, const char *parv[]);
 
 extern void moddata_free_client(Client *acptr);
 extern void moddata_free_local_client(Client *acptr);
 extern void moddata_free_channel(Channel *channel);
 extern void moddata_free_member(Member *m);
 extern void moddata_free_membership(Membership *m);
-extern ModDataInfo *findmoddata_byname(char *name, ModDataType type);
-extern int moddata_client_set(Client *acptr, char *varname, char *value);
-extern char *moddata_client_get(Client *acptr, char *varname);
-extern int moddata_local_client_set(Client *acptr, char *varname, char *value);
-extern char *moddata_local_client_get(Client *acptr, char *varname);
+extern ModDataInfo *findmoddata_byname(const char *name, ModDataType type);
+extern int moddata_client_set(Client *acptr, const char *varname, const char *value);
+extern const char *moddata_client_get(Client *acptr, const char *varname);
+extern ModData *moddata_client_get_raw(Client *client, const char *varname);
+extern int moddata_local_client_set(Client *acptr, const char *varname, const char *value);
+extern const char *moddata_local_client_get(Client *acptr, const char *varname);
 
-extern int LoadPersistentPointerX(ModuleInfo *modinfo, char *varshortname, void **var, void (*free_variable)(ModData *m));
+extern int LoadPersistentPointerX(ModuleInfo *modinfo, const char *varshortname, void **var, void (*free_variable)(ModData *m));
 #define LoadPersistentPointer(modinfo, var, free_variable) LoadPersistentPointerX(modinfo, #var, (void **)&var, free_variable)
-extern void SavePersistentPointerX(ModuleInfo *modinfo, char *varshortname, void *var);
+extern void SavePersistentPointerX(ModuleInfo *modinfo, const char *varshortname, void *var);
 #define SavePersistentPointer(modinfo, var) SavePersistentPointerX(modinfo, #var, var)
 
-extern int LoadPersistentIntX(ModuleInfo *modinfo, char *varshortname, int *var);
+extern int LoadPersistentIntX(ModuleInfo *modinfo, const char *varshortname, int *var);
 #define LoadPersistentInt(modinfo, var) LoadPersistentIntX(modinfo, #var, &var)
-extern void SavePersistentIntX(ModuleInfo *modinfo, char *varshortname, int var);
+extern void SavePersistentIntX(ModuleInfo *modinfo, const char *varshortname, int var);
 #define SavePersistentInt(modinfo, var) SavePersistentIntX(modinfo, #var, var)
 
-extern int LoadPersistentLongX(ModuleInfo *modinfo, char *varshortname, long *var);
+extern int LoadPersistentLongX(ModuleInfo *modinfo, const char *varshortname, long *var);
 #define LoadPersistentLong(modinfo, var) LoadPersistentLongX(modinfo, #var, &var)
-extern void SavePersistentLongX(ModuleInfo *modinfo, char *varshortname, long var);
+extern void SavePersistentLongX(ModuleInfo *modinfo, const char *varshortname, long var);
 #define SavePersistentLong(modinfo, var) SavePersistentLongX(modinfo, #var, var)
 
 /** Hooks trigger on "events", such as a new user connecting or joining a channel,
@@ -1121,8 +1109,6 @@ extern void SavePersistentLongX(ModuleInfo *modinfo, char *varshortname, long va
 #define HOOKTYPE_CHANNEL_SYNCED	83
 /** See hooktype_can_sajoin() */
 #define HOOKTYPE_CAN_SAJOIN	84
-/** See hooktype_check_init() */
-#define HOOKTYPE_CHECK_INIT	85
 /** See hooktype_mode_deop() */
 #define HOOKTYPE_MODE_DEOP	86
 /** See hooktype_dcc_denied() */
@@ -1131,8 +1117,6 @@ extern void SavePersistentLongX(ModuleInfo *modinfo, char *varshortname, long va
 #define HOOKTYPE_SECURE_CONNECT	88
 /** See hooktype_can_bypass_channel_message_restriction() */
 #define HOOKTYPE_CAN_BYPASS_CHANNEL_MESSAGE_RESTRICTION	89
-/** See hooktype_require_sasl() */
-#define HOOKTYPE_REQUIRE_SASL	90
 /** See hooktype_sasl_continuation() */
 #define HOOKTYPE_SASL_CONTINUATION	91
 /** See hooktype_sasl_result() */
@@ -1161,6 +1145,18 @@ extern void SavePersistentLongX(ModuleInfo *modinfo, char *varshortname, long va
 #define HOOKTYPE_CLOSE_CONNECTION	103
 /** See hooktype_connect_extinfo() */
 #define HOOKTYPE_CONNECT_EXTINFO	104
+/** See hooktype_is_invited() */
+#define HOOKTYPE_IS_INVITED	105
+/** See hooktype_post_local_nickchange() */
+#define HOOKTYPE_POST_LOCAL_NICKCHANGE	106
+/** See hooktype_post_remote_nickchange() */
+#define HOOKTYPE_POST_REMOTE_NICKCHANGE	107
+/** See hooktype_userhost_changed() */
+#define HOOKTYPE_USERHOST_CHANGED 108
+/** See hooktype_realname_changed() */
+#define HOOKTYPE_REALNAME_CHANGED 109
+/** See hooktype_can_set_topic() */
+#define HOOKTYPE_CAN_SET_TOPIC	110
 /* Adding a new hook here?
  * 1) Add the #define HOOKTYPE_.... with a new number
  * 2) Add a hook prototype (see below)
@@ -1193,7 +1189,7 @@ int hooktype_remote_connect(Client *client);
  * @param client		The quit/disconnect reason
  * @return The quit reason (you may also return 'comment' if it should be unchanged) or NULL for an empty reason.
  */
-char *hooktype_pre_local_quit(Client *client, char *comment);
+const char *hooktype_pre_local_quit(Client *client, const char *comment);
 
 /** Called when a local user quits or otherwise disconnects (function prototype for HOOKTYPE_PRE_LOCAL_QUIT).
  * @param client		The client
@@ -1201,7 +1197,7 @@ char *hooktype_pre_local_quit(Client *client, char *comment);
  * @param comment       	The quit/exit reason
  * @return The return value is ignored (use return 0)
  */
-int hooktype_local_quit(Client *client, MessageTag *mtags, char *comment);
+int hooktype_local_quit(Client *client, MessageTag *mtags, const char *comment);
 
 /** Called when a remote user qutis or otherwise disconnects (function prototype for HOOKTYPE_REMOTE_QUIT).
  * @param client		The client
@@ -1209,7 +1205,7 @@ int hooktype_local_quit(Client *client, MessageTag *mtags, char *comment);
  * @param comment       	The quit/exit reason
  * @return The return value is ignored (use return 0)
  */
-int hooktype_remote_quit(Client *client, MessageTag *mtags, char *comment);
+int hooktype_remote_quit(Client *client, MessageTag *mtags, const char *comment);
 
 /** Called when an unregistered user disconnects, so before the user was fully online (function prototype for HOOKTYPE_UNKUSER_QUIT).
  * @param client		The client
@@ -1217,7 +1213,7 @@ int hooktype_remote_quit(Client *client, MessageTag *mtags, char *comment);
  * @param comment       	The quit/exit reason
  * @return The return value is ignored (use return 0)
  */
-int hooktype_unkuser_quit(Client *client, MessageTag *mtags, char *comment);
+int hooktype_unkuser_quit(Client *client, MessageTag *mtags, const char *comment);
 
 /** Called when a local or remote server connects / links in (function prototype for HOOKTYPE_SERVER_CONNECT).
  * @param client		The client
@@ -1262,7 +1258,7 @@ int hooktype_server_quit(Client *client, MessageTag *mtags);
  * @param newnick		The new nick name
  * @return The return value is ignored (use return 0)
  */
-int hooktype_local_nickchange(Client *client, MessageTag *mtags, char *newnick);
+int hooktype_local_nickchange(Client *client, MessageTag *mtags, const char *newnick);
 
 /** Called when a remote user changes the nick name (function prototype for HOOKTYPE_REMOTE_NICKCHANGE).
  * @param client		The client
@@ -1270,45 +1266,42 @@ int hooktype_local_nickchange(Client *client, MessageTag *mtags, char *newnick);
  * @param newnick		The new nick name
  * @return The return value is ignored (use return 0)
  */
-int hooktype_remote_nickchange(Client *client, MessageTag *mtags, char *newnick);
+int hooktype_remote_nickchange(Client *client, MessageTag *mtags, const char *newnick);
 
 /** Called when a user wants to join a channel, may the user join? (function prototype for HOOKTYPE_CAN_JOIN).
  * @param client		The client
  * @param channel		The channel the user wants to join
  * @param key			The key supplied by the client
- * @param parv			The parameters from the JOIN. Normally you should not use this.
  * @return Return 0 to allow the user, any other value should be an IRC numeric (eg: ERR_BANNEDFROMCHAN).
  */
-int hooktype_can_join(Client *client, Channel *channel, char *key, char *parv[]);
+int hooktype_can_join(Client *client, Channel *channel, const char *key, char **errmsg);
 
-/** Called when a user wants to join a channel, may the user join? (function prototype for HOOKTYPE_PRE_LOCAL_JOIN).
- * FIXME: It's not entirely clear why we have both hooktype_can_join() and hooktype_pre_local_join().
+/** Called when a user wants to join a channel (function prototype for HOOKTYPE_PRE_LOCAL_JOIN).
+ * IMPORTANT: Generally you want to use HOOKTYPE_CAN_JOIN / hooktype_can_join() instead!!
  * @param client		The client
  * @param channel		The channel the user wants to join
- * @param parv			The parameters from the JOIN. May contain channel key in parv[2].
+ * @param key			Channel key (can be NULL)
  * @retval HOOK_DENY		Deny the join.
  * @retval HOOK_ALLOW		Allow the join (stop processing other modules)
  * @retval HOOK_CONTINUE	Allow the join, unless another module blocks it.
  */
-int hooktype_pre_local_join(Client *client, Channel *channel, char *parv[]);
+int hooktype_pre_local_join(Client *client, Channel *channel, const char *key);
 
 /** Called when a local user joins a channel (function prototype for HOOKTYPE_LOCAL_JOIN).
  * @param client		The client
  * @param channel		The channel the user wants to join
  * @param mtags         	Message tags associated with the event
- * @param parv			The parameters from the JOIN. May contain channel key in parv[2].
  * @return The return value is ignored (use return 0)
  */
-int hooktype_local_join(Client *client, Channel *channel, MessageTag *mtags, char *parv[]);
+int hooktype_local_join(Client *client, Channel *channel, MessageTag *mtags);
 
 /** Called when a remote user joins a channel (function prototype for HOOKTYPE_REMOTE_JOIN).
  * @param client		The client
  * @param channel		The channel the user wants to join
  * @param mtags         	Message tags associated with the event
- * @param parv			The parameters from the JOIN. May contain channel key in parv[2].
  * @return The return value is ignored (use return 0)
  */
-int hooktype_remote_join(Client *client, Channel *channel, MessageTag *mtags, char *parv[]);
+int hooktype_remote_join(Client *client, Channel *channel, MessageTag *mtags);
 
 /** Called when a local user wants to part a channel (function prototype for HOOKTYPE_PRE_LOCAL_PART).
  * @param client		The client
@@ -1316,7 +1309,7 @@ int hooktype_remote_join(Client *client, Channel *channel, MessageTag *mtags, ch
  * @param comment		The PART reason, this may be NULL.
  * @return The part reason (you may also return 'comment' if it should be unchanged) or NULL for an empty reason.
  */
-char *hooktype_pre_local_part(Client *client, Channel *channel, char *comment);
+const char *hooktype_pre_local_part(Client *client, Channel *channel, const char *comment);
 
 /** Called when a local user parts a channel (function prototype for HOOKTYPE_LOCAL_PART).
  * @param client		The client
@@ -1325,7 +1318,7 @@ char *hooktype_pre_local_part(Client *client, Channel *channel, char *comment);
  * @param comment		The PART reason, this may be NULL.
  * @return The return value is ignored (use return 0)
  */
-int hooktype_local_part(Client *client, Channel *channel, MessageTag *mtags, char *comment);
+int hooktype_local_part(Client *client, Channel *channel, MessageTag *mtags, const char *comment);
 
 /** Called when a remote user parts a channel (function prototype for HOOKTYPE_REMOTE_PART).
  * @param client		The client
@@ -1334,25 +1327,25 @@ int hooktype_local_part(Client *client, Channel *channel, MessageTag *mtags, cha
  * @param comment		The PART reason, this may be NULL.
  * @return The return value is ignored (use return 0)
  */
-int hooktype_remote_part(Client *client, Channel *channel, MessageTag *mtags, char *comment);
+int hooktype_remote_part(Client *client, Channel *channel, MessageTag *mtags, const char *comment);
 
 /** Do not use this function, use hooktype_can_kick() instead!
  */
-char *hooktype_pre_local_kick(Client *client, Client *victim, Channel *channel, char *comment);
+const char *hooktype_pre_local_kick(Client *client, Client *victim, Channel *channel, const char *comment);
 
 /** Called when a local user wants to kick another user from a channel (function prototype for HOOKTYPE_CAN_KICK).
  * @param client		The client issuing the command
  * @param victim		The victim that should be kicked
  * @param channel		The channel the user should be kicked from
  * @param comment		The KICK reason, this may be NULL.
- * @param client_flags		The access flags of 'client', one of CHFL_*, eg CHFL_CHANOP.
- * @param victim_flags		The access flags of 'victim', one of CHFL_*, eg CHFL_VOICE.
- * @param error			The error message that should be shown to the user (full IRC protocol line).
+ * @param client_member_modes	The member modes of 'client' (eg "o"), never NULL but can be empty.
+ * @param victim_member_modes	The member modes of 'victim' (eg "v"), never NULL but can be empty.
+ * @param errmsg		The error message that should be shown to the user (full IRC protocol line).
  * @retval EX_DENY		Deny the KICK (unless IRCOp with sufficient override rights).
  * @retval EX_ALWAYS_DENY	Deny the KICK always (even if IRCOp).
  * @retval EX_ALLOW		Allow the kick, unless another module blocks it.
  */
-int hooktype_can_kick(Client *client, Client *victim, Channel *channel, char *comment, long client_flags, long victim_flags, char **error);
+int hooktype_can_kick(Client *client, Client *victim, Channel *channel, const char *comment, const char *client_member_modes, const char *victim_member_modes, const char **errmsg);
 
 /** Called when a local user is kicked (function prototype for HOOKTYPE_LOCAL_KICK).
  * @param client		The client issuing the command
@@ -1362,7 +1355,7 @@ int hooktype_can_kick(Client *client, Client *victim, Channel *channel, char *co
  * @param comment		The KICK reason, this may be NULL.
  * @return The return value is ignored (use return 0)
  */
-int hooktype_local_kick(Client *client, Client *victim, Channel *channel, MessageTag *mtags, char *comment);
+int hooktype_local_kick(Client *client, Client *victim, Channel *channel, MessageTag *mtags, const char *comment);
 
 /** Called when a remote user is kicked (function prototype for HOOKTYPE_REMOTE_KICK).
  * @param client		The client issuing the command
@@ -1372,7 +1365,7 @@ int hooktype_local_kick(Client *client, Client *victim, Channel *channel, Messag
  * @param comment		The KICK reason, this may be NULL.
  * @return The return value is ignored (use return 0)
  */
-int hooktype_remote_kick(Client *client, Client *victim, Channel *channel, MessageTag *mtags, char *comment);
+int hooktype_remote_kick(Client *client, Client *victim, Channel *channel, MessageTag *mtags, const char *comment);
 
 /** Called right before a message is sent to the channel (function prototype for HOOKTYPE_PRE_CHANMSG).
  * This function is only used by delayjoin. It cannot block a message. See hooktype_can_send_to_user() instead!
@@ -1382,7 +1375,7 @@ int hooktype_remote_kick(Client *client, Client *victim, Channel *channel, Messa
  * @param text			The text that will be sent
  * @return The return value is ignored (use return 0)
  */
-int hooktype_pre_chanmsg(Client *client, Channel *channel, MessageTag *mtags, char *text, SendType sendtype);
+int hooktype_pre_chanmsg(Client *client, Channel *channel, MessageTag *mtags, const char *text, SendType sendtype);
 
 /** Called when a user wants to send a message to another user (function prototype for HOOKTYPE_CAN_SEND_TO_USER).
  * @param client		The sender
@@ -1393,7 +1386,7 @@ int hooktype_pre_chanmsg(Client *client, Channel *channel, MessageTag *mtags, ch
  * @retval HOOK_DENY		Deny the message. The 'errmsg' will be sent to the user.
  * @retval HOOK_CONTINUE	Allow the message, unless other modules block it.
  */
-int hooktype_can_send_to_user(Client *client, Client *target, char **text, char **errmsg, SendType sendtype);
+int hooktype_can_send_to_user(Client *client, Client *target, const char **text, const char **errmsg, SendType sendtype);
 
 /** Called when a user wants to send a message to a channel (function prototype for HOOKTYPE_CAN_SEND_TO_CHANNEL).
  * @param client		The sender
@@ -1405,7 +1398,7 @@ int hooktype_can_send_to_user(Client *client, Client *target, char **text, char 
  * @retval HOOK_DENY		Deny the message. The 'errmsg' will be sent to the user.
  * @retval HOOK_CONTINUE	Allow the message, unless other modules block it.
  */
-int hooktype_can_send_to_channel(Client *client, Channel *channel, Membership *member, char **text, char **errmsg, SendType sendtype);
+int hooktype_can_send_to_channel(Client *client, Channel *channel, Membership *member, const char **text, const char **errmsg, SendType sendtype);
 
 /** Called when a message is sent from one user to another user (function prototype for HOOKTYPE_USERMSG).
  * @param client		The sender
@@ -1415,20 +1408,31 @@ int hooktype_can_send_to_channel(Client *client, Channel *channel, Membership *m
  * @param sendtype		The message type, for example SEND_TYPE_PRIVMSG.
  * @return The return value is ignored (use return 0)
  */
-int hooktype_usermsg(Client *client, Client *to, MessageTag *mtags, char *text, SendType sendtype);
+int hooktype_usermsg(Client *client, Client *to, MessageTag *mtags, const char *text, SendType sendtype);
 
 /** Called when a message is sent to a channel (function prototype for HOOKTYPE_CHANMSG).
  * @param client		The sender
  * @param channel		The channel
  * @param sendflags		One of SEND_* (eg SEND_ALL, SKIP_DEAF).
- * @param prefix		Either zero, one or a combination of PREFIX_*.
+ * @param member_modes		Either NULL, or a member mode like "h", "o", etc.
  * @param target		Target string, usually this is "#channel", but it can also contain prefixes like "@#channel"
  * @param mtags         	Message tags associated with the event
  * @param text			The text
  * @param sendtype		The message type, for example SEND_TYPE_PRIVMSG.
  * @return The return value is ignored (use return 0)
  */
-int hooktype_chanmsg(Client *client, Channel *channel, int sendflags, int prefix, char *target, MessageTag *mtags, char *text, SendType sendtype);
+int hooktype_chanmsg(Client *client, Channel *channel, int sendflags, const char *member_modes, const char *target, MessageTag *mtags, const char *text, SendType sendtype);
+
+/** Called when a user wants to set the topic (function prototype for HOOKTYPE_CAN_SET_TOPIC).
+ * @param client		The client issuing the command
+ * @param channel		The channel the topic should be set for
+ * @param topic			The topic that should be set, this may be NULL for unset.
+ * @param errmsg		The error message that should be shown to the user (full IRC protocol line).
+ * @retval EX_DENY		Deny the TOPIC (unless IRCOp with sufficient override rights).
+ * @retval EX_ALWAYS_DENY	Deny the TOPIC always (even if IRCOp).
+ * @retval EX_ALLOW		Allow the TOPIC, unless another module blocks it.
+ */
+int hooktype_can_set_topic(Client *client, Channel *channel, const char *topic, const char **errmsg);
 
 /** Called when a local user wants to change the channel topic (function prototype for HOOKTYPE_PRE_LOCAL_TOPIC).
  * @param client		The client
@@ -1436,7 +1440,7 @@ int hooktype_chanmsg(Client *client, Channel *channel, int sendflags, int prefix
  * @param topic			The new requested topic
  * @return The new topic (you may also return 'topic'), or NULL if the topic change request should be rejected.
  */
-char *hooktype_pre_local_topic(Client *client, Channel *channel, char *topic);
+const char *hooktype_pre_local_topic(Client *client, Channel *channel, const char *topic);
 
 /** Called when the channel topic is changed (function prototype for HOOKTYPE_TOPIC).
  * @param client		The client
@@ -1445,7 +1449,7 @@ char *hooktype_pre_local_topic(Client *client, Channel *channel, char *topic);
  * @param topic			The new topic
  * @return The return value is ignored (use return 0)
  */
-int hooktype_topic(Client *client, Channel *channel, MessageTag *mtags, char *topic);
+int hooktype_topic(Client *client, Channel *channel, MessageTag *mtags, const char *topic);
 
 /** Called when a local user changes channel modes, called early (function prototype for HOOKTYPE_PRE_LOCAL_CHANMODE).
  * WARNING: This does not allow you to stop or reject the channel modes. It only allows you to do stuff -before- the
@@ -1459,7 +1463,7 @@ int hooktype_topic(Client *client, Channel *channel, MessageTag *mtags, char *to
  * @param samode		Is this an SAMODE?
  * @return The return value is ignored (use return 0)
  */
-int hooktype_pre_local_chanmode(Client *client, Channel *channel, MessageTag *mtags, char *modebuf, char *parabuf, time_t sendts, int samode);
+int hooktype_pre_local_chanmode(Client *client, Channel *channel, MessageTag *mtags, const char *modebuf, const char *parabuf, time_t sendts, int samode);
 
 /** Called when a remote user changes channel modes, called early (function prototype for HOOKTYPE_PRE_REMOTE_CHANMODE).
  * WARNING: This does not allow you to stop or reject the channel modes. It only allows you to do stuff -before- the
@@ -1473,7 +1477,7 @@ int hooktype_pre_local_chanmode(Client *client, Channel *channel, MessageTag *mt
  * @param samode		Is this an SAMODE?
  * @return The return value is ignored (use return 0)
  */
-int hooktype_pre_remote_chanmode(Client *client, Channel *channel, MessageTag *mtags, char *modebuf, char *parabuf, time_t sendts, int samode);
+int hooktype_pre_remote_chanmode(Client *client, Channel *channel, MessageTag *mtags, const char *modebuf, const char *parabuf, time_t sendts, int samode);
 
 /** Called when a local user changes channel modes (function prototype for HOOKTYPE_LOCAL_CHANMODE).
  * @param client		The client
@@ -1483,9 +1487,10 @@ int hooktype_pre_remote_chanmode(Client *client, Channel *channel, MessageTag *m
  * @param parabuf		The parameter buffer, for example "NiceOp"
  * @param sendts		Send timestamp
  * @param samode		Is this an SAMODE?
+ * @param destroy_channel	Module can set this to 1 to indicate 'channel' was destroyed
  * @return The return value is ignored (use return 0)
  */
-int hooktype_local_chanmode(Client *client, Channel *channel, MessageTag *mtags, char *modebuf, char *parabuf, time_t sendts, int samode);
+int hooktype_local_chanmode(Client *client, Channel *channel, MessageTag *mtags, const char *modebuf, const char *parabuf, time_t sendts, int samode, int *destroy_channel);
 
 /** Called when a remote user changes channel modes (function prototype for HOOKTYPE_REMOTE_CHANMODE).
  * @param client		The client
@@ -1495,9 +1500,10 @@ int hooktype_local_chanmode(Client *client, Channel *channel, MessageTag *mtags,
  * @param parabuf		The parameter buffer, for example "NiceOp"
  * @param sendts		Send timestamp
  * @param samode		Is this an SAMODE?
+ * @param destroy_channel	Module can set this to 1 to indicate 'channel' was destroyed
  * @return The return value is ignored (use return 0)
  */
-int hooktype_remote_chanmode(Client *client, Channel *channel, MessageTag *mtags, char *modebuf, char *parabuf, time_t sendts, int samode);
+int hooktype_remote_chanmode(Client *client, Channel *channel, MessageTag *mtags, const char *modebuf, const char *parabuf, time_t sendts, int samode, int *destroy_channel);
 
 /** Called when a channel mode is removed by a local or remote user (function prototype for HOOKTYPE_MODECHAR_DEL).
  * NOTE: This is currently not terribly useful for most modules. It is used by by the floodprot and noknock modules.
@@ -1519,9 +1525,10 @@ int hooktype_modechar_add(Channel *channel, int modechar);
  * @param client		The client
  * @param mtags         	Message tags associated with the event
  * @param reason		The away reason, or NULL if away is unset.
+ * @param already_as_away	Set to 1 if the user only changed their away reason.
  * @return The return value is ignored (use return 0)
  */
-int hooktype_away(Client *client, MessageTag *mtags, char *reason);
+int hooktype_away(Client *client, MessageTag *mtags, const char *reason, int already_as_away);
 
 /** Called when a user wants to invite another user to a channel (function prototype for HOOKTYPE_PRE_INVITE).
  * @param client		The client
@@ -1544,14 +1551,14 @@ int hooktype_pre_invite(Client *client, Client *acptr, Channel *channel, int *ov
 int hooktype_invite(Client *client, Client *acptr, Channel *channel, MessageTag *mtags);
 
 /** Called when a user wants to knock on a channel (function prototype for HOOKTYPE_PRE_KNOCK).
- * FIXME: where is the knock reason ?
  * @param client		The client
  * @param channel		The channel to knock on
+ * @param reason		Knock reason (can be replaced if needed)
  * @retval HOOK_DENY		Deny the knock.
  * @retval HOOK_ALLOW		Allow the knock (stop processing other modules)
  * @retval HOOK_CONTINUE	Allow the knock, unless another module blocks it.
  */
-int hooktype_pre_knock(Client *client, Channel *channel);
+int hooktype_pre_knock(Client *client, Channel *channel, const char **reason);
 
 /** Called when a user knocks on a channel (function prototype for HOOKTYPE_KNOCK).
  * @param client		The client
@@ -1560,14 +1567,16 @@ int hooktype_pre_knock(Client *client, Channel *channel);
  * @param comment		The knock reason
  * @return The return value is ignored (use return 0)
  */
-int hooktype_knock(Client *client, Channel *channel, MessageTag *mtags, char *comment);
+int hooktype_knock(Client *client, Channel *channel, MessageTag *mtags, const char *comment);
 
 /** Called when a user whoises someone (function prototype for HOOKTYPE_WHOIS).
  * @param client		The client issuing the command
  * @param target		The user who is the target of the /WHOIS.
+ * @param list			The name/value/prio list that you can add information to
+ *				that will be sent to the user as the WHOIS response.
  * @return The return value is ignored (use return 0)
  */
-int hooktype_whois(Client *client, Client *target);
+int hooktype_whois(Client *client, Client *target, NameValuePrioList **list);
 
 /** Called to add letters to the WHO status column (function prototype for HOOKTYPE_WHO_STATUS).
  * If a user does a /WHO request, then WHO will show a number of status flags
@@ -1580,7 +1589,7 @@ int hooktype_whois(Client *client, Client *target);
  * @param cansee		If 'client' can see 'target' (eg: in same channel or -i)
  * @return Return 0 if no WHO status flags need to be added, otherwise return the ascii character (eg: return 'B').
  */
-int hooktype_who_status(Client *client, Client *target, Channel *channel, Member *member, char *status, int cansee);
+int hooktype_who_status(Client *client, Client *target, Channel *channel, Member *member, const char *status, int cansee);
 
 /** Called when an IRCOp wants to kill another user (function prototype for HOOKTYPE_PRE_KILL).
  * @param client		The client
@@ -1590,7 +1599,7 @@ int hooktype_who_status(Client *client, Client *target, Channel *channel, Member
  * @retval EX_ALWAYS_DENY	Deny the KICK always (even if IRCOp).
  * @retval EX_ALLOW		Allow the kick, unless another module blocks it.
  */
-int hooktype_pre_kill(Client *client, Client *victim, char *reason);
+int hooktype_pre_kill(Client *client, Client *victim, const char *reason);
 
 /** Called when a local user kills another user (function prototype for HOOKTYPE_LOCAL_KILL).
  * Note that kills from remote IRCOps will show up as regular quits, so use hooktype_remote_quit() and hooktype_local_quit().
@@ -1599,15 +1608,14 @@ int hooktype_pre_kill(Client *client, Client *victim, char *reason);
  * @param comment		The kill reason
  * @return The return value is ignored (use return 0)
  */
-int hooktype_local_kill(Client *client, Client *victim, char *comment);
+int hooktype_local_kill(Client *client, Client *victim, const char *comment);
 
-/** Called when an IRCOp /REHASH'es, and passes the parameters (function prototype for HOOKTYPE_REHASHFLAG).
- * FIXME: shouldn't this be merged with hooktype_rehash() ?
+/** Called when an IRCOp calls /REHASH with a -parameter (function prototype for HOOKTYPE_REHASHFLAG).
  * @param client		The client issuing the command, or NULL if rehashing due to system signal.
  * @param str			The rehash flag (eg: "-all")
  * @return The return value is ignored (use return 0)
  */
-int hooktype_rehashflag(Client *client, char *str);
+int hooktype_rehashflag(Client *client, const char *str);
 
 /** Called when the server is rehashing (function prototype for HOOKTYPE_REHASH).
  * @return The return value is ignored (use return 0)
@@ -1667,29 +1675,29 @@ int hooktype_configrun_ex(ConfigFile *cfptr, ConfigEntry *ce, int section, void 
  * @param str			The parameter to the STATS command, eg 'something'.
  * @return The return value is ignored (use return 0)
  */
-int hooktype_stats(Client *client, char *str);
+int hooktype_stats(Client *client, const char *str);
 
 /** Called when a user becomes IRCOp or is no longer an IRCOp (function prototype for HOOKTYPE_LOCAL_OPER).
  * @param client		The client
  * @param add			1 if the user becomes IRCOp, 0 if the user is no longer IRCOp
+ * @param oper_block		The name of the oper block used to oper up
  * @return The return value is ignored (use return 0)
  */
-int hooktype_local_oper(Client *client, int add);
+int hooktype_local_oper(Client *client, int add, ConfigItem_oper *oper_block);
 
 /** Called when a client sends a PASS command (function prototype for HOOKTYPE_LOCAL_PASS).
  * @param client		The client
  * @param password		The password supplied by the client
  * @return The return value is ignored (use return 0)
  */
-int hooktype_local_pass(Client *client, char *password);
+int hooktype_local_pass(Client *client, const char *password);
 
 /** Called when a channel is created (function prototype for HOOKTYPE_CHANNEL_CREATE).
- * @param client		The client
  * @param channel		The channel that just got created
  * @note This function is not used much, use hooktype_local_join() and hooktype_remote_join() instead.
  * @return The return value is ignored (use return 0)
  */
-int hooktype_channel_create(Client *client, Channel *channel);
+int hooktype_channel_create(Channel *channel);
 
 /** Called when a channel is completely destroyed (function prototype for HOOKTYPE_CHANNEL_DESTROY).
  * @param channel		The channel that is about to be destroyed
@@ -1731,13 +1739,16 @@ int hooktype_tkl_add(Client *client, TKL *tkl);
  */
 int hooktype_tkl_del(Client *client, TKL *tkl);
 
-/** Called when something is logged via the ircd_log() function (function prototype for HOOKTYPE_LOG).
- * @param flags			One of LOG_*, such as LOG_ERROR.
- * @param timebuf		The time buffer, such as "[2030-01-01 12:00:00]"
- * @param buf			The text to be logged
+/** Called when something is logged via the unreal_log() function (function prototype for HOOKTYPE_LOG).
+ * @param loglevel		Loglevel (eg ULOG_INFO)
+ * @param subsystem		Subsystem (eg "operoverride")
+ * @param event_id		Event ID (eg "SAJOIN_COMMAND")
+ * @param msg			Message(s) in text form
+ * @param json_serialized	The associated JSON text
+ * @param timebuf		The [xxxx] time buffer, for convenience
  * @return The return value is ignored (use return 0)
  */
-int hooktype_log(int flags, char *timebuf, char *buf);
+int hooktype_log(LogLevel loglevel, const char *subsystem, const char *event_id, MultiLine *msg, const char *json_serialized, const char *timebuf);
 
 /** Called when a local user matches a spamfilter (function prototype for HOOKTYPE_LOCAL_SPAMFILTER).
  * @param client		The client
@@ -1748,7 +1759,7 @@ int hooktype_log(int flags, char *timebuf, char *buf);
  * @param tkl			The spamfilter TKL entry that matched
  * @return The return value is ignored (use return 0)
  */
-int hooktype_local_spamfilter(Client *client, char *str, char *str_in, int type, char *target, TKL *tkl);
+int hooktype_local_spamfilter(Client *client, const char *str, const char *str_in, int type, const char *target, TKL *tkl);
 
 /** Called when a user sends something to a user that has the sender silenced (function prototype for HOOKTYPE_SILENCED).
  * UnrealIRCd support a SILENCE list. If the target user has added someone on the silence list, eg via SILENCE +BadUser,
@@ -1771,7 +1782,7 @@ int hooktype_silenced(Client *client, Client *target, SendType sendtype);
  * @note If you want to alter the buffer contents then replace 'readbuf' with your own buffer and set 'length' appropriately.
  * @return The return value is ignored (use return 0)
  */
-int hooktype_rawpacket_in(Client *client, char *readbuf, int *length);
+int hooktype_rawpacket_in(Client *client, const char *readbuf, int *length);
 
 /** Called when a packet is received or sent (function prototype for HOOKTYPE_PACKET).
  * @param client		The locally connected sender, this can be &me
@@ -1812,11 +1823,10 @@ int hooktype_free_user(Client *client);
  * @param client		The client
  * @param channel		The channel
  * @param key			The channel key
- * @param parv			The join parameters
  * @note I don't think this works?
  * @return Unclear..
  */
-int hooktype_can_join_limitexceeded(Client *client, Channel *channel, char *key, char *parv[]);
+int hooktype_can_join_limitexceeded(Client *client, Channel *channel, const char *key, char **errmsg);
 
 /** Called to check if the user is visible in the channel (function prototype for HOOKTYPE_VISIBLE_IN_CHANNEL).
  * For example, the delayjoin module (+d/+D) will 'return 0' here if the user is hidden due to delayed join.
@@ -1904,16 +1914,6 @@ int hooktype_channel_synced(Channel *channel, int merge, int removetheirs, int n
  */
 int hooktype_can_sajoin(Client *target, Channel *channel, Client *client);
 
-/** Called when the hostname is initialized for a client (function prototype for HOOKTYPE_CHECK_INIT).
- * This is a very specific call, it is only meant for the WEBIRC module.
- * @param client		The client
- * @param sockname		The socket name
- * @param size			The size of the socket name? :D
- * @retval HOOK_CONTINUE	Proceed normally
- * @retval HOOK_DENY		Reject the connection(?)
- */
-int hooktype_check_init(Client *client, char *sockname, size_t size);
-
 /** May the target user be deoped? (function prototype for HOOKTYPE_MODE_DEOP).
  * This is for example used by the +S (Services bot) user mode to block deop requests to services bots.
  * @param client		The client issuing the command
@@ -1921,13 +1921,14 @@ int hooktype_check_init(Client *client, char *sockname, size_t size);
  * @param channel		The channel
  * @param what			Always MODE_DEL at the moment
  * @param modechar		The mode character: q/a/o/h/v
- * @param my_access		Cached result of get_access(), so one of CHFL_*, for example CHFL_CHANOP.
- * @param badmode		The error string that should be sent to the client
+ * @param client_access		Channel member modes of 'client', eg "o", never NULL but can be empty.
+ * @param target_access		Channel member modes of 'client', eg "h", never NULL but can be empty.
+ * @param reject_reason		The error string that should be sent to the client
  * @retval HOOK_CONTINUE	Proceed normally (allow it)
  * @retval HOOK_DENY		Reject the mode change
  * @retval HOOK_ALWAYS_DENY	Reject the mode change, even if IRCOp/Services/..
  */
-int hooktype_mode_deop(Client *client, Client *victim, Channel *channel, u_int what, int modechar, long my_access, char **badmode);
+int hooktype_mode_deop(Client *client, Client *victim, Channel *channel, u_int what, int modechar, const char *client_access, const char *target_access, const char **reject_reason);
 
 /** Called when a DCC request was denied by the IRCd (function prototype for HOOKTYPE_DCC_DENIED).
  * @param client		The client who tried to send a file
@@ -1937,7 +1938,7 @@ int hooktype_mode_deop(Client *client, Client *victim, Channel *channel, u_int w
  * @param denydcc		The deny dcc { ] rule that triggered.
  * @return The return value is ignored (use return 0)
  */
-int hooktype_dcc_denied(Client *client, char *target, char *realfile, char *displayfile, ConfigItem_deny_dcc *denydcc);
+int hooktype_dcc_denied(Client *client, const char *target, const char *realfile, const char *displayfile, ConfigItem_deny_dcc *denydcc);
 
 /** Called in the user accept procedure, when setting the +z user mode (function prototype for HOOKTYPE_SECURE_CONNECT).
  * This is only meant to be used by the WEBIRC module, so it can do -z for fake secure users.
@@ -1956,13 +1957,6 @@ int hooktype_secure_connect(Client *client);
  */
 int hooktype_can_bypass_channel_message_restriction(Client *client, Channel *channel, BypassChannelMessageRestrictionType bypass_type);
 
-/** Called when xxxx (function prototype for HOOKTYPE_REQUIRE_SASL).
- * FIXME: this hook is never called!?
- * @param client		The client
- * @return The return value is ignored (use return 0)
- */
-int hooktype_require_sasl(Client *client, char *reason);
-
 /** Called when a SASL continuation response is received (function prototype for HOOKTYPE_SASL_CONTINUATION).
  * This is only used by the authprompt module, it unlikely that you need it.
  * @param client		The client for which the SASL authentication is taking place
@@ -1970,7 +1964,7 @@ int hooktype_require_sasl(Client *client, char *reason);
  * @retval HOOK_CONTINUE	Continue as normal
  * @retval HOOK_DENY		Do not handle the SASL request, or at least don't show the response to the client.
  */
-int hooktype_sasl_continuation(Client *client, char *buf);
+int hooktype_sasl_continuation(Client *client, const char *buf);
 
 /** Called when a SASL result response is received (function prototype for HOOKTYPE_SASL_RESULT).
  * This is only used by the authprompt module.
@@ -1990,7 +1984,7 @@ int hooktype_sasl_result(Client *client, int success);
  * @param duration		The duration of the ban, 0 for permanent ban
  * @return The magic value 99 is used to exempt the user (=do not ban!), otherwise the ban is added.
  */
-int hooktype_place_host_ban(Client *client, int action, char *reason, long duration);
+int hooktype_place_host_ban(Client *client, int action, const char *reason, long duration);
 
 /** Called when a TKL ban is hit by this user (function prototype for HOOKTYPE_FIND_TKLINE_MATCH).
  * This is called when an existing TKL entry is hit by the user.
@@ -2020,7 +2014,7 @@ int hooktype_welcome(Client *client, int after_numeric);
  * @param buf			The buffer (without message tags)
  * @return The return value is ignored (use return 0)
  */
-int hooktype_pre_command(Client *from, MessageTag *mtags, char *buf);
+int hooktype_pre_command(Client *from, MessageTag *mtags, const char *buf);
 
 /** Called right after finishing a client command (function prototype for HOOKTYPE_POST_COMMAND).
  * This is only used by labeled-reponse. If you think this hook is useful then you
@@ -2030,7 +2024,7 @@ int hooktype_pre_command(Client *from, MessageTag *mtags, char *buf);
  * @param buf			The buffer (without message tags)
  * @return The return value is ignored (use return 0)
  */
-int hooktype_post_command(Client *from, MessageTag *mtags, char *buf);
+int hooktype_post_command(Client *from, MessageTag *mtags, const char *buf);
 
 /** Called when new_message() is executed (function prototype for HOOKTYPE_NEW_MESSAGE).
  * When a new message with message tags is prepared, code in UnrealIRCd
@@ -2044,7 +2038,7 @@ int hooktype_post_command(Client *from, MessageTag *mtags, char *buf);
  * @param signature		Special signature when used through new_message_special()
  * @return The return value is ignored (use return 0)
  */
-void hooktype_new_message(Client *sender, MessageTag *recv_mtags, MessageTag **mtag_list, char *signature);
+void hooktype_new_message(Client *sender, MessageTag *recv_mtags, MessageTag **mtag_list, const char *signature);
 
 /** Is the client handshake finished? (function prototype for HOOKTYPE_IS_HANDSHAKE_FINISHED).
  * This is called by the is_handshake_finished() function to check if the user
@@ -2067,7 +2061,7 @@ int hooktype_is_handshake_finished(Client *client);
  * @param comment		The quit message
  * @return The original quit message (comment), the new quit message (pointing to your own static buffer), or NULL (no quit message)
  */
-char *hooktype_pre_local_quit_chan(Client *client, Channel *channel, char *comment);
+const char *hooktype_pre_local_quit_chan(Client *client, Channel *channel, const char *comment);
 
 /** Called when an ident lookup should be made (function prototype for HOOKTYPE_IDENT_LOOKUP).
  * This is used by the ident_lookup module.
@@ -2077,7 +2071,7 @@ char *hooktype_pre_local_quit_chan(Client *client, Channel *channel, char *comme
 int hooktype_ident_lookup(Client *client);
 
 /** Called when someone logs in/out a services account (function prototype for HOOKTYPE_ACCOUNT_LOGIN).
- * The account name can be found in client->user->svid. It will be the string "0" if the user is logged out.
+ * The account name can be found in client->user->account. It will be the string "0" if the user is logged out.
  * @param client		The client
  * @param mtags         	Message tags associated with the event
  * @return The return value is ignored (use return 0)
@@ -2102,6 +2096,45 @@ int hooktype_close_connection(Client *client);
  */
 int hooktype_connect_extinfo(Client *client, NameValuePrioList **list);
 
+/** Called when a user wants to join a channel that require invitation.
+ * Use hook priorities to enforce a specific policy, especially denying the invitation.
+ * @param client		The client
+ * @param channel		The channel client is willing to join
+ * @param invited		Set to 0 for user who should not be invited, set to 1 if the user is invited.
+ * @return The return value is ignored (use return 0)
+ */
+int hooktype_is_invited(Client *client, Channel *channel, int *invited);
+
+/** Called after a local user has changed the nick name (function prototype for HOOKTYPE_POST_LOCAL_NICKCHANGE).
+ * @param client		The client
+ * @param mtags         	Message tags associated with the event
+ * @param oldnick		The nick name before the nick change
+ * @return The return value is ignored (use return 0)
+ */
+int hooktype_post_local_nickchange(Client *client, MessageTag *mtags, const char *oldnick);
+
+/** Called after a remote user has changed the nick name (function prototype for HOOKTYPE_POST_REMOTE_NICKCHANGE).
+ * @param client		The client
+ * @param mtags         	Message tags associated with the event
+ * @param oldnick		The nick name before the nick change
+ * @return The return value is ignored (use return 0)
+ */
+int hooktype_post_remote_nickchange(Client *client, MessageTag *mtags, const char *oldnick);
+
+/** Called when user name or user host has changed.
+ * @param client		The client whose user@host has changed
+ * @param olduser		Old username of the client
+ * @param oldhost		Old hostname of the client
+ * @return The return value is ignored (use return 0)
+ */
+ 
+int hooktype_realname_changed(Client *client, const char *oldinfo);
+/** Called when user realname has changed.
+ * @param client		The client whose realname has changed
+ * @param oldinfo		Old realname of the client
+ * @return The return value is ignored (use return 0)
+ */
+int hooktype_userhost_changed(Client *client, const char *olduser, const char *oldhost);
 /** @} */
 
 #ifdef GCC_TYPECHECKING
@@ -2138,6 +2171,7 @@ _UNREAL_ERROR(_hook_error_incompatible, "Incompatible hook function. Check argum
         ((hooktype == HOOKTYPE_REMOTE_QUIT) && !ValidateHook(hooktype_remote_quit, func)) || \
         ((hooktype == HOOKTYPE_PRE_LOCAL_JOIN) && !ValidateHook(hooktype_pre_local_join, func)) || \
         ((hooktype == HOOKTYPE_PRE_LOCAL_KICK) && !ValidateHook(hooktype_pre_local_kick, func)) || \
+        ((hooktype == HOOKTYPE_CAN_SET_TOPIC) && !ValidateHook(hooktype_can_set_topic, func)) || \
         ((hooktype == HOOKTYPE_PRE_LOCAL_TOPIC) && !ValidateHook(hooktype_pre_local_topic, func)) || \
         ((hooktype == HOOKTYPE_REMOTE_NICKCHANGE) && !ValidateHook(hooktype_remote_nickchange, func)) || \
         ((hooktype == HOOKTYPE_CHANNEL_CREATE) && !ValidateHook(hooktype_channel_create, func)) || \
@@ -2186,7 +2220,6 @@ _UNREAL_ERROR(_hook_error_incompatible, "Incompatible hook function. Check argum
         ((hooktype == HOOKTYPE_CHANNEL_SYNCED) && !ValidateHook(hooktype_channel_synced, func)) || \
         ((hooktype == HOOKTYPE_CAN_SAJOIN) && !ValidateHook(hooktype_can_sajoin, func)) || \
         ((hooktype == HOOKTYPE_WHOIS) && !ValidateHook(hooktype_whois, func)) || \
-        ((hooktype == HOOKTYPE_CHECK_INIT) && !ValidateHook(hooktype_check_init, func)) || \
         ((hooktype == HOOKTYPE_WHO_STATUS) && !ValidateHook(hooktype_who_status, func)) || \
         ((hooktype == HOOKTYPE_MODE_DEOP) && !ValidateHook(hooktype_mode_deop, func)) || \
         ((hooktype == HOOKTYPE_PRE_KILL) && !ValidateHook(hooktype_pre_kill, func)) || \
@@ -2196,7 +2229,6 @@ _UNREAL_ERROR(_hook_error_incompatible, "Incompatible hook function. Check argum
         ((hooktype == HOOKTYPE_SERVER_SYNCED) && !ValidateHook(hooktype_server_synced, func)) || \
         ((hooktype == HOOKTYPE_SECURE_CONNECT) && !ValidateHook(hooktype_secure_connect, func)) || \
         ((hooktype == HOOKTYPE_CAN_BYPASS_CHANNEL_MESSAGE_RESTRICTION) && !ValidateHook(hooktype_can_bypass_channel_message_restriction, func)) || \
-        ((hooktype == HOOKTYPE_REQUIRE_SASL) && !ValidateHook(hooktype_require_sasl, func)) || \
         ((hooktype == HOOKTYPE_SASL_CONTINUATION) && !ValidateHook(hooktype_sasl_continuation, func)) || \
         ((hooktype == HOOKTYPE_SASL_RESULT) && !ValidateHook(hooktype_sasl_result, func)) || \
         ((hooktype == HOOKTYPE_PLACE_HOST_BAN) && !ValidateHook(hooktype_place_host_ban, func)) || \
@@ -2211,7 +2243,12 @@ _UNREAL_ERROR(_hook_error_incompatible, "Incompatible hook function. Check argum
         ((hooktype == HOOKTYPE_CONFIGRUN_EX) && !ValidateHook(hooktype_configrun_ex, func)) || \
         ((hooktype == HOOKTYPE_ACCOUNT_LOGIN) && !ValidateHook(hooktype_account_login, func)) || \
         ((hooktype == HOOKTYPE_CLOSE_CONNECTION) && !ValidateHook(hooktype_close_connection, func)) || \
-        ((hooktype == HOOKTYPE_CONNECT_EXTINFO) && !ValidateHook(hooktype_connect_extinfo, func)) ) \
+        ((hooktype == HOOKTYPE_CONNECT_EXTINFO) && !ValidateHook(hooktype_connect_extinfo, func)) || \
+        ((hooktype == HOOKTYPE_IS_INVITED) && !ValidateHook(hooktype_is_invited, func)) || \
+        ((hooktype == HOOKTYPE_POST_LOCAL_NICKCHANGE) && !ValidateHook(hooktype_post_local_nickchange, func)) || \
+        ((hooktype == HOOKTYPE_POST_REMOTE_NICKCHANGE) && !ValidateHook(hooktype_post_remote_nickchange, func)) || \
+        ((hooktype == HOOKTYPE_USERHOST_CHANGED) && !ValidateHook(hooktype_userhost_changed, func)) || \
+        ((hooktype == HOOKTYPE_REALNAME_CHANGED) && !ValidateHook(hooktype_realname_changed, func)) )\
         _hook_error_incompatible();
 #endif /* GCC_TYPECHECKING */
 
@@ -2222,10 +2259,11 @@ _UNREAL_ERROR(_hook_error_incompatible, "Incompatible hook function. Check argum
 
 /* Callback types */
 #define CALLBACKTYPE_CLOAK 1
-#define CALLBACKTYPE_CLOAKKEYCSUM 2
+#define CALLBACKTYPE_CLOAK_KEY_CHECKSUM 2
 #define CALLBACKTYPE_CLOAK_EX 3
 #define CALLBACKTYPE_BLACKLIST_CHECK 4
 #define CALLBACKTYPE_REPUTATION_STARTTIME 5
+#define CALLBACKTYPE_GEOIP_LOOKUP 6
 
 /* To add a new efunction, only if you are an UnrealIRCd coder:
  * 1) Add a new entry here
@@ -2241,6 +2279,7 @@ enum EfunctionType {
 	EFUNC_CAN_JOIN,
 	EFUNC_DO_MODE,
 	EFUNC_SET_MODE,
+	EFUNC_SET_CHANNEL_MODE,
 	EFUNC_CMD_UMODE,
 	EFUNC_REGISTER_USER,
 	EFUNC_TKL_HASH,
@@ -2281,6 +2320,8 @@ enum EfunctionType {
 	EFUNC_BROADCAST_MD_CHANNEL_CMD,
 	EFUNC_BROADCAST_MD_MEMBER_CMD,
 	EFUNC_BROADCAST_MD_MEMBERSHIP_CMD,
+	EFUNC_MODDATA_ADD_S2S_MTAGS,
+	EFUNC_MODDATA_EXTRACT_S2S_MTAGS,
 	EFUNC_SEND_MODDATA_CLIENT,
 	EFUNC_SEND_MODDATA_CHANNEL,
 	EFUNC_SEND_MODDATA_MEMBERS,
@@ -2293,10 +2334,12 @@ enum EfunctionType {
 	EFUNC_DO_REMOTE_NICK_NAME,
 	EFUNC_CHARSYS_GET_CURRENT_LANGUAGES,
 	EFUNC_BROADCAST_SINFO,
+	EFUNC_CONNECT_SERVER,
 	EFUNC_PARSE_MESSAGE_TAGS,
 	EFUNC_MTAGS_TO_STRING,
 	EFUNC_TKL_CHARTOTYPE,
 	EFUNC_TKL_TYPE_STRING,
+	EFUNC_TKL_TYPE_CONFIG_STRING,
 	EFUNC_CAN_SEND_TO_CHANNEL,
 	EFUNC_CAN_SEND_TO_USER,
 	EFUNC_BROADCAST_MD_GLOBALVAR,
@@ -2321,6 +2364,15 @@ enum EfunctionType {
 	EFUNC_LABELED_RESPONSE_SET_CONTEXT,
 	EFUNC_LABELED_RESPONSE_FORCE_END,
 	EFUNC_KICK_USER,
+	EFUNC_WATCH_ADD,
+	EFUNC_WATCH_DEL,
+	EFUNC_WATCH_DEL_LIST,
+	EFUNC_WATCH_GET,
+	EFUNC_WATCH_CHECK,
+	EFUNC_TKL_UHOST,
+	EFUNC_DO_UNREAL_LOG_REMOTE_DELIVER,
+	EFUNC_GET_CHMODES_FOR_USER,
+	EFUNC_WHOIS_GET_POLICY,
 };
 
 /* Module flags */
@@ -2354,7 +2406,7 @@ enum EfunctionType {
 #define MOD_LOAD() DLLFUNC int Mod_Load(ModuleInfo *modinfo)
 #define MOD_UNLOAD() DLLFUNC int Mod_Unload(ModuleInfo *modinfo)
 
-#define CLOAK_KEYCRC	RCallbacks[CALLBACKTYPE_CLOAKKEYCSUM] != NULL ? RCallbacks[CALLBACKTYPE_CLOAKKEYCSUM]->func.pcharfunc() : "nil"
+#define CLOAK_KEY_CHECKSUM	RCallbacks[CALLBACKTYPE_CLOAK_KEY_CHECKSUM] != NULL ? RCallbacks[CALLBACKTYPE_CLOAK_KEY_CHECKSUM]->func.stringfunc() : "nil"
 
 #ifdef DYNAMIC_LINKING
  #include "modversion.h"

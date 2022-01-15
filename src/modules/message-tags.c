@@ -28,18 +28,18 @@ ModuleHeader MOD_HEADER
 	"5.0",
 	"Message tags CAP", 
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
 	};
 
 long CAP_MESSAGE_TAGS = 0L;
-char *_mtags_to_string(MessageTag *m, Client *client);
+const char *_mtags_to_string(MessageTag *m, Client *client);
 void _parse_message_tags(Client *client, char **str, MessageTag **mtag_list);
 
 MOD_TEST()
 {
 	MARK_AS_OFFICIAL_MODULE(modinfo);
 
-	EfunctionAddPChar(modinfo->handle, EFUNC_MTAGS_TO_STRING, _mtags_to_string);
+	EfunctionAddConstString(modinfo->handle, EFUNC_MTAGS_TO_STRING, _mtags_to_string);
 	EfunctionAddVoid(modinfo->handle, EFUNC_PARSE_MESSAGE_TAGS, _parse_message_tags);
 
 	return 0;
@@ -148,7 +148,13 @@ int message_tag_ok(Client *client, char *name, char *value)
 
 	m = MessageTagHandlerFind(name);
 	if (!m)
+	{
+		/* Permit unknown message tags from trusted servers */
+		if (IsServer(client) || !MyConnect(client))
+			return 1;
+
 		return 0;
+	}
 
 	if (m->is_ok(client, name, value))
 		return 1;
@@ -198,7 +204,7 @@ void _parse_message_tags(Client *client, char **str, MessageTag **mtag_list)
 			m = safe_alloc(sizeof(MessageTag));
 			safe_strdup(m->name, name);
 			/* Both NULL and empty become NULL: */
-			if (BadPtr(value))
+			if (!*value)
 				m->value = NULL;
 			else /* a real value... */
 				safe_strdup(m->value, value);
@@ -227,7 +233,7 @@ int client_accepts_tag(const char *token, Client *client)
 		return 0;
 
 	/* Maybe there is an outgoing filter in effect (usually not) */
-	if (m->can_send && !m->can_send(client))
+	if (m->should_send_to_client && !m->should_send_to_client(client))
 		return 0;
 
 	/* If the client has indicated 'message-tags' support then we can
@@ -257,10 +263,10 @@ int client_accepts_tag(const char *token, Client *client)
  * Taking into account the restrictions that 'client' may have.
  * @returns A string (static buffer) or NULL if no tags at all (!)
  */
-char *_mtags_to_string(MessageTag *m, Client *client)
+const char *_mtags_to_string(MessageTag *m, Client *client)
 {
 	static char buf[4096], name[8192], value[8192];
-	char tbuf[512];
+	static char tbuf[4094];
 
 	if (!m)
 		return NULL;

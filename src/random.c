@@ -276,7 +276,7 @@ chacha_encrypt_bytes(chacha_ctx *x,const u8 *m,u8 *c,u32 bytes)
  */
 
 /* Modified for UnrealIRCd by Bram Matthys ("Syzop") in 2019.
- * Things like taking out #if(n)def's for openssl (which we always
+ * Things like taking out #if (n)def's for openssl (which we always
  * compile with), re-indenting, removing various stuff, etc.
  */
 
@@ -308,8 +308,9 @@ static void _rs_stir(void)
 
 	if (RAND_bytes(rnd, sizeof(rnd)) <= 0)
 	{
-		ircd_log(LOG_ERROR, "Couldn't obtain random bytes (error 0x%lx)",
-		    (unsigned long)ERR_get_error());
+		unreal_log(ULOG_FATAL, "random", "RANDOM_OUT_OF_BYTES", NULL,
+		           "Could not obtain random bytes, error $tls_error_code",
+		           log_data_integer("tls_error_code", ERR_get_error()));
 		abort();
 	}
 
@@ -422,12 +423,12 @@ static void arc4_addrandom(void *dat, int datlen)
 
 void add_entropy_configfile(struct stat *st, char *buf)
 {
-	unsigned char mdbuf[16];
+	char sha256buf[SHA256_DIGEST_LENGTH];
 
 	arc4_addrandom(&st->st_size, sizeof(st->st_size));
 	arc4_addrandom(&st->st_mtime, sizeof(st->st_mtime));
-	DoMD5(mdbuf, buf, strlen(buf));
-	arc4_addrandom(&mdbuf, sizeof(mdbuf));
+	sha256hash_binary(sha256buf, buf, strlen(buf));
+	arc4_addrandom(sha256buf, sizeof(sha256buf));
 }
 
 /*
@@ -459,7 +460,6 @@ void init_random()
 	if (fd >= 0)
 	{
 		int n = read(fd, &rdat.rnd, sizeof(rdat.rnd));
-		Debug((DEBUG_INFO, "init_random: read from /dev/urandom returned %d", n));
 		close(fd);
 	}
 #else

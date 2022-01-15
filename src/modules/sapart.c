@@ -32,7 +32,7 @@ ModuleHeader MOD_HEADER
 	"5.0",
 	"command /sapart", 
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
     };
 
 MOD_INIT()
@@ -52,6 +52,24 @@ MOD_UNLOAD()
 	return MOD_SUCCESS;
 }
 
+static void log_sapart(Client *client, Client *target, const char *channels, const char *comment)
+{
+	if (comment)
+	{
+		unreal_log(ULOG_INFO, "sacmds", "SAPART_COMMAND", client, "SAPART: $client used SAPART to make $target part $channels ($reason)",
+			   log_data_client("target", target),
+			   log_data_string("channels", channels),
+			   log_data_string("reason", comment));
+	}
+	else
+	{
+		unreal_log(ULOG_INFO, "sacmds", "SAPART_COMMAND", client, "SAPART: $client used SAPART to make $target part $channels",
+			   log_data_client("target", target),
+			   log_data_string("channels", channels));
+	}
+}
+
+
 /* cmd_sapart() - Lamego - Wed Jul 21 20:04:48 1999
    Copied off PTlink IRCd (C) PTlink coders team.
    Coded for Sadmin by Stskeeps
@@ -68,8 +86,9 @@ CMD_FUNC(cmd_sapart)
 	Membership *lp;
 	char *name, *p = NULL;
 	int i;
-	char *comment = (parc > 3 && parv[3] ? parv[3] : NULL);
+	const char *comment = (parc > 3 && parv[3] ? parv[3] : NULL);
 	char commentx[512];
+	char request[BUFSIZE];
 	char jbuf[BUFSIZE];
 	int ntargets = 0;
 	int maxtargets = max_targets_for_command("SAPART");
@@ -80,7 +99,7 @@ CMD_FUNC(cmd_sapart)
                 return;
         }
 
-        if (!(target = find_person(parv[1], NULL)))
+        if (!(target = find_user(parv[1], NULL)))
         {
                 sendnumeric(client, ERR_NOSUCHNICK, parv[1]);
                 return;
@@ -93,37 +112,33 @@ CMD_FUNC(cmd_sapart)
 		return;
 	}
 
-	/* Relay it on, if it's not my target */
+	/* Broadcast so other servers can log it appropriately as an SAPART */
+	if (parv[3])
+		sendto_server(client, 0, 0, recv_mtags, ":%s SAPART %s %s :%s", client->id, target->id, parv[2], comment);
+	else
+		sendto_server(client, 0, 0, recv_mtags, ":%s SAPART %s %s", client->id, target->id, parv[2]);
+
 	if (!MyUser(target))
 	{
-		if (comment)
-		{
-			sendto_one(target, NULL, ":%s SAPART %s %s :%s", client->id, target->id, parv[2], comment);
-			ircd_log(LOG_SACMDS,"SAPART: %s used SAPART to make %s part %s (%s)",
-			         client->name, target->name, parv[2], comment);
-		}
-		else
-		{
-			sendto_one(target, NULL, ":%s SAPART %s %s", client->id, target->id, parv[2]);
-			ircd_log(LOG_SACMDS,"SAPART: %s used SAPART to make %s part %s",
-			         client->name, target->name, parv[2]);
-		}
+		log_sapart(client, target, parv[2], comment);
 		return;
 	}
 
-	/* Now works like cmd_join */
+	/* 'target' is our client... */
+
 	*jbuf = 0;
-	for (i = 0, name = strtoken(&p, parv[2], ","); name; name = strtoken(&p, NULL, ","))
+	strlcpy(request, parv[2], sizeof(request));
+	for (i = 0, name = strtoken(&p, request, ","); name; name = strtoken(&p, NULL, ","))
 	{
 		if (++ntargets > maxtargets)
 		{
 			sendnumeric(client, ERR_TOOMANYTARGETS, name, maxtargets, "SAPART");
 			break;
 		}
-		if (!(channel = get_channel(target, name, 0)))
+
+		if (!(channel = find_channel(name)))
 		{
-			sendnumeric(client, ERR_NOSUCHCHANNEL,
-				name);
+			sendnumeric(client, ERR_NOSUCHCHANNEL, name);
 			continue;
 		}
 
@@ -148,17 +163,24 @@ CMD_FUNC(cmd_sapart)
 	if (!*jbuf)
 		return;
 
-	strcpy(parv[2], jbuf);
+	strlcpy(request, jbuf, sizeof(request));
+
+	log_sapart(client, target, request, comment);
 
 	if (comment)
 	{
-		strcpy(commentx, "SAPart: ");
-		strlcat(commentx, comment, 512);
+		snprintf(commentx, sizeof(commentx), "SAPart: %s", comment);
+		//sendnotice(target, "*** You were forced to part %s (%s)", request, commentx);
+	} else {
+		//sendnotice(target, "*** You were forced to part %s", request);
 	}
 
 	parv[0] = target->name; // nick
-	parv[1] = parv[2]; // chan
+	parv[1] = request; // chan
 	parv[2] = comment ? commentx : NULL; // comment
+
+	/* Now, do the actual parting: */
 	do_cmd(target, NULL, "PART", comment ? 3 : 2, parv);
-	/* target may be killed now due to the part reason @ spamfilter */
+
+	/* NOTE: target may be killed now due to the part reason @ spamfilter */
 }

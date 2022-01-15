@@ -35,7 +35,7 @@ ModuleHeader MOD_HEADER
 	"5.0",
 	"command /svsnoop", 
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
     };
 
 MOD_INIT()
@@ -62,12 +62,13 @@ CMD_FUNC(cmd_svsnoop)
 	if (!(IsULine(client) && parc > 2))
 		return;
 
-	if (hunt_server(client, NULL, ":%s SVSNOOP %s :%s", 1, parc, parv) == HUNTED_ISME)
+	if (hunt_server(client, NULL, "SVSNOOP", 1, parc, parv) == HUNTED_ISME)
 	{
 		if (parv[2][0] == '+')
 		{
 			SVSNOOP = 1;
-			sendto_ops("This server has been placed in NOOP mode");
+			unreal_log(ULOG_INFO, "svsnoop", "SVSNOOP_ENABLED", client,
+			           "This server has been placed in NOOP mode (by $client) -- all IRCOp rights disabled");
 			list_for_each_entry(acptr, &client_list, client_node)
 			{
 				if (MyUser(acptr) && IsOper(acptr))
@@ -81,15 +82,16 @@ CMD_FUNC(cmd_svsnoop)
 					if (!list_empty(&acptr->special_node))
 						list_del(&acptr->special_node);
 
+					RunHook(HOOKTYPE_LOCAL_OPER, client, 0, NULL);
 					remove_oper_privileges(acptr, 1);
-					RunHook2(HOOKTYPE_LOCAL_OPER, acptr, 0);
 				}
 			}
 		}
 		else
 		{
 			SVSNOOP = 0;
-			sendto_ops("This server is no longer in NOOP mode");
+			unreal_log(ULOG_INFO, "svsnoop", "SVSNOOP_ENABLED", client,
+			           "This server is no longer in NOOP mode (by $client) -- IRCOps can oper up again");
 		}
 	}
 }

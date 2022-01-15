@@ -30,7 +30,7 @@ ModuleHeader MOD_HEADER
 	"5.0", /* Version */
 	"command /vhost", /* Short description of module */
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
     };
 
 /* This is called on module init, before Server Ready */
@@ -57,7 +57,8 @@ MOD_UNLOAD()
 CMD_FUNC(cmd_vhost)
 {
 	ConfigItem_vhost *vhost;
-	char *login, *password;
+	char login[HOSTLEN+1];
+	const char *password;
 	char olduser[USERLEN+1];
 
 	if (!MyUser(client))
@@ -70,42 +71,42 @@ CMD_FUNC(cmd_vhost)
 
 	}
 
-	login = parv[1];
-	password = (parc > 2) ? parv[2] : "";
-
 	/* cut-off too long login names. HOSTLEN is arbitrary, we just don't want our
 	 * error messages to be cut off because the user is sending huge login names.
 	 */
-	if (strlen(login) > HOSTLEN)
-		login[HOSTLEN] = '\0';
+	strlcpy(login, parv[1], sizeof(login));
+
+	password = (parc > 2) ? parv[2] : "";
 
 	if (!(vhost = find_vhost(login)))
 	{
-		sendto_snomask(SNO_VHOST,
-		    "[\2vhost\2] Failed login for vhost %s by %s!%s@%s - incorrect password",
-		    login, client->name,
-		    client->user->username,
-		    client->user->realhost);
+		unreal_log(ULOG_WARNING, "vhost", "VHOST_FAILED", client,
+		           "Failed VHOST attempt by $client.details [reason: $reason] [vhost-block: $vhost_block]",
+		           log_data_string("reason", "Vhost block not found"),
+		           log_data_string("fail_type", "UNKNOWN_VHOST_NAME"),
+		           log_data_string("vhost_block", login));
 		sendnotice(client, "*** [\2vhost\2] Login for %s failed - password incorrect", login);
 		return;
 	}
 	
 	if (!unreal_mask_match(client, vhost->mask))
 	{
-		sendto_snomask(SNO_VHOST,
-		    "[\2vhost\2] Failed login for vhost %s by %s!%s@%s - host does not match",
-		    login, client->name, client->user->username, client->user->realhost);
+		unreal_log(ULOG_WARNING, "vhost", "VHOST_FAILED", client,
+		           "Failed VHOST attempt by $client.details [reason: $reason] [vhost-block: $vhost_block]",
+		           log_data_string("reason", "Host does not match"),
+		           log_data_string("fail_type", "NO_HOST_MATCH"),
+		           log_data_string("vhost_block", login));
 		sendnotice(client, "*** No vHost lines available for your host");
 		return;
 	}
 
 	if (!Auth_Check(client, vhost->auth, password))
 	{
-		sendto_snomask(SNO_VHOST,
-		    "[\2vhost\2] Failed login for vhost %s by %s!%s@%s - incorrect password",
-		    login, client->name,
-		    client->user->username,
-		    client->user->realhost);
+		unreal_log(ULOG_WARNING, "vhost", "VHOST_FAILED", client,
+		           "Failed VHOST attempt by $client.details [reason: $reason] [vhost-block: $vhost_block]",
+		           log_data_string("reason", "Authentication failed"),
+		           log_data_string("fail_type", "AUTHENTICATION_FAILED"),
+		           log_data_string("vhost_block", login));
 		sendnotice(client, "*** [\2vhost\2] Login for %s failed - password incorrect", login);
 		return;
 	}
@@ -141,8 +142,8 @@ CMD_FUNC(cmd_vhost)
 	safe_strdup(client->user->virthost, vhost->virthost);
 	if (vhost->virtuser)
 	{
-		strcpy(olduser, client->user->username);
-		strlcpy(client->user->username, vhost->virtuser, USERLEN);
+		strlcpy(olduser, client->user->username, sizeof(olduser));
+		strlcpy(client->user->username, vhost->virtuser, sizeof(client->user->username));
 		sendto_server(client, 0, 0, NULL, ":%s SETIDENT %s", client->id,
 		    client->user->username);
 	}
@@ -161,12 +162,22 @@ CMD_FUNC(cmd_vhost)
 		vhost->virtuser ? vhost->virtuser : "",
 		vhost->virtuser ? "@" : "",
 		vhost->virthost);
-	sendto_snomask(SNO_VHOST,
-	    "[\2vhost\2] %s (%s!%s@%s) is now using vhost %s%s%s",
-	    login, client->name,
-	    vhost->virtuser ? olduser : client->user->username,
-	    client->user->realhost, vhost->virtuser ? vhost->virtuser : "", 
-		vhost->virtuser ? "@" : "", vhost->virthost);
+
+	if (vhost->virtuser)
+	{
+		/* virtuser@virthost */
+		unreal_log(ULOG_INFO, "vhost", "VHOST_SUCCESS", client,
+			   "$client.details is now using vhost $virtuser@$virthost [vhost-block: $vhost_block]",
+			   log_data_string("virtuser", vhost->virtuser),
+			   log_data_string("virthost", vhost->virthost),
+			   log_data_string("vhost_block", login));
+	} else {
+		/* just virthost */
+		unreal_log(ULOG_INFO, "vhost", "VHOST_SUCCESS", client,
+			   "$client.details is now using vhost $virthost [vhost-block: $vhost_block]",
+			   log_data_string("virthost", vhost->virthost),
+			   log_data_string("vhost_block", login));
+	}
 
 	userhost_changed(client);
 }

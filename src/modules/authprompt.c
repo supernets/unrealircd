@@ -25,7 +25,7 @@ ModuleHeader MOD_HEADER
 	"1.0",
 	"SASL authentication for clients that don't support SASL",
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
 };
 
 /** Configuration settings */
@@ -33,6 +33,7 @@ struct {
 	int enabled;
 	MultiLine *message;
 	MultiLine *fail_message;
+	MultiLine *unconfirmed_message;
 } cfg;
 
 /** User struct */
@@ -50,10 +51,9 @@ static void init_config(void);
 static void config_postdefaults(void);
 int authprompt_config_test(ConfigFile *, ConfigEntry *, int, int *);
 int authprompt_config_run(ConfigFile *, ConfigEntry *, int);
-int authprompt_require_sasl(Client *client, char *reason);
-int authprompt_sasl_continuation(Client *client, char *buf);
+int authprompt_sasl_continuation(Client *client, const char *buf);
 int authprompt_sasl_result(Client *client, int success);
-int authprompt_place_host_ban(Client *client, int action, char *reason, long duration);
+int authprompt_place_host_ban(Client *client, int action, const char *reason, long duration);
 int authprompt_find_tkline_match(Client *client, TKL *tk);
 int authprompt_pre_connect(Client *client);
 CMD_FUNC(cmd_auth);
@@ -89,7 +89,6 @@ MOD_INIT()
 
 	init_config();
 	HookAdd(modinfo->handle, HOOKTYPE_CONFIGRUN, 0, authprompt_config_run);
-	HookAdd(modinfo->handle, HOOKTYPE_REQUIRE_SASL, 0, authprompt_require_sasl);
 	HookAdd(modinfo->handle, HOOKTYPE_SASL_CONTINUATION, 0, authprompt_sasl_continuation);
 	HookAdd(modinfo->handle, HOOKTYPE_SASL_RESULT, 0, authprompt_sasl_result);
 	HookAdd(modinfo->handle, HOOKTYPE_PLACE_HOST_BAN, 0, authprompt_place_host_ban);
@@ -133,12 +132,18 @@ static void config_postdefaults(void)
 	{
 		addmultiline(&cfg.fail_message, "Authentication failed.");
 	}
+	if (!cfg.unconfirmed_message)
+	{
+		addmultiline(&cfg.unconfirmed_message, "You are trying to use an unconfirmed services account.");
+		addmultiline(&cfg.unconfirmed_message, "This services account can only be used after it has been activated/confirmed.");
+	}
 }
 
 static void free_config(void)
 {
 	freemultiline(cfg.message);
 	freemultiline(cfg.fail_message);
+	freemultiline(cfg.unconfirmed_message);
 	memset(&cfg, 0, sizeof(cfg)); /* needed! */
 }
 
@@ -151,29 +156,32 @@ int authprompt_config_test(ConfigFile *cf, ConfigEntry *ce, int type, int *errs)
 		return 0;
 
 	/* We are only interrested in set::authentication-prompt... */
-	if (!ce || !ce->ce_varname || strcmp(ce->ce_varname, "authentication-prompt"))
+	if (!ce || !ce->name || strcmp(ce->name, "authentication-prompt"))
 		return 0;
 
-	for (cep = ce->ce_entries; cep; cep = cep->ce_next)
+	for (cep = ce->items; cep; cep = cep->next)
 	{
-		if (!cep->ce_vardata)
+		if (!cep->value)
 		{
 			config_error("%s:%i: set::authentication-prompt::%s with no value",
-				cep->ce_fileptr->cf_filename, cep->ce_varlinenum, cep->ce_varname);
+				cep->file->filename, cep->line_number, cep->name);
 			errors++;
 		} else
-		if (!strcmp(cep->ce_varname, "enabled"))
+		if (!strcmp(cep->name, "enabled"))
 		{
 		} else
-		if (!strcmp(cep->ce_varname, "message"))
+		if (!strcmp(cep->name, "message"))
 		{
 		} else
-		if (!strcmp(cep->ce_varname, "fail-message"))
+		if (!strcmp(cep->name, "fail-message"))
+		{
+		} else
+		if (!strcmp(cep->name, "unconfirmed-message"))
 		{
 		} else
 		{
 			config_error("%s:%i: unknown directive set::authentication-prompt::%s",
-				cep->ce_fileptr->cf_filename, cep->ce_varlinenum, cep->ce_varname);
+				cep->file->filename, cep->line_number, cep->name);
 			errors++;
 		}
 	}
@@ -189,22 +197,26 @@ int authprompt_config_run(ConfigFile *cf, ConfigEntry *ce, int type)
 		return 0;
 
 	/* We are only interrested in set::authentication-prompt... */
-	if (!ce || !ce->ce_varname || strcmp(ce->ce_varname, "authentication-prompt"))
+	if (!ce || !ce->name || strcmp(ce->name, "authentication-prompt"))
 		return 0;
 
-	for (cep = ce->ce_entries; cep; cep = cep->ce_next)
+	for (cep = ce->items; cep; cep = cep->next)
 	{
-		if (!strcmp(cep->ce_varname, "enabled"))
+		if (!strcmp(cep->name, "enabled"))
 		{
-			cfg.enabled = config_checkval(cep->ce_vardata, CFG_YESNO);
+			cfg.enabled = config_checkval(cep->value, CFG_YESNO);
 		} else
-		if (!strcmp(cep->ce_varname, "message"))
+		if (!strcmp(cep->name, "message"))
 		{
-			addmultiline(&cfg.message, cep->ce_vardata);
+			addmultiline(&cfg.message, cep->value);
 		} else
-		if (!strcmp(cep->ce_varname, "fail-message"))
+		if (!strcmp(cep->name, "fail-message"))
 		{
-			addmultiline(&cfg.fail_message, cep->ce_vardata);
+			addmultiline(&cfg.fail_message, cep->value);
+		} else
+		if (!strcmp(cep->name, "unconfirmed-message"))
+		{
+			addmultiline(&cfg.unconfirmed_message, cep->value);
 		}
 	}
 	return 1;
@@ -257,7 +269,7 @@ char *make_authbuf(const char *username, const char *password)
 	int size;
 
 	size = strlen(username) + 1 + strlen(username) + 1 + strlen(password);
-	if (size >= sizeof(inbuf))
+	if (size >= sizeof(inbuf)-1)
 		return NULL; /* too long */
 
 	/* Because size limits are already checked above, we can cut some corners here: */
@@ -281,7 +293,7 @@ void send_first_auth(Client *client)
 {
 	Client *sasl_server;
 	char *addr = BadPtr(client->ip) ? "0" : client->ip;
-	char *certfp = moddata_client_get(client, "certfp");
+	const char *certfp = moddata_client_get(client, "certfp");
 	sasl_server = find_client(SASL_SERVER, NULL);
 	if (!sasl_server)
 	{
@@ -365,25 +377,8 @@ void authprompt_send_auth_required_message(Client *client)
 	sendnotice_multiline(client, cfg.message);
 }
 
-int authprompt_require_sasl(Client *client, char *reason)
-{
-	/* If the client did SASL then we (authprompt) will not kick in */
-	if (HasCapability(client, "sasl"))
-		return 0;
-
-	authprompt_tag_as_auth_required(client);
-
-	/* Display the require authentication::reason */
-	if (reason && strcmp(reason, "-") && strcmp(reason, "*"))
-		sendnotice(client, "%s", reason);
-
-	authprompt_send_auth_required_message(client);
-
-	return 1;
-}
-
 /* Called upon "place a host ban on this user" (eg: spamfilter, blacklist, ..) */
-int authprompt_place_host_ban(Client *client, int action, char *reason, long duration)
+int authprompt_place_host_ban(Client *client, int action, const char *reason, long duration)
 {
 	/* If it's a soft-xx action and the user is not logged in
 	 * and the user is not yet online, then we will handle this user.
@@ -437,7 +432,7 @@ int authprompt_pre_connect(Client *client)
 	return HOOK_CONTINUE; /* no action taken, proceed normally */
 }
 
-int authprompt_sasl_continuation(Client *client, char *buf)
+int authprompt_sasl_continuation(Client *client, const char *buf)
 {
 	/* If it's not for us (eg: user is doing real SASL) then return 0. */
 	if (!SEUSER(client) || !SEUSER(client)->authmsg)
@@ -468,10 +463,16 @@ int authprompt_sasl_result(Client *client, int success)
 		return 1;
 	}
 
+	if (client->user && !IsLoggedIn(client))
+	{
+		sendnotice_multiline(client, cfg.unconfirmed_message);
+		return 1;
+	}
+
 	/* Authentication was a success */
 	if (*client->name && client->user && *client->user->username && IsNotSpoof(client))
 	{
-		register_user(client, client->name, client->user->username, NULL, NULL, NULL);
+		register_user(client);
 		/* User MAY be killed now. But since we 'return 1' below, it's safe */
 	}
 

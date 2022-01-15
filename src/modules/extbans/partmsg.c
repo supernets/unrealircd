@@ -25,20 +25,23 @@ ModuleHeader MOD_HEADER
 	"4.2",
 	"ExtBan ~p - Ban/exempt Part/Quit message",
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
 };
 
-int extban_partmsg_is_banned(Client *client, Channel *channel, char *banin, int type, char **msg, char **errmsg);
+int extban_partmsg_is_banned(BanContext *b);
 
 MOD_INIT()
 {
 	ExtbanInfo req;
 
-	req.flag = 'p';
+	memset(&req, 0, sizeof(req));
+	req.letter = 'p';
+	req.name = "partmsg";
 	req.is_ok = extban_is_ok_nuh_extban;
 	req.conv_param = extban_conv_param_nuh_or_extban;
 	req.options = EXTBOPT_ACTMODIFIER;
 	req.is_banned = extban_partmsg_is_banned;
+	req.is_banned_events = BANCHK_LEAVE_MSG;
 	if (!ExtbanAdd(modinfo->handle, req))
 	{
 		config_error("could not register extended ban type");
@@ -62,10 +65,10 @@ MOD_UNLOAD()
 	return MOD_SUCCESS;
 }
 
-int extban_partmsg_is_banned(Client *client, Channel *channel, char *banin, int type, char **msg, char **errmsg)
+int extban_partmsg_is_banned(BanContext *b)
 {
-	if (type == BANCHK_LEAVE_MSG)
-		*msg = NULL;
+	b->msg = NULL;
+	// Uh.. there is no attempt to match.... anything.......?
 
 	return 0;
 }

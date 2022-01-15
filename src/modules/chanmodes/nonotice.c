@@ -25,14 +25,14 @@ ModuleHeader MOD_HEADER
 	"4.2",
 	"Channel Mode +T",
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
     };
 
 Cmode_t EXTCMODE_NONOTICE;
 
-#define IsNoNotice(channel)    (channel->mode.extmode & EXTCMODE_NONOTICE)
+#define IsNoNotice(channel)    (channel->mode.mode & EXTCMODE_NONOTICE)
 
-int nonotice_check_can_send_to_channel(Client *client, Channel *channel, Membership *lp, char **msg, char **errmsg, SendType sendtype);
+int nonotice_check_can_send_to_channel(Client *client, Channel *channel, Membership *lp, const char **msg, const char **errmsg, SendType sendtype);
 
 MOD_TEST()
 {
@@ -45,7 +45,7 @@ MOD_INIT()
 
 	memset(&req, 0, sizeof(req));
 	req.paracount = 0;
-	req.flag = 'T';
+	req.letter = 'T';
 	req.is_ok = extcmode_default_requirechop;
 	CmodeAdd(modinfo->handle, req, &EXTCMODE_NONOTICE);
 	
@@ -65,14 +65,14 @@ MOD_UNLOAD()
 	return MOD_SUCCESS;
 }
 
-int nonotice_check_can_send_to_channel(Client *client, Channel *channel, Membership *lp, char **msg, char **errmsg, SendType sendtype)
+int nonotice_check_can_send_to_channel(Client *client, Channel *channel, Membership *lp, const char **msg, const char **errmsg, SendType sendtype)
 {
 	Hook *h;
 	int i;
 
 	if ((sendtype == SEND_TYPE_NOTICE) &&
 	    IsNoNotice(channel) &&
-	    (!lp || !(lp->flags & (CHFL_CHANOP | CHFL_CHANOWNER | CHFL_CHANADMIN))))
+	    !check_channel_access_membership(lp, "oaq"))
 	{
 		for (h = Hooks[HOOKTYPE_CAN_BYPASS_CHANNEL_MESSAGE_RESTRICTION]; h; h = h->next)
 		{

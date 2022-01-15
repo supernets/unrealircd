@@ -48,7 +48,7 @@ ModuleHeader MOD_HEADER
 	"1.0",
 	"Mixed UTF8 character filter (look-alike character spam) - by Syzop",
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
 };
 
 struct {
@@ -99,22 +99,22 @@ int detect_script(const char *t)
 	else if ((t[0] == 0xd3) && (t[1] >= 0x80) && (t[1] <= 0xbf))
 		return SCRIPT_CYRILLIC;
 
-	if((t[0] == 0xe4) && (t[1] >= 0xb8) && (t[1] <= 0xbf))
+	if ((t[0] == 0xe4) && (t[1] >= 0xb8) && (t[1] <= 0xbf))
 		return SCRIPT_CJK;
 	else if ((t[0] >= 0xe5) && (t[0] <= 0xe9) && (t[1] >= 0x80) && (t[1] <= 0xbf))
 		return SCRIPT_CJK;
 
-	if((t[0] == 0xea) && (t[1] >= 0xb0) && (t[1] <= 0xbf))
+	if ((t[0] == 0xea) && (t[1] >= 0xb0) && (t[1] <= 0xbf))
 		return SCRIPT_HANGUL;
 	else if ((t[0] >= 0xeb) && (t[0] <= 0xec) && (t[1] >= 0x80) && (t[1] <= 0xbf))
 		return SCRIPT_HANGUL;
 	else if ((t[0] == 0xed) && (t[1] >= 0x80) && (t[1] <= 0x9f))
 		return SCRIPT_HANGUL;
 
-	if((t[0] == 0xe1) && (t[1] >= 0x90) && (t[1] <= 0x99))
+	if ((t[0] == 0xe1) && (t[1] >= 0x90) && (t[1] <= 0x99))
 		return SCRIPT_CANADIAN;
 
-	if((t[0] == 0xe0) && (t[1] >= 0xb0) && (t[1] <= 0xb1))
+	if ((t[0] == 0xe0) && (t[1] >= 0xb0) && (t[1] <= 0xb1))
 		return SCRIPT_TELUGU;
 
 	if ((t[0] >= 'a') && (t[0] <= 'z'))
@@ -206,12 +206,9 @@ CMD_OVERRIDE_FUNC(override_msg)
 	score = lookalikespam_score(StripControlCodes(parv[2]));
 	if ((score >= cfg.score) && !find_tkl_exception(TKL_ANTIMIXEDUTF8, client))
 	{
-		if (cfg.ban_action == BAN_ACT_KILL)
-		{
-			sendto_realops("[antimixedutf8] Killed connection from %s (score %d)",
-				GetIP(client), score);
-		} /* no else here!! */
-
+		unreal_log(ULOG_INFO, "antimixedutf8", "ANTIMIXEDUTF8_HIT", client,
+		           "[antimixedutf8] Client $client.details hit score $score -- taking action",
+		           log_data_integer("score", score));
 		if ((cfg.ban_action == BAN_ACT_BLOCK) ||
 		    ((cfg.ban_action == BAN_ACT_SOFT_BLOCK) && !IsLoggedIn(client)))
 		{
@@ -246,10 +243,10 @@ MOD_INIT()
 
 MOD_LOAD()
 {
-	if (!CommandOverrideAdd(modinfo->handle, "PRIVMSG", override_msg))
+	if (!CommandOverrideAdd(modinfo->handle, "PRIVMSG", 0, override_msg))
 		return MOD_FAILED;
 
-	if (!CommandOverrideAdd(modinfo->handle, "NOTICE", override_msg))
+	if (!CommandOverrideAdd(modinfo->handle, "NOTICE", 0, override_msg))
 		return MOD_FAILED;
 
 	return MOD_SUCCESS;
@@ -286,45 +283,45 @@ int antimixedutf8_config_test(ConfigFile *cf, ConfigEntry *ce, int type, int *er
 		return 0;
 	
 	/* We are only interrested in set::antimixedutf8... */
-	if (!ce || !ce->ce_varname || strcmp(ce->ce_varname, "antimixedutf8"))
+	if (!ce || !ce->name || strcmp(ce->name, "antimixedutf8"))
 		return 0;
 	
-	for (cep = ce->ce_entries; cep; cep = cep->ce_next)
+	for (cep = ce->items; cep; cep = cep->next)
 	{
-		if (!cep->ce_vardata)
+		if (!cep->value)
 		{
 			config_error("%s:%i: set::antimixedutf8::%s with no value",
-				cep->ce_fileptr->cf_filename, cep->ce_varlinenum, cep->ce_varname);
+				cep->file->filename, cep->line_number, cep->name);
 			errors++;
 		} else
-		if (!strcmp(cep->ce_varname, "score"))
+		if (!strcmp(cep->name, "score"))
 		{
-			int v = atoi(cep->ce_vardata);
+			int v = atoi(cep->value);
 			if ((v < 1) || (v > 99))
 			{
 				config_error("%s:%i: set::antimixedutf8::score: must be between 1 - 99 (got: %d)",
-					cep->ce_fileptr->cf_filename, cep->ce_varlinenum, v);
+					cep->file->filename, cep->line_number, v);
 				errors++;
 			}
 		} else
-		if (!strcmp(cep->ce_varname, "ban-action"))
+		if (!strcmp(cep->name, "ban-action"))
 		{
-			if (!banact_stringtoval(cep->ce_vardata))
+			if (!banact_stringtoval(cep->value))
 			{
 				config_error("%s:%i: set::antimixedutf8::ban-action: unknown action '%s'",
-					cep->ce_fileptr->cf_filename, cep->ce_varlinenum, cep->ce_vardata);
+					cep->file->filename, cep->line_number, cep->value);
 				errors++;
 			}
 		} else
-		if (!strcmp(cep->ce_varname, "ban-reason"))
+		if (!strcmp(cep->name, "ban-reason"))
 		{
 		} else
-		if (!strcmp(cep->ce_varname, "ban-time"))
+		if (!strcmp(cep->name, "ban-time"))
 		{
 		} else
 		{
 			config_error("%s:%i: unknown directive set::antimixedutf8::%s",
-				cep->ce_fileptr->cf_filename, cep->ce_varlinenum, cep->ce_varname);
+				cep->file->filename, cep->line_number, cep->name);
 			errors++;
 		}
 	}
@@ -340,26 +337,26 @@ int antimixedutf8_config_run(ConfigFile *cf, ConfigEntry *ce, int type)
 		return 0;
 	
 	/* We are only interrested in set::antimixedutf8... */
-	if (!ce || !ce->ce_varname || strcmp(ce->ce_varname, "antimixedutf8"))
+	if (!ce || !ce->name || strcmp(ce->name, "antimixedutf8"))
 		return 0;
 	
-	for (cep = ce->ce_entries; cep; cep = cep->ce_next)
+	for (cep = ce->items; cep; cep = cep->next)
 	{
-		if (!strcmp(cep->ce_varname, "score"))
+		if (!strcmp(cep->name, "score"))
 		{
-			cfg.score = atoi(cep->ce_vardata);
+			cfg.score = atoi(cep->value);
 		} else
-		if (!strcmp(cep->ce_varname, "ban-action"))
+		if (!strcmp(cep->name, "ban-action"))
 		{
-			cfg.ban_action = banact_stringtoval(cep->ce_vardata);
+			cfg.ban_action = banact_stringtoval(cep->value);
 		} else
-		if (!strcmp(cep->ce_varname, "ban-reason"))
+		if (!strcmp(cep->name, "ban-reason"))
 		{
-			safe_strdup(cfg.ban_reason, cep->ce_vardata);
+			safe_strdup(cfg.ban_reason, cep->value);
 		} else
-		if (!strcmp(cep->ce_varname, "ban-time"))
+		if (!strcmp(cep->name, "ban-time"))
 		{
-			cfg.ban_time = config_checkval(cep->ce_vardata, CFG_TIME);
+			cfg.ban_time = config_checkval(cep->value, CFG_TIME);
 		}
 	}
 	return 1;

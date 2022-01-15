@@ -24,22 +24,25 @@ ModuleHeader MOD_HEADER
 	"4.2",
 	"ExtBan ~a - Ban/exempt by services account name",
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
 };
 
 /* Forward declarations */
-char *extban_account_conv_param(char *para);
-int extban_account_is_banned(Client *client, Channel *channel, char *banin, int type, char **msg, char **errmsg);
+const char *extban_account_conv_param(BanContext *b, Extban *extban);
+int extban_account_is_banned(BanContext *b);
 
 /** Called upon module init */
 MOD_INIT()
 {
 	ExtbanInfo req;
 	
-	req.flag = 'a';
+	memset(&req, 0, sizeof(req));
+	req.letter = 'a';
+	req.name = "account";
 	req.is_ok = NULL;
 	req.conv_param = extban_account_conv_param;
 	req.is_banned = extban_account_is_banned;
+	req.is_banned_events = BANCHK_ALL|BANCHK_TKL;
 	req.options = EXTBOPT_INVEX|EXTBOPT_TKL;
 	if (!ExtbanAdd(modinfo->handle, req))
 	{
@@ -65,27 +68,34 @@ MOD_UNLOAD()
 }
 
 /** Account bans */
-char *extban_account_conv_param(char *para)
+const char *extban_account_conv_param(BanContext *b, Extban *extban)
 {
 	char *mask, *acc;
 	static char retbuf[NICKLEN + 4];
 
-	strlcpy(retbuf, para, sizeof(retbuf)); /* truncate */
+	strlcpy(retbuf, b->banstr, sizeof(retbuf)); /* truncate */
 
-	acc = retbuf+3;
+	acc = retbuf;
 	if (!*acc)
 		return NULL; /* don't allow "~a:" */
-	if (!strcmp(acc, "0"))
-		return NULL; /* ~a:0 would mean ban all non-regged, but we already have +R for that. */
 
 	return retbuf;
 }
 
-int extban_account_is_banned(Client *client, Channel *channel, char *banin, int type, char **msg, char **errmsg)
+int extban_account_is_banned(BanContext *b)
 {
-	char *ban = banin+3;
+	/* ~a:0 is special and matches all unauthenticated users */
+	if (!strcmp(b->banstr, "0") && !IsLoggedIn(b->client))
+		return 1;
 
-	if (!strcasecmp(ban, client->user->svid))
+	/* ~a:* matches all authenticated users
+	 * (Yes this special code is needed because account
+	 *  is 0 or * for unauthenticated users)
+	 */
+	if (!strcmp(b->banstr, "*") && IsLoggedIn(b->client))
+		return 1;
+
+	if (match_simple(b->banstr, b->client->user->account))
 		return 1;
 
 	return 0;

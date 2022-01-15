@@ -30,7 +30,7 @@ ModuleHeader MOD_HEADER
 	"5.0", /* Version */
 	"command /svsjoin", /* Short description of module */
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
     };
 
 /* This is called on module init, before Server Ready */
@@ -66,7 +66,7 @@ CMD_FUNC(cmd_svsjoin)
 	if (!IsULine(client))
 		return;
 
-	if ((parc < 3) || !(target = find_person(parv[1], NULL)))
+	if ((parc < 3) || !(target = find_user(parv[1], NULL)))
 		return;
 
 	if (MyUser(target))

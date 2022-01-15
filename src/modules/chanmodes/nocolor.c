@@ -27,16 +27,16 @@ ModuleHeader MOD_HEADER
 	"4.2",
 	"Channel Mode +c",
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
     };
 
 Cmode_t EXTCMODE_NOCOLOR;
 
-#define IsNoColor(channel)    (channel->mode.extmode & EXTCMODE_NOCOLOR)
+#define IsNoColor(channel)    (channel->mode.mode & EXTCMODE_NOCOLOR)
 
-int nocolor_can_send_to_channel(Client *client, Channel *channel, Membership *lp, char **msg, char **errmsg, SendType sendtype);
-char *nocolor_prelocalpart(Client *client, Channel *channel, char *comment);
-char *nocolor_prelocalquit(Client *client, char *comment);
+int nocolor_can_send_to_channel(Client *client, Channel *channel, Membership *lp, const char **msg, const char **errmsg, SendType sendtype);
+const char *nocolor_prelocalpart(Client *client, Channel *channel, const char *comment);
+const char *nocolor_prelocalquit(Client *client, const char *comment);
 
 MOD_TEST()
 {
@@ -50,14 +50,14 @@ CmodeInfo req;
 	/* Channel mode */
 	memset(&req, 0, sizeof(req));
 	req.paracount = 0;
-	req.flag = 'c';
+	req.letter = 'c';
 	req.is_ok = extcmode_default_requirechop;
 	CmodeAdd(modinfo->handle, req, &EXTCMODE_NOCOLOR);
 	
 	HookAdd(modinfo->handle, HOOKTYPE_CAN_SEND_TO_CHANNEL, 0, nocolor_can_send_to_channel);
-	HookAddPChar(modinfo->handle, HOOKTYPE_PRE_LOCAL_PART, 0, nocolor_prelocalpart);
-	HookAddPChar(modinfo->handle, HOOKTYPE_PRE_LOCAL_QUIT_CHAN, 0, nocolor_prelocalpart);
-	HookAddPChar(modinfo->handle, HOOKTYPE_PRE_LOCAL_QUIT, 0, nocolor_prelocalquit);
+	HookAddConstString(modinfo->handle, HOOKTYPE_PRE_LOCAL_PART, 0, nocolor_prelocalpart);
+	HookAddConstString(modinfo->handle, HOOKTYPE_PRE_LOCAL_QUIT_CHAN, 0, nocolor_prelocalpart);
+	HookAddConstString(modinfo->handle, HOOKTYPE_PRE_LOCAL_QUIT, 0, nocolor_prelocalquit);
 	
 	MARK_AS_OFFICIAL_MODULE(modinfo);
 	return MOD_SUCCESS;
@@ -73,7 +73,7 @@ MOD_UNLOAD()
 	return MOD_SUCCESS;
 }
 
-static int IsUsingColor(char *s)
+static int IsUsingColor(const char *s)
 {
         if (!s)
                 return 0;
@@ -85,7 +85,7 @@ static int IsUsingColor(char *s)
         return 0;
 }
 
-int nocolor_can_send_to_channel(Client *client, Channel *channel, Membership *lp, char **msg, char **errmsg, SendType sendtype)
+int nocolor_can_send_to_channel(Client *client, Channel *channel, Membership *lp, const char **msg, const char **errmsg, SendType sendtype)
 {
 	Hook *h;
 	int i;
@@ -108,7 +108,7 @@ int nocolor_can_send_to_channel(Client *client, Channel *channel, Membership *lp
 	return HOOK_CONTINUE;
 }
 
-char *nocolor_prelocalpart(Client *client, Channel *channel, char *comment)
+const char *nocolor_prelocalpart(Client *client, Channel *channel, const char *comment)
 {
 	if (!comment)
 		return NULL;
@@ -130,7 +130,7 @@ static int IsAnyChannelNoColor(Client *client)
 	return 0;
 }
 
-char *nocolor_prelocalquit(Client *client, char *comment)
+const char *nocolor_prelocalquit(Client *client, const char *comment)
 {
 	if (!comment)
 		return NULL;

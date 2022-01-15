@@ -30,7 +30,7 @@ ModuleHeader MOD_HEADER
 	"5.0", /* Version */
 	"command /cycle", /* Short description of module */
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
     };
 
 /* This is called on module init, before Server Ready */
@@ -62,6 +62,7 @@ MOD_UNLOAD()
 CMD_FUNC(cmd_cycle)
 {
 	char channels[BUFSIZE];
+	const char *parx[3];
 	int n;
 	
 	if (parc < 2)
@@ -75,7 +76,8 @@ CMD_FUNC(cmd_cycle)
 		return;
 
 	/* Then JOIN the user again... */
-	parv[1] = channels;
-	parv[2] = NULL;
-	do_cmd(client, recv_mtags, "JOIN", 2, parv);
+	parx[0] = NULL;
+	parx[1] = channels;
+	parx[2] = NULL;
+	do_cmd(client, recv_mtags, "JOIN", 2, parx);
 }

@@ -32,7 +32,7 @@ ModuleHeader MOD_HEADER
 	"5.0",
 	"command /admin", 
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
     };
 
 MOD_INIT()
@@ -61,7 +61,7 @@ CMD_FUNC(cmd_admin)
 
 	if (IsUser(client))
 	{
-		if (hunt_server(client, recv_mtags, ":%s ADMIN :%s", 1, parc, parv) != HUNTED_ISME)
+		if (hunt_server(client, recv_mtags, "ADMIN", 1, parc, parv) != HUNTED_ISME)
 			return;
 	}
 

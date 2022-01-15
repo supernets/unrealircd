@@ -32,7 +32,7 @@ ModuleHeader MOD_HEADER
 	"5.0",
 	"command /whowas", 
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
     };
 
 MOD_INIT()
@@ -53,8 +53,8 @@ MOD_UNLOAD()
 }
 
 /* externally defined functions */
-extern aWhowas MODVAR WHOWAS[NICKNAMEHISTORYLENGTH];
-extern aWhowas MODVAR *WHOWASHASH[WHOWAS_HASH_TABLE_SIZE];
+extern WhoWas MODVAR WHOWAS[NICKNAMEHISTORYLENGTH];
+extern WhoWas MODVAR *WHOWASHASH[WHOWAS_HASH_TABLE_SIZE];
 
 /*
 ** cmd_whowas
@@ -62,7 +62,8 @@ extern aWhowas MODVAR *WHOWASHASH[WHOWAS_HASH_TABLE_SIZE];
 */
 CMD_FUNC(cmd_whowas)
 {
-	aWhowas *temp;
+	char request[BUFSIZE];
+	WhoWas *temp;
 	int  cur = 0;
 	int  max = -1, found = 0;
 	char *p, *nick;
@@ -75,16 +76,17 @@ CMD_FUNC(cmd_whowas)
 	if (parc > 2)
 		max = atoi(parv[2]);
 	if (parc > 3)
-		if (hunt_server(client, recv_mtags, ":%s WHOWAS %s %s :%s", 3, parc, parv))
+		if (hunt_server(client, recv_mtags, "WHOWAS", 3, parc, parv))
 			return;
 
 	if (!MyConnect(client) && (max > 20))
 		max = 20;
 
-	p = strchr(parv[1], ',');
+	strlcpy(request, parv[1], sizeof(request));
+	p = strchr(request, ',');
 	if (p)
 		*p = '\0';
-	nick = parv[1];
+	nick = request;
 	temp = WHOWASHASH[hash_whowas_name(nick)];
 	found = 0;
 	for (; temp; temp = temp->next)
@@ -109,5 +111,5 @@ CMD_FUNC(cmd_whowas)
 	if (!found)
 		sendnumeric(client, ERR_WASNOSUCHNICK, nick);
 
-	sendnumeric(client, RPL_ENDOFWHOWAS, parv[1]);
+	sendnumeric(client, RPL_ENDOFWHOWAS, request);
 }

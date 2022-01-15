@@ -29,11 +29,13 @@ CMD_FUNC(cmd_sjoin);
 ModuleHeader MOD_HEADER
   = {
 	"sjoin",
-	"5.0",
+	"5.1",
 	"command /sjoin", 
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
     };
+
+char modebuf[BUFSIZE], parabuf[BUFSIZE];
 
 MOD_INIT()
 {
@@ -55,7 +57,7 @@ MOD_UNLOAD()
 typedef struct xParv aParv;
 struct xParv {
 	int  parc;
-	char *parv[256];
+	const char *parv[256];
 };
 
 aParv pparv;
@@ -78,18 +80,30 @@ aParv *mp2parv(char *xmbuf, char *parmbuf)
 	return (&pparv);
 }
 
-void send_local_chan_mode(MessageTag *recv_mtags, Client *client, Channel *channel, char *modebuf, char *parabuf)
+static void send_local_chan_mode(MessageTag *recv_mtags, Client *client, Channel *channel, char *modebuf, char *parabuf)
 {
 	MessageTag *mtags = NULL;
+	int destroy_channel = 0;
 
-	new_message_special(client, recv_mtags, &mtags, ":%s MODE %s %s %s", client->name, channel->chname, modebuf, parabuf);
+	new_message_special(client, recv_mtags, &mtags, ":%s MODE %s %s %s", client->name, channel->name, modebuf, parabuf);
 	sendto_channel(channel, client, NULL, 0, 0, SEND_LOCAL, mtags,
-	               ":%s MODE %s %s %s", client->name, channel->chname, modebuf, parabuf);
+	               ":%s MODE %s %s %s", client->name, channel->name, modebuf, parabuf);
 	if (MyConnect(client))
-		RunHook7(HOOKTYPE_LOCAL_CHANMODE, client, channel, mtags, modebuf, parabuf, 0, -1);
+		RunHook(HOOKTYPE_LOCAL_CHANMODE, client, channel, mtags, modebuf, parabuf, 0, -1, &destroy_channel);
 	else
-		RunHook7(HOOKTYPE_REMOTE_CHANMODE, client, channel, mtags, modebuf, parabuf, 0, -1);
+		RunHook(HOOKTYPE_REMOTE_CHANMODE, client, channel, mtags, modebuf, parabuf, 0, -1, &destroy_channel);
 	free_message_tags(mtags);
+}
+
+/** Call send_local_chan_mode() for multiline modes */
+static void send_local_chan_mode_mlm(MessageTag *recv_mtags, Client *client, Channel *channel, MultiLineMode *mlm)
+{
+	if (mlm)
+	{
+		int i;
+		for (i = 0; i < mlm->numlines; i++)
+			send_local_chan_mode(recv_mtags, client, channel, mlm->modeline[i], mlm->paramline[i]);
+	}
 }
 
 /** SJOIN: Synchronize channel modes, +beI lists and users (server-to-server command)
@@ -147,9 +161,10 @@ CMD_FUNC(cmd_sjoin)
 	unsigned short merge;	/**< same timestamp: merge their & our modes */
 	char pvar[MAXMODEPARAMS][MODEBUFLEN + 3];
 	char cbuf[1024];
-	char nick[1024]; /**< nick or ban/invex/exempt being processed */
 	char scratch_buf[1024]; /**< scratch buffer */
-	char prefix[16]; /**< prefix of nick for server to server traffic (eg: @) */
+	char item[1024]; /**< nick or ban/invex/exempt being processed */
+	char item_modes[MEMBERMODESLEN]; /**< item modes, eg "b" or "vhoaq" */
+	char prefix[16]; /**< SJOIN prefix of item for server to server traffic (eg: @) */
 	char uid_buf[BUFSIZE];  /**< Buffer for server-to-server traffic which will be broadcasted to others (servers supporting SID/UID) */
 	char uid_sjsby_buf[BUFSIZE];  /**< Buffer for server-to-server traffic which will be broadcasted to others (servers supporting SID/UID and SJSBY) */
 	char sj3_parabuf[BUFSIZE]; /**< Prefix for the above SJOIN buffers (":xxx SJOIN #channel +mode :") */
@@ -158,11 +173,10 @@ CMD_FUNC(cmd_sjoin)
 	aParv *ap;
 	int pcount, i;
 	Hook *h;
+	Cmode *cm;
 	time_t ts, oldts;
 	unsigned short b=0;
 	char *tp, *p, *saved = NULL;
-	long modeflags;
-	char queue_s=0, queue_c=0; /* oh this is soooooo ugly :p */
 	
 	if (!IsServer(client) || parc < 4)
 		return;
@@ -178,17 +192,38 @@ CMD_FUNC(cmd_sjoin)
 	if (parc < 5)
 		nomode = 1;
 
-	channel = get_channel(client, parv[2], CREATE);
+	channel = find_channel(parv[2]);
+	if (!channel)
+	{
+		channel = make_channel(parv[2]);
+		oldts = -1;
+	} else {
+		oldts = channel->creationtime;
+	}
 
 	ts = (time_t)atol(parv[1]);
 
+	if (IsInvalidChannelTS(ts))
+	{
+		unreal_log(ULOG_WARNING, "sjoin", "SJOIN_INVALID_TIMESTAMP", client,
+			   "SJOIN for channel $channel has invalid timestamp $send_timestamp (from $client)",
+			   log_data_channel("channel", channel),
+			   log_data_integer("send_timestamp", ts));
+		/* Pretend they match our creation time (matches U6 behavior in m_mode.c) */
+		ts = channel->creationtime;
+	}
+
+	if (oldts == -1)
+	{
+		/* Newly created channel (from our POV), so set the correct creationtime here */
+		channel->creationtime = ts;
+	} else
 	if (channel->creationtime > ts)
 	{
 		removeours = 1;
-		oldts = channel->creationtime;
 		channel->creationtime = ts;
 	}
-	else if ((channel->creationtime < ts) && (channel->creationtime != 0))
+	else if (channel->creationtime < ts)
 	{
 		removetheirs = 1;
 	}
@@ -197,47 +232,29 @@ CMD_FUNC(cmd_sjoin)
 		merge = 1;
 	}
 
-	if (channel->creationtime == 0)
-	{
-		oldts = -1;
-		channel->creationtime = ts;
-	}
-	else
-	{
-		oldts = channel->creationtime;
-	}
-
-	// FIXME: make it so services cannot screw this up so easily --- if possible...
-	if (ts < 750000)
-	{
-		if (ts != 0)
-			sendto_ops
-			    ("Warning! Possible desync: SJOIN for channel %s has a fishy timestamp (%lld) [%s/%s]",
-			    channel->chname, (long long)ts, client->name, client->direction->name);
-	}
-
 	parabuf[0] = '\0';
 	modebuf[0] = '+';
 	modebuf[1] = '\0';
 
 	/* Grab current modes -> modebuf & parabuf */
-	channel_modes(client, modebuf, parabuf, sizeof(modebuf), sizeof(parabuf), channel);
+	channel_modes(client, modebuf, parabuf, sizeof(modebuf), sizeof(parabuf), channel, 1);
 
 	/* Do we need to remove all our modes, bans/exempt/inves lists and -vhoaq our users? */
 	if (removeours)
 	{
 		Member *lp;
-		Membership *lp2;
 
 		modebuf[0] = '-';
 
 		/* remove our modes if any */
-		if (modebuf[1] != '\0')
+		if (!empty_mode(modebuf))
 		{
 			MessageTag *mtags = NULL;
+			MultiLineMode *mlm;
 			ap = mp2parv(modebuf, parabuf);
-			set_mode(channel, client, ap->parc, ap->parv, &pcount, pvar, 0);
-			send_local_chan_mode(recv_mtags, client, channel, modebuf, parabuf);
+			mlm = set_mode(channel, client, ap->parc, ap->parv, &pcount, pvar);
+			send_local_chan_mode_mlm(recv_mtags, client, channel, mlm);
+			safe_free_multilinemode(mlm);
 		}
 		/* remove bans */
 		/* reset the buffers */
@@ -274,39 +291,15 @@ CMD_FUNC(cmd_sjoin)
 		}
 		for (lp = channel->members; lp; lp = lp->next)
 		{
-			lp2 = find_membership_link(lp->client->user->channel, channel);
-			if (!lp2)
+			Membership *lp2 = find_membership_link(lp->client->user->channel, channel);
+
+			/* Remove all our modes, one by one */
+			for (p = lp->member_modes; *p; p++)
 			{
-				sendto_realops("Oops! channel->members && !find_membership_link");
-				continue;
+				Addit(*p, lp->client->name);
 			}
-			if (lp->flags & MODE_CHANOWNER)
-			{
-				lp->flags &= ~MODE_CHANOWNER;
-				Addit('q', lp->client->name);
-			}
-			if (lp->flags & MODE_CHANADMIN)
-			{
-				lp->flags &= ~MODE_CHANADMIN;
-				Addit('a', lp->client->name);
-			}
-			if (lp->flags & MODE_CHANOP)
-			{
-				lp->flags &= ~MODE_CHANOP;
-				Addit('o', lp->client->name);
-			}
-			if (lp->flags & MODE_HALFOP)
-			{
-				lp->flags &= ~MODE_HALFOP;
-				Addit('h', lp->client->name);
-			}
-			if (lp->flags & MODE_VOICE)
-			{
-				lp->flags &= ~MODE_VOICE;
-				Addit('v', lp->client->name);
-			}
-			/* Those should always match anyways  */
-			lp2->flags = lp->flags;
+			/* And clear all the flags in memory */
+			*lp->member_modes = *lp2->member_modes = '\0';
 		}
 		if (b > 1)
 		{
@@ -327,11 +320,6 @@ CMD_FUNC(cmd_sjoin)
 	sj3_parabuf[0] = '\0';
 	for (i = 2; i <= (parc - 2); i++)
 	{
-		if (!parv[i])
-		{
-			sendto_ops("Got null parv in SJ3 code");
-			continue;
-		}
 		strlcat(sj3_parabuf, parv[i], sizeof sj3_parabuf);
 		if (((i + 1) <= (parc - 2)))
 			strlcat(sj3_parabuf, " ", sizeof sj3_parabuf);
@@ -348,7 +336,7 @@ CMD_FUNC(cmd_sjoin)
 		time_t setat = TStime(); /**< Set at timestamp */
 		int sjsby_info = 0; /**< Set to 1 if we receive SJSBY info to alter the above 2 vars */
 
-		modeflags = 0;
+		*item_modes = 0;
 		i = 0;
 		tp = s;
 
@@ -365,8 +353,10 @@ CMD_FUNC(cmd_sjoin)
 			if (!end)
 			{
 				/* this obviously should never happen */
-				sendto_ops("Malformed SJOIN piece from %s for channel %s: %s",
-					client->name, channel->chname, tp);
+				unreal_log(ULOG_WARNING, "sjoin", "SJOIN_INVALID_SJSBY", client,
+					   "SJOIN for channel $channel has invalid SJSBY in item '$item' (from $client)",
+					   log_data_channel("channel", channel),
+					   log_data_string("item", s));
 				continue;
 			}
 			*end++ = '\0';
@@ -375,8 +365,10 @@ CMD_FUNC(cmd_sjoin)
 			if (!p)
 			{
 				/* missing setby parameter */
-				sendto_ops("Malformed SJOIN piece from %s for channel %s: %s",
-					client->name, channel->chname, tp);
+				unreal_log(ULOG_WARNING, "sjoin", "SJOIN_INVALID_SJSBY", client,
+					   "SJOIN for channel $channel has invalid SJSBY in item '$item' (from $client)",
+					   log_data_channel("channel", channel),
+					   log_data_string("item", s));
 				continue;
 			}
 			*p++ = '\0';
@@ -388,92 +380,46 @@ CMD_FUNC(cmd_sjoin)
 			tp = end; /* the remainder is used for the actual ban/exempt/invex */
 		}
 
-		while (
-		    (*tp == '@') || (*tp == '+') || (*tp == '%')
-		    || (*tp == '*') || (*tp == '~') || (*tp == '&')
-		    || (*tp == '"') || (*tp == '\''))
+		/* Process the SJOIN prefixes... */
+		for (p = tp; *p; p++)
 		{
-			switch (*(tp++))
+			char m = sjoin_prefix_to_mode(*p);
+			if (!m)
+				break; /* end of prefix stuff, or so we hope anyway :D */
+			// TODO: do we want safety here for if one side has prefixmodes loaded
+			// and the other does not? and if so, in what way do we want this?
+
+			strlcat_letter(item_modes, m, sizeof(item_modes));
+
+			/* For list modes (+beI) stop processing immediately,
+			 * so we don't accidentally eat additional prefix chars.
+			 */
+			if (strchr("beI", m))
 			{
-			  case '@':
-				  modeflags |= CHFL_CHANOP;
-				  break;
-			  case '%':
-				  modeflags |= CHFL_HALFOP;
-				  break;
-			  case '+':
-				  modeflags |= CHFL_VOICE;
-				  break;
-			  case '*':
-				  modeflags |= CHFL_CHANOWNER;
-				  break;
-			  case '~':
-				  modeflags |= CHFL_CHANADMIN;
-				  break;
-			  case '&':
-				  modeflags = CHFL_BAN;
-				  goto getnick;
-			  case '"':
-				  modeflags = CHFL_EXCEPT;
-				  goto getnick;
-			  case '\'':
-				  modeflags = CHFL_INVEX;
-				  goto getnick;
+				p++;
+				break;
 			}
 		}
-getnick:
 
-		/* First, set the appropriate prefix for server to server traffic.
-		 * Note that 'prefix' is a 16 byte buffer but it's safe due to the limited
-		 * number of choices as can be seen below:
+		/* Now set 'prefix' to the prefixes we encountered.
+		 * This is basically the range tp..p
 		 */
-		*prefix = '\0';
-		p = prefix;
-		if (modeflags == CHFL_INVEX)
-			*p++ = '\'';
-		else if (modeflags == CHFL_EXCEPT)
-			*p++ = '\"';
-		else if (modeflags == CHFL_BAN)
-			*p++ = '&';
-		else
-		{
-			/* multiple options possible at the same time */
-			if (modeflags & CHFL_CHANOWNER)
-				*p++ = '*';
-			if (modeflags & CHFL_CHANADMIN)
-				*p++ = '~';
-			if (modeflags & CHFL_CHANOP)
-				*p++ = '@';
-			if (modeflags & CHFL_HALFOP)
-				*p++ = '%';
-			if (modeflags & CHFL_VOICE)
-				*p++ = '+';
-		}
-		*p = '\0';
+		strlncpy(prefix, tp, sizeof(prefix), p - tp);
 
-		/* Now copy the "nick" (which can actually be a ban/invex/exempt).
-		 * There's no size checking here but nick is 1024 bytes and we
-		 * have 512 bytes input max.
-		 */
-		i = 0;
-		while ((*tp != ' ') && (*tp != '\0'))
-			nick[i++] = *(tp++);	/* get nick */
-		nick[i] = '\0';
-		if (nick[0] == ' ')
+		/* Now copy the "nick" (which can actually be a ban/invex/exempt) */
+		strlcpy(item, p, sizeof(item));
+		if (*item == '\0')
 			continue;
-		if (nick[0] == '\0')
-			continue;
-		Debug((DEBUG_DEBUG, "Got nick: %s", nick));
-		if (!(modeflags & CHFL_BAN) && !(modeflags & CHFL_EXCEPT) && !(modeflags & CHFL_INVEX))
+
+		/* If not a list mode... then we deal with users... */
+		if (!strchr(item_modes, 'b') && !strchr(item_modes, 'e') && !strchr(item_modes, 'I'))
 		{
 			Client *acptr;
-
-			/* A person joining */
 
 			/* The user may no longer exist. This can happen in case of a
 			 * SVSKILL traveling in the other direction. Nothing to worry about.
 			 */
-			if (!(acptr = find_person(nick, NULL)))
+			if (!(acptr = find_user(item, NULL)))
 				continue;
 
 			if (acptr->direction != client->direction)
@@ -486,18 +432,18 @@ getnick:
 			
 				sendto_one(client, NULL,
 				    ":%s KICK %s %s :Fake direction",
-				    me.id, channel->chname, acptr->name);
-				sendto_realops
-				    ("Fake direction from user %s in SJOIN from %s(%s) at %s",
-				    nick, client->srvptr->name,
-				    client->name, channel->chname);
+				    me.id, channel->name, acptr->name);
+				unreal_log(ULOG_WARNING, "sjoin", "SJOIN_FAKE_DIRECTION", client,
+				           "Fake direction from server $client in SJOIN "
+				           "for user $existing_client on $existing_client.user.servername "
+				           "(item: $buf)",
+				           log_data_client("existing_client", acptr),
+				           log_data_string("buf", item));
 				continue;
 			}
 
 			if (removetheirs)
-			{
-				modeflags = 0;
-			}
+				*item_modes = '\0';
 
 			if (!IsMember(acptr, channel))
 			{
@@ -505,30 +451,32 @@ getnick:
 				 */
 				MessageTag *mtags = NULL;
 
-				add_user_to_channel(channel, acptr, modeflags);
-				RunHook4(HOOKTYPE_REMOTE_JOIN, acptr, channel, recv_mtags, NULL);
-				new_message_special(acptr, recv_mtags, &mtags, ":%s JOIN %s", acptr->name, channel->chname);
+				add_user_to_channel(channel, acptr, item_modes);
+				RunHook(HOOKTYPE_REMOTE_JOIN, acptr, channel, recv_mtags);
+				new_message_special(acptr, recv_mtags, &mtags, ":%s JOIN %s", acptr->name, channel->name);
 				send_join_to_local_users(acptr, channel, mtags);
 				free_message_tags(mtags);
 			}
 
-			CheckStatus('q', CHFL_CHANOWNER);
-			CheckStatus('a', CHFL_CHANADMIN);
-			CheckStatus('o', CHFL_CHANOP);
-			CheckStatus('h', CHFL_HALFOP);
-			CheckStatus('v', CHFL_VOICE);
+			/* Set the +vhoaq */
+			for (p = item_modes; *p; p++)
+				Addit(*p, acptr->name);
 
 			if (strlen(uid_buf) + strlen(prefix) + IDLEN > BUFSIZE - 10)
 			{
 				/* Send what we have and start a new buffer */
 				sendto_server(client, 0, PROTO_SJSBY, recv_mtags, "%s", uid_buf);
-				snprintf(uid_buf, sizeof(uid_buf), ":%s SJOIN %lld %s :", client->id, (long long)ts, sj3_parabuf);
+				snprintf(uid_buf, sizeof(uid_buf), ":%s SJOIN %lld %s :", client->id, (long long)ts, channel->name);
 				/* Double-check the new buffer is sufficient to concat the data */
 				if (strlen(uid_buf) + strlen(prefix) + strlen(acptr->id) > BUFSIZE - 5)
 				{
-					ircd_log(LOG_ERROR, "Oversized SJOIN: '%s' + '%s%s'",
-						uid_buf, prefix, acptr->id);
-					sendto_realops("Oversized SJOIN for %s -- see ircd log", channel->chname);
+					unreal_log(ULOG_ERROR, "sjoin", "BUG_OVERSIZED_SJOIN", client,
+					           "Oversized SJOIN [$sjoin_place] in channel $channel when adding '$str$str2' to '$buf'",
+						   log_data_channel("channel", channel),
+					           log_data_string("sjoin_place", "UID-MEMBER"),
+					           log_data_string("str", prefix),
+					           log_data_string("str2", acptr->id),
+					           log_data_string("buf", uid_buf));
 					continue;
 				}
 			}
@@ -537,14 +485,18 @@ getnick:
 			if (strlen(uid_sjsby_buf) + strlen(prefix) + IDLEN > BUFSIZE - 10)
 			{
 				/* Send what we have and start a new buffer */
-				sendto_server(client, 0, PROTO_SJSBY, recv_mtags, "%s", uid_sjsby_buf);
-				snprintf(uid_sjsby_buf, sizeof(uid_sjsby_buf), ":%s SJOIN %lld %s :", client->id, (long long)ts, sj3_parabuf);
+				sendto_server(client, PROTO_SJSBY, 0, recv_mtags, "%s", uid_sjsby_buf);
+				snprintf(uid_sjsby_buf, sizeof(uid_sjsby_buf), ":%s SJOIN %lld %s :", client->id, (long long)ts, channel->name);
 				/* Double-check the new buffer is sufficient to concat the data */
 				if (strlen(uid_sjsby_buf) + strlen(prefix) + strlen(acptr->id) > BUFSIZE - 5)
 				{
-					ircd_log(LOG_ERROR, "Oversized SJOIN: '%s' + '%s%s'",
-						uid_sjsby_buf, prefix, acptr->id);
-					sendto_realops("Oversized SJOIN for %s -- see ircd log", channel->chname);
+					unreal_log(ULOG_ERROR, "sjoin", "BUG_OVERSIZED_SJOIN", client,
+					           "Oversized SJOIN [$sjoin_place] in channel $channel when adding '$str$str2' to '$buf'",
+						   log_data_channel("channel", channel),
+					           log_data_string("sjoin_place", "SJS-MEMBER"),
+					           log_data_string("str", prefix),
+					           log_data_string("str2", acptr->id),
+					           log_data_string("buf", uid_sjsby_buf));
 					continue;
 				}
 			}
@@ -552,79 +504,86 @@ getnick:
 		}
 		else
 		{
+			/* It's a list mode................ */
+			const char *str;
+			
 			if (removetheirs)
 				continue;
 
-			/* For list modes (beI): validate the syntax */
-			if (modeflags & (CHFL_BAN|CHFL_EXCEPT|CHFL_INVEX))
-			{
-				char *str;
-				
-				/* non-extbans: prevent bans without ! or @. a good case of "should never happen". */
-				if ((nick[0] != '~') && (!strchr(nick, '!') || !strchr(nick, '@') || (nick[0] == '!')))
-					continue;
-				
-				str = clean_ban_mask(nick, MODE_ADD, client);
-				if (!str)
-					continue; /* invalid ban syntax */
-				strlcpy(nick, str, sizeof(nick));
-			}
+			/* Validate syntax */
+
+			/* non-extbans: prevent bans without ! or @. a good case of "should never happen". */
+			if ((item[0] != '~') && (!strchr(item, '!') || !strchr(item, '@') || (item[0] == '!')))
+				continue;
+
+			str = clean_ban_mask(item, MODE_ADD, client, 0);
+			if (!str)
+				continue; /* invalid ban syntax */
+			strlcpy(item, str, sizeof(item));
 			
 			/* Adding of list modes */
-			if (modeflags & CHFL_BAN)
+			if (*item_modes == 'b')
 			{
-				if (add_listmode_ex(&channel->banlist, client, channel, nick, setby, setat) != -1)
+				if (add_listmode_ex(&channel->banlist, client, channel, item, setby, setat) != -1)
 				{
-					Addit('b', nick);
+					Addit('b', item);
 				}
 			}
-			if (modeflags & CHFL_EXCEPT)
+			if (*item_modes == 'e')
 			{
-				if (add_listmode_ex(&channel->exlist, client, channel, nick, setby, setat) != -1)
+				if (add_listmode_ex(&channel->exlist, client, channel, item, setby, setat) != -1)
 				{
-					Addit('e', nick);
+					Addit('e', item);
 				}
 			}
-			if (modeflags & CHFL_INVEX)
+			if (*item_modes == 'I')
 			{
-				if (add_listmode_ex(&channel->invexlist, client, channel, nick, setby, setat) != -1)
+				if (add_listmode_ex(&channel->invexlist, client, channel, item, setby, setat) != -1)
 				{
-					Addit('I', nick);
+					Addit('I', item);
 				}
 			}
 
-			if (strlen(uid_buf) + strlen(prefix) + strlen(nick) > BUFSIZE - 10)
+			if (strlen(uid_buf) + strlen(prefix) + strlen(item) > BUFSIZE - 10)
 			{
 				/* Send what we have and start a new buffer */
 				sendto_server(client, 0, PROTO_SJSBY, recv_mtags, "%s", uid_buf);
-				snprintf(uid_buf, sizeof(uid_buf), ":%s SJOIN %lld %s :", client->id, (long long)ts, sj3_parabuf);
+				snprintf(uid_buf, sizeof(uid_buf), ":%s SJOIN %lld %s :", client->id, (long long)ts, channel->name);
 				/* Double-check the new buffer is sufficient to concat the data */
-				if (strlen(uid_buf) + strlen(prefix) + strlen(nick) > BUFSIZE - 5)
+				if (strlen(uid_buf) + strlen(prefix) + strlen(item) > BUFSIZE - 5)
 				{
-					ircd_log(LOG_ERROR, "Oversized SJOIN: '%s' + '%s%s'",
-						uid_buf, prefix, nick);
-					sendto_realops("Oversized SJOIN for %s -- see ircd log", channel->chname);
+					unreal_log(ULOG_ERROR, "sjoin", "BUG_OVERSIZED_SJOIN", client,
+					           "Oversized SJOIN [$sjoin_place] in channel $channel when adding '$str$str2' to '$buf'",
+						   log_data_channel("channel", channel),
+					           log_data_string("sjoin_place", "UID-LMODE"),
+					           log_data_string("str", prefix),
+					           log_data_string("str2", item),
+					           log_data_string("buf", uid_buf));
 					continue;
 				}
 			}
-			sprintf(uid_buf+strlen(uid_buf), "%s%s ", prefix, nick);
+			sprintf(uid_buf+strlen(uid_buf), "%s%s ", prefix, item);
 
 			*scratch_buf = '\0';
 			if (sjsby_info)
 				add_sjsby(scratch_buf, setby, setat);
 			strcat(scratch_buf, prefix);
-			strcat(scratch_buf, nick);
+			strcat(scratch_buf, item);
 			strcat(scratch_buf, " ");
 			if (strlen(uid_sjsby_buf) + strlen(scratch_buf) > BUFSIZE - 10)
 			{
 				/* Send what we have and start a new buffer */
 				sendto_server(client, PROTO_SJSBY, 0, recv_mtags, "%s", uid_sjsby_buf);
-				snprintf(uid_sjsby_buf, sizeof(uid_sjsby_buf), ":%s SJOIN %lld %s :", client->id, (long long)ts, sj3_parabuf);
+				snprintf(uid_sjsby_buf, sizeof(uid_sjsby_buf), ":%s SJOIN %lld %s :", client->id, (long long)ts, channel->name);
 				/* Double-check the new buffer is sufficient to concat the data */
 				if (strlen(uid_sjsby_buf) + strlen(scratch_buf) > BUFSIZE - 5)
 				{
-					ircd_log(LOG_ERROR, "Oversized SJOIN: '%s' + '%s'", uid_sjsby_buf, scratch_buf);
-					sendto_realops("Oversized SJOIN for %s -- see ircd log", channel->chname);
+					unreal_log(ULOG_ERROR, "sjoin", "BUG_OVERSIZED_SJOIN", client,
+					           "Oversized SJOIN [$sjoin_place] in channel $channel when adding '$str' to '$buf'",
+						   log_data_channel("channel", channel),
+					           log_data_string("sjoin_place", "SJS-LMODE"),
+					           log_data_string("str", scratch_buf),
+					           log_data_string("buf", uid_sjsby_buf));
 					continue;
 				}
 			}
@@ -634,11 +593,10 @@ getnick:
 	}
 
 	/* Send out any possible remainder.. */
-	Debug((DEBUG_DEBUG, "Sending '%li %s :%s' to ", ts, parabuf, parv[parc - 1]));
 	sendto_server(client, 0, PROTO_SJSBY, recv_mtags, "%s", uid_buf);
 	sendto_server(client, PROTO_SJSBY, 0, recv_mtags, "%s", uid_sjsby_buf);
 
-	if (modebuf[1])
+	if (!empty_mode(modebuf))
 	{
 		modebuf[b] = '\0';
 		send_local_chan_mode(recv_mtags, client, channel, modebuf, parabuf);
@@ -646,8 +604,8 @@ getnick:
 	
 	if (!merge && !removetheirs && !nomode)
 	{
-		char paraback[1024];
 		MessageTag *mtags = NULL;
+		MultiLineMode *mlm;
 
 		strlcpy(modebuf, parv[3], sizeof modebuf);
 		parabuf[0] = '\0';
@@ -659,22 +617,22 @@ getnick:
 				strlcat(parabuf, " ", sizeof parabuf);
 			}
 		}
-		strlcpy(paraback, parabuf, sizeof paraback);
 		ap = mp2parv(modebuf, parabuf);
-
-		set_mode(channel, client, ap->parc, ap->parv, &pcount, pvar, 0);
-		send_local_chan_mode(recv_mtags, client, channel, modebuf, parabuf);
+		mlm = set_mode(channel, client, ap->parc, ap->parv, &pcount, pvar);
+		send_local_chan_mode_mlm(recv_mtags, client, channel, mlm);
+		safe_free_multilinemode(mlm);
 	}
 
 	if (merge && !nomode)
 	{
 		CoreChannelModeTable *acp;
+		MultiLineMode *mlm;
 		Mode oldmode; /**< The old mode (OUR mode) */
 
 		/* Copy current mode to oldmode (need to duplicate all extended mode params too..) */
 		memcpy(&oldmode, &channel->mode, sizeof(oldmode));
-		memset(&oldmode.extmodeparams, 0, sizeof(oldmode.extmodeparams));
-		extcmode_duplicate_paramlist(channel->mode.extmodeparams, oldmode.extmodeparams);
+		memset(&oldmode.mode_params, 0, sizeof(oldmode.mode_params));
+		extcmode_duplicate_paramlist(channel->mode.mode_params, oldmode.mode_params);
 
 		/* Now merge the modes */
 		strlcpy(modebuf, parv[3], sizeof modebuf);
@@ -687,8 +645,15 @@ getnick:
 				strlcat(parabuf, " ", sizeof parabuf);
 			}
 		}
+
+		/* First we set the mode (in memory) BUT we don't send the
+		 * mode change out to anyone, hence the immediate freeing
+		 * of 'mlm'. We do the actual rebuilding of the string and
+		 * sending it out a few lines further down.
+		 */
 		ap = mp2parv(modebuf, parabuf);
-		set_mode(channel, client, ap->parc, ap->parv, &pcount, pvar, 0);
+		mlm = set_mode(channel, client, ap->parc, ap->parv, &pcount, pvar);
+		safe_free_multilinemode(mlm);
 
 		/* Good, now we got modes, now for the differencing and outputting of modes
 		 * We first see if any para modes are set.
@@ -696,53 +661,40 @@ getnick:
 		strlcpy(modebuf, "-", sizeof modebuf);
 		parabuf[0] = '\0';
 		b = 1;
-		/* however, is this really going to happen at all? may be unneeded */
-		if (oldmode.limit && !channel->mode.limit)
-		{
-			Addsingle('l');
-		}
-		if (oldmode.key[0] && !channel->mode.key[0])
-		{
-			Addit('k', oldmode.key);
-		}
 
-		/* First, check if we have something they don't have..
-		 * note that: oldmode.* = us, channel->mode.* = them.
-		 */
-		for (i=0; i <= Channelmode_highest; i++)
+		/* Check if we had +s and it became +p, then revert it silently (as it is no-change) */
+		if (has_channel_mode_raw(oldmode.mode, 's') && has_channel_mode(channel, 'p'))
 		{
-			if ((Channelmode_Table[i].flag) &&
-			    (oldmode.extmode & Channelmode_Table[i].mode) &&
-			    !(channel->mode.extmode & Channelmode_Table[i].mode))
+			/* stay +s ! */
+			long mode_p = get_extmode_bitbychar('p');
+			long mode_s = get_extmode_bitbychar('s');
+			channel->mode.mode &= ~mode_p;
+			channel->mode.mode |= mode_s;
+			/* TODO: all the code of above would ideally be in a module */
+		}
+		/* (And the other condition, +p to +s, is already handled below by the generic code) */
+
+		/* First, check if we had something that is now gone
+		 * note that: oldmode.* = us, channel->mode.* = merged.
+		 */
+		for (cm=channelmodes; cm; cm = cm->next)
+		{
+			if (cm->letter &&
+			    !cm->local &&
+			    (oldmode.mode & cm->mode) &&
+			    !(channel->mode.mode & cm->mode))
 			{
-				if (Channelmode_Table[i].paracount)
+				if (cm->paracount)
 				{
-					char *parax = cm_getparameter_ex(oldmode.extmodeparams, Channelmode_Table[i].flag);
-					//char *parax = Channelmode_Table[i].get_param(extcmode_get_struct(oldmode.extmodeparam, Channelmode_Table[i].flag));
-					Addit(Channelmode_Table[i].flag, parax);
+					const char *parax = cm_getparameter_ex(oldmode.mode_params, cm->letter);
+					//char *parax = cm->get_param(extcmode_get_struct(oldmode.modeparam, cm->letter));
+					Addit(cm->letter, parax);
 				} else {
-					Addsingle(Channelmode_Table[i].flag);
+					Addsingle(cm->letter);
 				}
 			}
 		}
 
-		/* Check if we had +s and it became +p, then revert it... */
-		if ((oldmode.mode & MODE_SECRET) && (channel->mode.mode & MODE_PRIVATE))
-		{
-			/* stay +s ! */
-			channel->mode.mode &= ~MODE_PRIVATE;
-			channel->mode.mode |= MODE_SECRET;
-			Addsingle('p'); /* - */
-			queue_s = 1;
-		}
-		/* Add single char modes... */
-		for (acp = corechannelmodetable; acp->mode; acp++)
-		{
-			if ((oldmode.mode & acp->mode) && !(channel->mode.mode & acp->mode) && !acp->parameters)
-			{
-				Addsingle(acp->flag);
-			}
-		}
 		if (b > 1)
 		{
 			Addsingle('+');
@@ -753,111 +705,74 @@ getnick:
 			b = 1;
 		}
 
-		if (queue_s)
-			Addsingle('s');
-
-		if (queue_c)
-			Addsingle('c');
-
-		for (acp = corechannelmodetable; acp->mode; acp++)
-		{
-			if (!(oldmode.mode & acp->mode) && (channel->mode.mode & acp->mode) && !acp->parameters)
-			{
-				Addsingle(acp->flag);
-			}
-		}
-
-		/* Now, check if they have something we don't have..
-		 * note that: oldmode.* = us, channel->mode.* = them.
+		/* Now, check if merged modes contain something we didn't have before.
+		 * note that: oldmode.* = us before, channel->mode.* = merged.
+		 *
+		 * First the simple single letter modes...
 		 */
-		for (i=0; i <= Channelmode_highest; i++)
+		for (cm=channelmodes; cm; cm = cm->next)
 		{
-			if ((Channelmode_Table[i].flag) &&
-			    !(oldmode.extmode & Channelmode_Table[i].mode) &&
-			    (channel->mode.extmode & Channelmode_Table[i].mode))
+			if ((cm->letter) &&
+			    !(oldmode.mode & cm->mode) &&
+			    (channel->mode.mode & cm->mode))
 			{
-				if (Channelmode_Table[i].paracount)
+				if (cm->paracount)
 				{
-					char *parax = cm_getparameter(channel, Channelmode_Table[i].flag);
+					const char *parax = cm_getparameter(channel, cm->letter);
 					if (parax)
 					{
-						Addit(Channelmode_Table[i].flag, parax);
+						Addit(cm->letter, parax);
 					}
 				} else {
-					Addsingle(Channelmode_Table[i].flag);
+					Addsingle(cm->letter);
 				}
 			}
 		}
 
 		/* now, if we had diffent para modes - this loop really could be done better, but */
 
-		/* +l (limit) difference? */
-		if (oldmode.limit && channel->mode.limit && (oldmode.limit != channel->mode.limit))
-		{
-			channel->mode.limit = MAX(oldmode.limit, channel->mode.limit);
-			if (oldmode.limit != channel->mode.limit)
-			{
-				Addit('l', my_itoa(channel->mode.limit));
-			}
-		}
-
-		/* +k (key) difference? */
-		if (oldmode.key[0] && channel->mode.key[0] && strcmp(oldmode.key, channel->mode.key))
-		{
-			if (strcmp(oldmode.key, channel->mode.key) > 0)			
-			{
-				strlcpy(channel->mode.key, oldmode.key, sizeof channel->mode.key);
-			}
-			else
-			{
-				Addit('k', channel->mode.key);
-			}
-		}
-
 		/* Now, check for any param differences in extended channel modes..
-		 * note that: oldmode.* = us, channel->mode.* = them.
+		 * note that: oldmode.* = us before, channel->mode.* = merged.
 		 * if we win: copy oldmode to channel mode, if they win: send the mode
 		 */
-		for (i=0; i <= Channelmode_highest; i++)
+		for (cm=channelmodes; cm; cm = cm->next)
 		{
-			if (Channelmode_Table[i].flag && Channelmode_Table[i].paracount &&
-			    (oldmode.extmode & Channelmode_Table[i].mode) &&
-			    (channel->mode.extmode & Channelmode_Table[i].mode))
+			if (cm->letter && cm->paracount &&
+			    (oldmode.mode & cm->mode) &&
+			    (channel->mode.mode & cm->mode))
 			{
 				int r;
-				char *parax;
-				char flag = Channelmode_Table[i].flag;
-				void *ourm = GETPARASTRUCTEX(oldmode.extmodeparams, flag);
+				const char *parax;
+				char flag = cm->letter;
+				void *ourm = GETPARASTRUCTEX(oldmode.mode_params, flag);
 				void *theirm = GETPARASTRUCT(channel, flag);
-				//CmodeParam *ourm = extcmode_get_struct(oldmode.extmodeparam,Channelmode_Table[i].flag);
-				//CmodeParam *theirm = extcmode_get_struct(channel->mode.extmodeparam, Channelmode_Table[i].flag);
 				
-				r = Channelmode_Table[i].sjoin_check(channel, ourm, theirm);
+				r = cm->sjoin_check(channel, ourm, theirm);
 				switch (r)
 				{
 					case EXSJ_WEWON:
-						parax = cm_getparameter_ex(oldmode.extmodeparams, flag); /* grab from old */
+						parax = cm_getparameter_ex(oldmode.mode_params, flag); /* grab from old */
 						cm_putparameter(channel, flag, parax); /* put in new (won) */
 						break;
 
 					case EXSJ_THEYWON:
 						parax = cm_getparameter(channel, flag);
-						Debug((DEBUG_DEBUG, "sjoin: they won: '%s'", parax));
-						Addit(Channelmode_Table[i].flag, parax);
+						Addit(cm->letter, parax);
 						break;
 
 					case EXSJ_SAME:
-						Debug((DEBUG_DEBUG, "sjoin: equal"));
 						break;
 
 					case EXSJ_MERGE:
-						parax = cm_getparameter_ex(oldmode.extmodeparams, flag); /* grab from old */
+						parax = cm_getparameter_ex(oldmode.mode_params, flag); /* grab from old */
 						cm_putparameter(channel, flag, parax); /* put in new (won) */
 						Addit(flag, parax);
 						break;
 
 					default:
-						ircd_log(LOG_ERROR, "channel.c:m_sjoin:param diff checker: got unk. retval 0x%x??", r);
+						unreal_log(ULOG_ERROR, "sjoin", "BUG_SJOIN_CHECK", client,
+						           "[BUG] channel.c:m_sjoin:param diff checker: unknown return value $return_value",
+						           log_data_integer("return_value", r));
 						break;
 				}
 			}
@@ -865,14 +780,11 @@ getnick:
 
 		Addsingle('\0');
 
-		if (modebuf[1])
-		{
+		if (!empty_mode(modebuf))
 			send_local_chan_mode(recv_mtags, client, channel, modebuf, parabuf);
-		}
 
 		/* free the oldmode.* crap :( */
-		extcmode_free_paramlist(oldmode.extmodeparams);
-		/* memset(&oldmode.extmodeparams, 0, sizeof(oldmode.extmodeparams)); -- redundant? */
+		extcmode_free_paramlist(oldmode.mode_params);
 	}
 
 	for (h = Hooks[HOOKTYPE_CHANNEL_SYNCED]; h; h = h->next)
@@ -885,13 +797,12 @@ getnick:
 	/* we should be synced by now, */
 	if ((oldts != -1) && (oldts != channel->creationtime))
 	{
-		MessageTag *mtags = NULL;
-		new_message(client, NULL, &mtags);
-		sendto_channel(channel, &me, NULL, 0, 0, SEND_LOCAL, NULL,
-			":%s NOTICE %s :*** TS for %s changed from %lld to %lld",
-			me.name, channel->chname, channel->chname,
-			(long long)oldts, (long long)channel->creationtime);
-		free_message_tags(mtags);
+		unreal_log(ULOG_INFO, "channel", "CHANNEL_SYNC_TS_CHANGE", client,
+		           "Channel $channel: timestamp changed from $old_ts -> $new_ts "
+		           "after syncing with server $client.",
+		           log_data_channel("channel", channel),
+		           log_data_integer("old_ts", oldts),
+		           log_data_integer("new_ts", channel->creationtime));
 	}
 
 	/* If something went wrong with processing of the SJOIN above and

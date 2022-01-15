@@ -32,7 +32,7 @@ ModuleHeader MOD_HEADER
 	"5.0", /* Version */
 	"Character System (set::allowed-nickchars)", /* Short description of module */
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
 };
 
 /* NOTE: it is guaranteed that char is unsigned by compiling options
@@ -73,6 +73,7 @@ char langsinuse[4096];
 #define LANGAV_CYRILLIC_UTF8		0x008000 /* UTF8: cyrillic script */
 #define LANGAV_GREEK_UTF8		0x010000 /* UTF8: greek script */
 #define LANGAV_HEBREW_UTF8		0x020000 /* UTF8: hebrew script */
+#define LANGAV_ARABIC_UTF8		0x040000 /* UTF8: arabic script */
 typedef struct LangList LangList;
 struct LangList
 {
@@ -83,7 +84,7 @@ struct LangList
 
 /* MUST be alphabetized (first column) */
 static LangList langlist[] = {
-/*	{ "arabic",       "ara", LANGAV_ASCII|LANGAV_ISO8859_6 }, -- TODO: check if this has issues first! */
+	{ "arabic-utf8", "ara-utf8", LANGAV_ASCII|LANGAV_UTF8|LANGAV_ARABIC_UTF8 },
 	{ "belarussian-utf8", "blr-utf8", LANGAV_ASCII|LANGAV_UTF8|LANGAV_CYRILLIC_UTF8 },
 	{ "belarussian-w1251", "blr", LANGAV_ASCII|LANGAV_W1251 },
 	{ "catalan",      "cat", LANGAV_ASCII|LANGAV_LATIN1 },
@@ -189,7 +190,7 @@ MOD_TEST()
 	MARK_AS_OFFICIAL_MODULE(modinfo);
 	EfunctionAdd(modinfo->handle, EFUNC_DO_NICK_NAME, _do_nick_name);
 	EfunctionAdd(modinfo->handle, EFUNC_DO_REMOTE_NICK_NAME, _do_remote_nick_name);
-	EfunctionAddPChar(modinfo->handle, EFUNC_CHARSYS_GET_CURRENT_LANGUAGES, _charsys_get_current_languages);
+	EfunctionAddString(modinfo->handle, EFUNC_CHARSYS_GET_CURRENT_LANGUAGES, _charsys_get_current_languages);
 	charsys_reset();
 	charsys_reset_pretest();
 	HookAdd(modinfo->handle, HOOKTYPE_CONFIGTEST, 0, charsys_config_test);
@@ -226,26 +227,26 @@ int charsys_config_test(ConfigFile *cf, ConfigEntry *ce, int type, int *errs)
 		return 0;
 
 	/* We are only interrested in set::allowed-nickchars... */
-	if (!ce || !ce->ce_varname || strcmp(ce->ce_varname, "allowed-nickchars"))
+	if (!ce || !ce->name || strcmp(ce->name, "allowed-nickchars"))
 		return 0;
 
-	if (ce->ce_vardata)
+	if (ce->value)
 	{
 		config_error("%s:%i: set::allowed-nickchars: please use 'allowed-nickchars { name; };' "
 					 "and not 'allowed-nickchars name;'",
-					 ce->ce_fileptr->cf_filename, ce->ce_varlinenum);
+					 ce->file->filename, ce->line_number);
 		/* Give up immediately. Don't bother the user with any other errors. */
 		errors++;
 		*errs = errors;
 		return -1;
 	}
 
-	for (cep = ce->ce_entries; cep; cep=cep->ce_next)
+	for (cep = ce->items; cep; cep=cep->next)
 	{
-		if (!charsys_test_language(cep->ce_varname))
+		if (!charsys_test_language(cep->name))
 		{
 			config_error("%s:%i: set::allowed-nickchars: Unknown (sub)language '%s'",
-				ce->ce_fileptr->cf_filename, ce->ce_varlinenum, cep->ce_varname);
+				ce->file->filename, ce->line_number, cep->name);
 			errors++;
 		}
 	}
@@ -262,11 +263,11 @@ int charsys_config_run(ConfigFile *cf, ConfigEntry *ce, int type)
 		return 0;
 
 	/* We are only interrested in set::allowed-nickchars... */
-	if (!ce || !ce->ce_varname || strcmp(ce->ce_varname, "allowed-nickchars"))
+	if (!ce || !ce->name || strcmp(ce->name, "allowed-nickchars"))
 		return 0;
 
-	for (cep = ce->ce_entries; cep; cep = cep->ce_next)
-		charsys_add_language(cep->ce_varname);
+	for (cep = ce->items; cep; cep = cep->next)
+		charsys_add_language(cep->name);
 
 	return 1;
 }
@@ -313,6 +314,8 @@ int charsys_config_posttest(int *errs)
 	    x++;
 	if (x > 1)
 	{
+#if 0
+// I don't think this should be hard error, right? Some combinations may be problematic, but not all.
 		if (langav & LANGAV_LATIN_UTF8)
 		{
 			config_error("ERROR: set::allowed-nickchars: you cannot combine 'latin-utf8' with any other character set");
@@ -333,8 +336,13 @@ int charsys_config_posttest(int *errs)
 			config_error("ERROR: set::allowed-nickchars: you cannot combine 'hebrew-utf8' with any other character set");
 			errors++;
 		}
-		config_status("WARNING: set::allowed-nickchars: "
-		            "Mixing of charsets (eg: latin1+latin2) can cause display problems");
+		if (langav & LANGAV_ARABIC_UTF8)
+		{
+			config_error("ERROR: set::allowed-nickchars: you cannot combine 'arabic-utf8' with any other character set");
+			errors++;
+		}
+#endif
+		config_status("WARNING: set::allowed-nickchars: Mixing of charsets (eg: latin1+latin2) may cause display problems");
 	}
 
 	*errs = errors;
@@ -877,13 +885,6 @@ void charsys_add_language(char *name)
 		charsys_addmultibyterange(0xc3, 0xc3, 0xba, 0xba);
 		charsys_addmultibyterange(0xc3, 0xc3, 0xbd, 0xbe);
 	}
-/*	if (latin1 || !strcmp(name, "arabic")) -- Since when is arabic considered latin(1)??? oh man...
-	{
-		char bytes[] = { 0xa0, 0xa4, 0xac, 0xad, 0xbb, 0xbf, 0x00 };
-		charsys_addallowed(bytes);
-		charsys_addallowed_range(0xc1, 0xda);
-		charsys_addallowed_range(0xe0, 0xf2);
-	} */
 
 	/* [LATIN2] and rest of [LATIN-UTF8] */
 	/* actually hungarian is a special case, include it in both w1250 and latin2 ;p */
@@ -1181,6 +1182,19 @@ void charsys_add_language(char *name)
 		charsys_addmultibyterange(0xc5, 0xc5, 0xaa, 0xab);
 		charsys_addmultibyterange(0xc5, 0xc5, 0xbd, 0xbe);
 	}
+
+	/* [ARABIC] */
+	if (latin_utf8 || !strcmp(name, "arabic-utf8"))
+	{
+		/* Supplied by Sensiva */
+		/*charsys_addallowed("اأإآءبتثجحخدذرزسشصضطظعغفقكلمنهؤةويىئ");*/
+		/*- From U+0621 to U+063A (Regex: [\u0621-\u063A])*/
+		/* 0xd8a1 - 0xd8ba */
+		charsys_addmultibyterange(0xd8, 0xd8, 0xa1, 0xba);
+		/*- From U+0641 to U+064A (Regex: [\u0641-\u064A])*/
+		/* 0xd981 - 0xd98a */
+		charsys_addmultibyterange(0xd9, 0xd9, 0x81, 0x8a);
+	}
 }
 
 /** This displays all the nick characters that are permitted */
@@ -1250,6 +1264,8 @@ char *charsys_group(int v)
 		return "Greek script";
 	if (v & LANGAV_HEBREW_UTF8)
 		return "Hebrew script";
+	if (v & LANGAV_ARABIC_UTF8)
+		return "Arabic script";
 
 	return "Other";
 }

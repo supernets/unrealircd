@@ -34,7 +34,7 @@ extern void outofmemory();
 #define is_enabled match
 
 /** Convert integer to string */
-char *my_itoa(int i)
+const char *my_itoa(int i)
 {
 	static char buf[128];
 	ircsnprintf(buf, sizeof(buf), "%d", i);
@@ -50,9 +50,7 @@ char *my_itoa(int i)
  * @section Ex1 Example
  * @code
  * for (name = strtoken(&p, buf, ","); name; name = strtoken(&p, NULL, ","))
- * {
- *      ircd_log(LOG_ERROR, "Got: %s", name);
- * }
+ *      unreal_log(ULOG_INFO, "test", "TEST", "Got: $name", log_data_string(name));
  * @endcode
  */
 char *strtoken(char **save, char *str, char *fs)
@@ -92,7 +90,7 @@ char *strtoken(char **save, char *str, char *fs)
  * @returns IP address as a string (IPv4 or IPv6, in case of the latter:
  *          always the uncompressed form without ::)
  */
-char *inetntop(int af, const void *in, char *out, size_t size)
+const char *inetntop(int af, const void *in, char *out, size_t size)
 {
 	char tmp[MYDUMMY_SIZE];
 
@@ -140,7 +138,6 @@ char *inetntop(int af, const void *in, char *out, size_t size)
 		if (*(op - 1) == ':')
 			*op++ = '0';
 		*op = '\0';
-		Debug((DEBUG_DNS, "Expanding `%s' -> `%s'", tmp, out));
 	}
 	return out;
 }
@@ -171,6 +168,27 @@ size_t strlcpy(char *dst, const char *src, size_t size)
 
 	if (size <= 0)
 		return 0;
+	if (len >= size)
+		len = size - 1;
+	memcpy(dst, src, len);
+	dst[len] = 0;
+
+	return ret;
+}
+#endif
+
+#ifndef HAVE_STRLNCPY
+/** BSD'ish strlncpy() - similar to strlcpy but never copies more then n characters.
+ */
+size_t strlncpy(char *dst, const char *src, size_t size, size_t n)
+{
+	size_t len = strlen(src);
+	size_t ret = len;
+
+	if (size <= 0)
+		return 0;
+	if (len > n)
+		len = n;
 	if (len >= size)
 		len = size - 1;
 	memcpy(dst, src, len);
@@ -232,6 +250,16 @@ size_t strlncat(char *dst, const char *src, size_t size, size_t n)
 	return ret;
 }
 #endif
+
+/** Like strlcpy but concat one letter */
+void strlcat_letter(char *buf, char c, size_t buflen)
+{
+	int n = strlen(buf);
+	if (!buflen || (n >= buflen-1))
+		return;
+	buf[n] = c;
+	buf[n+1] = '\0';
+}
 
 /** Copies a string and ensure the new buffer is at most 'max' size, including NUL.
  * The syntax is pretty much identical to strlcpy() except that
@@ -715,11 +743,11 @@ void outofmemory(size_t bytes)
 
 	if (log_attempt)
 	{
+		/* This will probably fail, but we can try... */
+		unreal_log(ULOG_ERROR, "main", "OUT_OF_MEMORY", NULL,
+		           "Out of memory while trying to allocate $bytes bytes!",
+		           log_data_integer("bytes", bytes));
 		log_attempt = 0;
-		if (bytes)
-			ircd_log(LOG_ERROR, "Out of memory while trying to allocate %lld bytes!", (long long)bytes);
-		else
-			ircd_log(LOG_ERROR, "Out of memory");
 	}
 	exit(7);
 }
@@ -778,9 +806,9 @@ char *unreal_mktemp(const char *dir, const char *suffix)
 /** Returns the path portion of the given path/file
  * in the specified location (must be at least PATH_MAX bytes).
  */
-char *unreal_getpathname(char *filepath, char *path)
+char *unreal_getpathname(const char *filepath, char *path)
 {
-	char *end = filepath+strlen(filepath);
+	const char *end = filepath+strlen(filepath);
 
 	while (*end != '\\' && *end != '/' && end > filepath)
 		end--;
@@ -803,31 +831,35 @@ char *unreal_getpathname(char *filepath, char *path)
 /** Returns the filename portion of the given path.
  * The original string is not modified
  */
-char *unreal_getfilename(char *path)
+const char *unreal_getfilename(const char *path)
 {
-        int len = strlen(path);
-        char *end;
-        if (!len)
-                return NULL;
-        end = path+len-1;
+	int len = strlen(path);
+	const char *end;
+
+	if (!len)
+		return NULL;
+
+	end = path+len-1;
 	if (*end == '\\' || *end == '/')
 		return NULL;
-        while (end > path)
-        {
-                if (*end == '\\' || *end == '/')
-                {
-                        end++;
-                        break;
-                }
-                end--;
-        }
-        return end;
+
+	while (end > path)
+	{
+		if (*end == '\\' || *end == '/')
+		{
+			end++;
+			break;
+		}
+		end--;
+	}
+
+	return end;
 }
 
 /** Returns the special module tmp name for a given path.
  * The original string is not modified.
  */
-char *unreal_getmodfilename(char *path)
+const char *unreal_getmodfilename(const char *path)
 {
 	static char ret[512];
 	char buf[512];
@@ -874,12 +906,12 @@ char *unreal_getmodfilename(char *path)
 /* Returns a consistent filename for the cache/ directory.
  * Returned value will be like: cache/<hash of url>
  */
-char *unreal_mkcache(const char *url)
+const char *unreal_mkcache(const char *url)
 {
 	static char tempbuf[PATH_MAX+1];
-	char tmp2[33];
+	char tmp2[128];
 	
-	snprintf(tempbuf, PATH_MAX, "%s/%s", CACHEDIR, md5hash(tmp2, url, strlen(url)));
+	snprintf(tempbuf, PATH_MAX, "%s/%s", CACHEDIR, sha256hash(tmp2, url, strlen(url)));
 	return tempbuf;
 }
 
@@ -892,9 +924,9 @@ int has_cached_version(const char *url)
 /** Used to blow away result of bad copy or cancel file copy */
 void cancel_copy(int srcfd, int destfd, const char *dest)
 {
-        close(srcfd);
-        close(destfd);
-        unlink(dest);
+	close(srcfd);
+	close(destfd);
+	unlink(dest);
 }
 
 /** Copys the contents of the src file to the dest file.
@@ -1034,7 +1066,7 @@ time_t unreal_getfilemodtime(const char *filename)
 #endif
 
 /** Encode an IP string (eg: "1.2.3.4") to a BASE64 encoded value for S2S traffic */
-char *encode_ip(char *ip)
+const char *encode_ip(const char *ip)
 {
 	static char retbuf[25]; /* returned string */
 	char addrbuf[16];
@@ -1067,7 +1099,7 @@ char *encode_ip(char *ip)
 }
 
 /** Decode a BASE64 encoded string to an IP address string. Used for S2S traffic. */
-char *decode_ip(char *buf)
+const char *decode_ip(const char *buf)
 {
 	int n;
 	char targ[25];
@@ -1161,7 +1193,7 @@ struct u_WSA_errors WSAErrors[] = {
 };
 
 /** Get socket error string */
-char *sock_strerror(int error)
+const char *sock_strerror(int error)
 {
 	static char unkerr[64];
 	int start = 0;
@@ -1277,7 +1309,7 @@ literal:
 }
 
 /** Return the PCRE2 library version in use */
-char *pcre2_version(void)
+const char *pcre2_version(void)
 {
 	static char buf[256];
 
@@ -1322,8 +1354,13 @@ int get_terminal_width(void)
 #endif
 }
 
+#if defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wformat-nonliteral"
+#endif
+
 /** Like strftime() but easier. */
-char *unreal_strftime(char *str)
+char *unreal_strftime(const char *str)
 {
 	time_t t;
 	struct tm *tmp;
@@ -1332,12 +1369,20 @@ char *unreal_strftime(char *str)
 	t = time(NULL);
 	tmp = localtime(&t);
 	if (!tmp || !strftime(buf, sizeof(buf), str, tmp))
-		return str;
+	{
+		/* If anything fails bigtime, then return the format string */
+		strlcpy(buf, str, sizeof(buf));
+		return buf;
+	}
 	return buf;
 }
 
-/** Convert a string to lowercase */
-void strtolower_safe(char *dst, char *src, int size)
+#if defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
+
+/** Convert a string to lowercase - with separate input/output buffer */
+void strtolower_safe(char *dst, const char *src, int size)
 {
 	if (!size)
 		return; /* size of 0 is unworkable */
@@ -1349,4 +1394,33 @@ void strtolower_safe(char *dst, char *src, int size)
 		size--;
 	}
 	*dst = '\0';
+}
+
+/** Convert a string to lowercase - modifying existing string */
+void strtolower(char *str)
+{
+	for (; *str; str++)
+		*str = tolower(*str);
+}
+
+/** Convert a string to uppercase - with separate input/output buffer */
+void strtoupper_safe(char *dst, const char *src, int size)
+{
+	if (!size)
+		return; /* size of 0 is unworkable */
+	size--; /* for \0 */
+
+	for (; *src && size; src++)
+	{
+		*dst++ = toupper(*src);
+		size--;
+	}
+	*dst = '\0';
+}
+
+/** Convert a string to uppercase - modifying existing string */
+void strtoupper(char *str)
+{
+	for (; *str; str++)
+		*str = toupper(*str);
 }

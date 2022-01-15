@@ -85,9 +85,6 @@ UINT WM_TASKBARCREATED, WM_FINDMSGSTRING;
 FARPROC lpfnOldWndProc;
 HMENU hContext;
 char OSName[OSVER_SIZE];
-#ifdef USE_LIBCURL
-extern char *find_loaded_remote_include(char *url);
-#endif 
 
 void TaskBarCreated() 
 {
@@ -167,16 +164,23 @@ LRESULT RESubClassFunc(HWND hWnd, UINT Message, WPARAM wParam, LPARAM lParam)
 	return CallWindowProc((WNDPROC)lpfnOldWndProc, hWnd, Message, wParam, lParam);
 }
 
-int CloseUnreal(HWND hWnd)
+int DoCloseUnreal(HWND hWnd)
+{
+	unreal_log(ULOG_INFO, "main", "UNREALIRCD_STOP", NULL,
+	           "Terminating server (process termination requested or GUI window closed)");
+	loop.terminating = 1;
+	unload_all_modules();
+	DestroyWindow(hWnd);
+	TerminateProcess(GetCurrentProcess(), 0);
+	exit(0); /* in case previous fails (possible?) */
+}
+
+int AskCloseUnreal(HWND hWnd)
 {
 	if (MessageBox(hWnd, "Close UnrealIRCd?", "Are you sure?", MB_YESNO|MB_ICONQUESTION) == IDNO)
 		 return 0;
-	else 
-	{
-		DestroyWindow(hWnd);
-		TerminateProcess(GetCurrentProcess(), 0);
-		exit(0); /* in case previous fails (possible?) */
-	}
+	DoCloseUnreal(hWnd);
+	exit(0);
 }
 
 int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow)
@@ -195,7 +199,7 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
 	DWORD need;
 	
 	/* Go one level up, since we are currently in the bin\ subdir
-	 * and we want to be in (f.e.) "C:\Program Files\UnrealIRCd 5"
+	 * and we want to be in (f.e.) "C:\Program Files\UnrealIRCd 6"
 	 */
 	chdir("..");
 
@@ -243,7 +247,7 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
 	WM_TASKBARCREATED = RegisterWindowMessage("TaskbarCreated");
 	WM_FINDMSGSTRING = RegisterWindowMessage(FINDMSGSTRING);
 	atexit(CleanUp);
-	if(!LoadLibrary("riched20.dll"))
+	if (!LoadLibrary("riched20.dll"))
 		LoadLibrary("riched32.dll");
 	InitDebug();
 
@@ -328,7 +332,7 @@ LRESULT CALLBACK MainDLG(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam)
 			return 0;
 		}
 		case WM_CLOSE: 
-			return CloseUnreal(hDlg);
+			return DoCloseUnreal(hDlg);
 		case WM_USER: 
 		{
 			switch(LOWORD(lParam)) 
@@ -350,6 +354,7 @@ LRESULT CALLBACK MainDLG(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam)
 					DestroyMenu(hLogs);
 					hLogs = CreatePopupMenu();
 					AppendMenu(hConfig, MF_STRING, IDM_CONF, CPATH);
+#if 0
 					if (conf_log) 
 					{
 						ConfigItem_log *logs;
@@ -360,22 +365,7 @@ LRESULT CALLBACK MainDLG(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam)
 						}
 					}
 					AppendMenu(hConfig, MF_SEPARATOR, 0, NULL);
-					if (conf_include) 
-					{
-						ConfigItem_include *inc;
-						for (inc = conf_include; inc; inc = inc->next)
-						{
-							if (inc->flag.type & INCLUDE_NOTLOADED)
-								continue;
-#ifdef USE_LIBCURL
-							if (inc->flag.type & INCLUDE_REMOTE)
-								AppendMenu(hConfig, MF_STRING, i++, inc->url);
-							else
 #endif
-							AppendMenu(hConfig, MF_STRING, i++, inc->file);
-						}
-						AppendMenu(hConfig, MF_SEPARATOR, 0, NULL);
-					}
 					if (conf_files)
 					{
 						AppendMenu(hConfig, MF_STRING, IDM_MOTD, conf_files->motd_file);
@@ -458,6 +448,7 @@ LRESULT CALLBACK MainDLG(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam)
 				hLogs = CreatePopupMenu();
 
 				AppendMenu(hConfig, MF_STRING, IDM_CONF, CPATH);
+#if 0
 				if (conf_log) 
 				{
 					ConfigItem_log *logs;
@@ -468,22 +459,7 @@ LRESULT CALLBACK MainDLG(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam)
 					}
 				}
 				AppendMenu(hConfig, MF_SEPARATOR, 0, NULL);
-
-				if (conf_include) 
-				{
-					ConfigItem_include *inc;
-					for (inc = conf_include; inc; inc = inc->next)
-					{
-#ifdef USE_LIBCURL
-						if (inc->flag.type & INCLUDE_REMOTE)
-							AppendMenu(hConfig, MF_STRING, i++, inc->url);
-						else
 #endif
-						AppendMenu(hConfig, MF_STRING, i++, inc->file);
-					}
-					AppendMenu(hConfig, MF_SEPARATOR, 0, NULL);
-				}
-
 				if (conf_files)
 				{
 					AppendMenu(hConfig, MF_STRING, IDM_MOTD, conf_files->motd_file);
@@ -520,7 +496,16 @@ LRESULT CALLBACK MainDLG(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam)
 				return 0;
 			}
 			else if ((p.x >= 336) && (p.x <= 411) && (p.y >= TOOLBAR_START) && (p.y <= TOOLBAR_STOP)) 
-				return CloseUnreal(hDlg);
+				return AskCloseUnreal(hDlg);
+		}
+		case WM_SYSCOMMAND:
+		{
+			if (wParam == SC_CLOSE)
+			{
+				AskCloseUnreal(hDlg);
+				return 1;
+			}
+			break;
 		}
 		case WM_COMMAND: 
 		{
@@ -533,20 +518,13 @@ LRESULT CALLBACK MainDLG(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam)
 				else 
 				{
 					GetMenuString(hConfig,LOWORD(wParam), path, MAX_PATH, MF_BYCOMMAND);
-#ifdef USE_LIBCURL
-					if (url_is_valid(path))
-					{
-						char *file = find_loaded_remote_include(path);
-						DialogBoxParam(hInst, "FromVar", hDlg, (DLGPROC)FromFileReadDLG, (LPARAM)file);
-					}
-					else
-#endif
+					if (!url_is_valid(path))
 						DialogBoxParam(hInst, "FromFile", hDlg, (DLGPROC)FromFileDLG, (LPARAM)path);
 				}
 				return FALSE;
 			}
 
-			if (!loop.ircd_booted)
+			if (!loop.booted)
 			{
 				MessageBox(NULL, "UnrealIRCd not booted due to configuration errors. "
 				                 "Check other window for error details. Then close that window, "
@@ -561,34 +539,28 @@ LRESULT CALLBACK MainDLG(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam)
 					ShowDialog(&hStatusWnd, hInst, "Status", hDlg,StatusDLG);
 					break;
 				case IDM_SHUTDOWN:
-					return CloseUnreal(hDlg);
+					return AskCloseUnreal(hDlg);
 				case IDM_RHALL:
 					MessageBox(NULL, "Rehashing all files", "Rehashing", MB_OK);
-					sendto_realops("Rehashing all files via the console");
-					rehash(&me,0);
-					reread_motdsandrules();
+					request_rehash(NULL);
 					break;
 				case IDM_RHCONF:
 					MessageBox(NULL, "Rehashing the Config file", "Rehashing", MB_OK);
-					sendto_realops("Rehashing the Config file via the console");
-					rehash(&me,0);
+					request_rehash(NULL);
 					break;
 				case IDM_RHMOTD: 
 				{
 					MessageBox(NULL, "Rehashing all MOTD and Rules files", "Rehashing", MB_OK);
 					rehash_motdrules();
-					sendto_realops("Rehashing all MOTD and Rules files via the console");
 					break;
 				}
 				case IDM_RHOMOTD:
 					MessageBox(NULL, "Rehashing the OperMOTD", "Rehashing", MB_OK);
 					read_motd(conf_files->opermotd_file, &opermotd);
-					sendto_realops("Rehashing the OperMOTD via the console");
 					break;
 				case IDM_RHBMOTD:
 					MessageBox(NULL, "Rehashing the BotMOTD", "Rehashing", MB_OK);
 					read_motd(conf_files->botmotd_file, &botmotd);
-					sendto_realops("Rehashing the BotMOTD via the console");
 					break;
 				case IDM_LICENSE: 
 					DialogBox(hInst, "FromVar", hDlg, (DLGPROC)LicenseDLG);
@@ -1016,7 +988,7 @@ void win_map(Client *server, HWND hwTreeView, short remap)
 	for (lp = Servers; lp; lp = lp->next)
         {
                 acptr = lp->value.client;
-                if (acptr->srvptr != server)
+                if (acptr->uplink != server)
                         continue;
                 win_map(acptr, hwTreeView, 0);
         }
@@ -1076,27 +1048,6 @@ void win_error()
 {
 	if (errors && !IsService)
 		DialogBox(hInst, "ConfigError", hwIRCDWnd, (DLGPROC)ConfigErrorDLG);
-	if (need_34_upgrade)
-	{
-		need_34_upgrade = 0; /* anti-recursion. yes, is needed. */
-		if (MessageBox(NULL, 
-		               "Shall I try to upgrade your configuration files to UnrealIRCd 4 format?",
-		               "3.2.x configuration detected",
-		               MB_YESNO|MB_ICONQUESTION) == IDNO)
-		{
-			 return;
-		}
-		else 
-		{
-			update_conf();
-			MessageBox(NULL,
-			           "Configuration file(s) upgraded! In next screen you can see what I did (just for reference). "
-			           "After that, simply try to start UnrealIRCd again and see if it loads.",
-			           "Configuration upgrade",
-			           MB_OK);
-			DialogBox(hInst, "ConfigError", hwIRCDWnd, (DLGPROC)ConfigErrorDLG);
-		}
-	}
 }
 
 LRESULT CALLBACK ConfigErrorDLG(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam) 

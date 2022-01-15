@@ -5,15 +5,15 @@
 #define USE_CURL
 
 [Setup]
-AppName=UnrealIRCd 5
-AppVerName=UnrealIRCd 5.2.0.1
+AppName=UnrealIRCd 6
+AppVerName=UnrealIRCd 6.0.1.1
 AppPublisher=UnrealIRCd Team
 AppPublisherURL=https://www.unrealircd.org
 AppSupportURL=https://www.unrealircd.org
 AppUpdatesURL=https://www.unrealircd.org
 AppMutex=UnrealMutex,Global\UnrealMutex
-DefaultDirName={pf}\UnrealIRCd 5
-DefaultGroupName=UnrealIRCd 5
+DefaultDirName={pf}\UnrealIRCd 6
+DefaultGroupName=UnrealIRCd 6
 AllowNoIcons=yes
 LicenseFile=src\windows\gplplusssl.rtf
 Compression=lzma
@@ -26,8 +26,11 @@ UninstallFilesDir={app}\bin\uninstaller
 DisableWelcomePage=no
 ArchitecturesInstallIn64BitMode=x64
 ArchitecturesAllowed=x64
+;These are set only on release:
+;SignedUninstaller=yes
+;SignTool=signtool
 
-; !!! Make sure to update SSL/TLS validation (WizardForm.TasksList.Checked[9]) if tasks are added/removed !!!
+; !!! Make sure to update TLS validation (WizardForm.TasksList.Checked[9]) if tasks are added/removed !!!
 [Tasks]
 Name: "desktopicon"; Description: "Create a &desktop icon"; GroupDescription: "Additional icons:"
 Name: "quicklaunchicon"; Description: "Create a &Quick Launch icon"; GroupDescription: "Additional icons:"; Flags: unchecked
@@ -35,13 +38,42 @@ Name: "installservice"; Description: "Install as a &service (not for beginners)"
 Name: "installservice/startboot"; Description: "S&tart UnrealIRCd when Windows starts"; GroupDescription: "Service support:"; MinVersion: 0,4.0; Flags: exclusive unchecked
 Name: "installservice/startdemand"; Description: "Start UnrealIRCd on &request"; GroupDescription: "Service support:"; MinVersion: 0,4.0; Flags: exclusive unchecked
 Name: "installservice/crashrestart"; Description: "Restart UnrealIRCd if it &crashes"; GroupDescription: "Service support:"; Flags: unchecked; MinVersion: 0,5.0;
-Name: "makecert"; Description: "&Create certificate"; GroupDescription: "SSL/TLS options:";
+Name: "makecert"; Description: "&Create certificate"; GroupDescription: "TLS options:";
 Name: "fixperm"; Description: "Make UnrealIRCd folder writable by current user";
 
 [Files]
-Source: "UnrealIRCd.exe"; DestDir: "{app}\bin"; Flags: ignoreversion
+; UnrealIRCd binaries
+Source: "UnrealIRCd.exe"; DestDir: "{app}\bin"; Flags: ignoreversion signonce
 Source: "UnrealIRCd.pdb"; DestDir: "{app}\bin"; Flags: ignoreversion
+Source: "unrealsvc.exe";  DestDir: "{app}\bin"; Flags: ignoreversion signonce
 
+; TLS certificate generation helpers
+Source: "src\windows\makecert.bat"; DestDir: "{app}\bin"; Flags: ignoreversion
+Source: "extras\tls.cnf"; DestDir: "{app}\bin"; Flags: ignoreversion
+
+; UnrealIRCd modules
+Source: "src\modules\*.dll"; DestDir: "{app}\modules"; Flags: ignoreversion signonce
+Source: "src\modules\chanmodes\*.dll"; DestDir: "{app}\modules\chanmodes"; Flags: ignoreversion signonce
+Source: "src\modules\usermodes\*.dll"; DestDir: "{app}\modules\usermodes"; Flags: ignoreversion signonce
+Source: "src\modules\extbans\*.dll"; DestDir: "{app}\modules\extbans"; Flags: ignoreversion signonce
+Source: "src\modules\third\*.dll"; DestDir: "{app}\modules\third"; Flags: ignoreversion skipifsourcedoesntexist signonce
+
+; Libraries
+Source: "c:\dev\unrealircd-6-libs\pcre2\bin\pcre*.dll"; DestDir: "{app}\bin"; Flags: ignoreversion signonce
+Source: "c:\dev\unrealircd-6-libs\argon2\vs2015\build\*.dll"; DestDir: "{app}\bin"; Flags: ignoreversion signonce
+Source: "c:\dev\unrealircd-6-libs\libsodium\bin\x64\Release\v142\dynamic\*.dll"; DestDir: "{app}\bin"; Flags: ignoreversion signonce
+Source: "c:\dev\unrealircd-6-libs\jansson\bin\*.dll"; DestDir: "{app}\bin"; Flags: ignoreversion signonce
+Source: "c:\dev\unrealircd-6-libs\c-ares\msvc\cares\dll-release\cares.dll"; DestDir: "{app}\bin"; Flags: ignoreversion signonce
+Source: "c:\dev\unrealircd-6-libs\libressl\bin\openssl.exe"; DestDir: "{app}\bin"; Flags: ignoreversion signonce
+Source: "c:\dev\unrealircd-6-libs\libressl\bin\*.dll"; DestDir: "{app}\bin"; Flags: ignoreversion signonce
+Source: "c:\dev\unrealircd-6-libs\GeoIP\libGeoIP\*.dll"; DestDir: "{app}\bin"; Flags: ignoreversion signonce
+Source: "c:\dev\unrealircd-6-libs\setacl.exe"; DestDir: "{app}\tmp"; Flags: ignoreversion signonce
+#ifdef USE_CURL
+Source: "c:\dev\unrealircd-6-libs\curl\builds\libcurl-vc-x64-release-dll-ssl-dll-cares-dll-ipv6-obj-lib\libcurl.dll"; DestDir: "{app}\bin"; Flags: ignoreversion signonce
+#endif
+Source: "doc\conf\tls\curl-ca-bundle.crt"; DestDir: "{app}\conf\tls"; Flags: ignoreversion
+
+; Config files
 Source: "doc\conf\*.default.conf"; DestDir: "{app}\conf"; Flags: ignoreversion
 Source: "doc\conf\*.optional.conf"; DestDir: "{app}\conf"; Flags: ignoreversion
 Source: "doc\conf\spamfilter.conf"; DestDir: "{app}\conf"; Flags: onlyifdoesntexist
@@ -50,38 +82,13 @@ Source: "doc\conf\dccallow.conf"; DestDir: "{app}\conf"; Flags: onlyifdoesntexis
 Source: "doc\conf\aliases\*.conf"; DestDir: "{app}\conf\aliases"; Flags: ignoreversion
 Source: "doc\conf\help\*.conf"; DestDir: "{app}\conf\help"; Flags: ignoreversion
 Source: "doc\conf\examples\*.conf"; DestDir: "{app}\conf\examples"; Flags: ignoreversion
-
-Source: "doc\Donation"; DestDir: "{app}\doc"; DestName: "Donation.txt"; Flags: ignoreversion
-Source: "LICENSE"; DestDir: "{app}\doc"; DestName: "LICENSE.txt"; Flags: ignoreversion
-
-Source: "doc\*.*"; DestDir: "{app}\doc"; Flags: ignoreversion
-Source: "doc\technical\*.*"; DestDir: "{app}\doc\technical"; Flags: ignoreversion
 Source: "doc\conf\aliases\*"; DestDir: "{app}\conf\aliases"; Flags: ignoreversion
 
-Source: "unrealsvc.exe"; DestDir: "{app}\bin"; Flags: ignoreversion; MinVersion: 0,4.0
-
-Source: "src\windows\makecert.bat"; DestDir: "{app}\bin"; Flags: ignoreversion
-Source: "extras\tls.cnf"; DestDir: "{app}\bin"; Flags: ignoreversion
-
-Source: "src\modules\*.dll"; DestDir: "{app}\modules"; Flags: ignoreversion
-Source: "src\modules\chanmodes\*.dll"; DestDir: "{app}\modules\chanmodes"; Flags: ignoreversion
-Source: "src\modules\usermodes\*.dll"; DestDir: "{app}\modules\usermodes"; Flags: ignoreversion
-Source: "src\modules\snomasks\*.dll"; DestDir: "{app}\modules\snomasks"; Flags: ignoreversion
-Source: "src\modules\extbans\*.dll"; DestDir: "{app}\modules\extbans"; Flags: ignoreversion
-Source: "src\modules\third\*.dll"; DestDir: "{app}\modules\third"; Flags: ignoreversion skipifsourcedoesntexist
-
-Source: "c:\dev\unrealircd-5-libs\pcre2\bin\pcre*.dll"; DestDir: "{app}\bin"; Flags: ignoreversion
-Source: "c:\dev\unrealircd-5-libs\argon2\vs2015\build\*.dll"; DestDir: "{app}\bin"; Flags: ignoreversion
-Source: "c:\dev\unrealircd-5-libs\libsodium\bin\x64\Release\v142\dynamic\*.dll"; DestDir: "{app}\bin"; Flags: ignoreversion
-Source: "c:\dev\unrealircd-5-libs\c-ares\msvc\cares\dll-release\cares.dll"; DestDir: "{app}\bin"; Flags: ignoreversion
-Source: "c:\dev\unrealircd-5-libs\libressl\bin\openssl.exe"; DestDir: "{app}\bin"; Flags: ignoreversion
-Source: "c:\dev\unrealircd-5-libs\libressl\bin\*.dll"; DestDir: "{app}\bin"; Flags: ignoreversion
-Source: "c:\dev\unrealircd-5-libs\setacl.exe"; DestDir: "{app}\tmp"; Flags: ignoreversion
-
-#ifdef USE_CURL
-Source: "c:\dev\unrealircd-5-libs\curl\builds\libcurl-vc-x64-release-dll-ssl-dll-cares-dll-ipv6-obj-lib\libcurl.dll"; DestDir: "{app}\bin"; Flags: ignoreversion
-Source: "doc\conf\tls\curl-ca-bundle.crt"; DestDir: "{app}\conf\tls"; Flags: ignoreversion
-#endif
+; Documentation etc.
+Source: "doc\Donation"; DestDir: "{app}\doc"; DestName: "Donation.txt"; Flags: ignoreversion
+Source: "LICENSE"; DestDir: "{app}\doc"; DestName: "LICENSE.txt"; Flags: ignoreversion
+Source: "doc\*.*"; DestDir: "{app}\doc"; Flags: ignoreversion
+Source: "doc\technical\*.*"; DestDir: "{app}\doc\technical"; Flags: ignoreversion
 
 [Dirs]
 Name: "{app}\tmp"
@@ -156,7 +163,7 @@ if CurStep = ssPostInstall then
 end;
 
 //*********************************************************************************
-// Checks if SSL/TLS cert file exists
+// Checks if TLS cert file exists
 //*********************************************************************************
 
 procedure CurPageChanged(CurPage: Integer);

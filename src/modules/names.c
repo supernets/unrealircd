@@ -24,6 +24,9 @@
 
 CMD_FUNC(cmd_names);
 
+long CAP_MULTI_PREFIX = 0L;
+long CAP_USERHOST_IN_NAMES = 0L;
+
 #define MSG_NAMES 	"NAMES"
 
 ModuleHeader MOD_HEADER
@@ -32,11 +35,19 @@ ModuleHeader MOD_HEADER
 	"5.0",
 	"command /names", 
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
     };
 
 MOD_INIT()
 {
+	ClientCapabilityInfo c;
+	memset(&c, 0, sizeof(c));
+	c.name = "multi-prefix";
+	ClientCapabilityAdd(modinfo->handle, &c, &CAP_MULTI_PREFIX);
+	memset(&c, 0, sizeof(c));
+	c.name = "userhost-in-names";
+	ClientCapabilityAdd(modinfo->handle, &c, &CAP_USERHOST_IN_NAMES);
+
 	CommandAdd(modinfo->handle, MSG_NAMES, cmd_names, MAXPARA, CMD_USER|CMD_SERVER);
 	MARK_AS_OFFICIAL_MODULE(modinfo);
 	return MOD_SUCCESS;
@@ -66,8 +77,8 @@ static char buf[BUFSIZE];
 #define TRUNCATED_NAMES 64
 CMD_FUNC(cmd_names)
 {
-	int multiprefix = (MyConnect(client) && HasCapability(client, "multi-prefix"));
-	int uhnames = (MyConnect(client) && HasCapability(client, "userhost-in-names")); // cache UHNAMES support
+	int multiprefix = (MyConnect(client) && HasCapabilityFast(client, CAP_MULTI_PREFIX));
+	int uhnames = (MyConnect(client) && HasCapabilityFast(client, CAP_USERHOST_IN_NAMES)); // cache UHNAMES support
 	int bufLen = NICKLEN + (!uhnames ? 0 : (1 + USERLEN + 1 + HOSTLEN));
 	int mlen = strlen(me.name) + bufLen + 7;
 	Channel *channel;
@@ -75,7 +86,7 @@ CMD_FUNC(cmd_names)
 	int member;
 	Member *cm;
 	int idx, flag = 1, spos;
-	char *s, *para = parv[1];
+	const char *para = parv[1], *s;
 	char nuhBuffer[NICKLEN+USERLEN+HOSTLEN+3];
 
 	if (parc < 2 || !MyConnect(client))
@@ -88,16 +99,12 @@ CMD_FUNC(cmd_names)
 	{
 		if (*s == ',')
 		{
-			if (strlen(para) > TRUNCATED_NAMES)
-				para[TRUNCATED_NAMES] = '\0';
-			sendto_realops("names abuser %s %s",
-			    get_client_name(client, FALSE), para);
 			sendnumeric(client, ERR_TOOMANYTARGETS, s+1, 1, "NAMES");
 			return;
 		}
 	}
 
-	channel = find_channel(para, NULL);
+	channel = find_channel(para);
 
 	if (!channel || (!ShowChannel(client, channel) && !ValidatePermissionsForPath("channel:see:names:secret",client,NULL,channel,NULL)))
 	{
@@ -108,6 +115,8 @@ CMD_FUNC(cmd_names)
 	/* cache whether this user is a member of this channel or not */
 	member = IsMember(client, channel);
 
+	// FIXME: consider rewriting this whole thing to get rid of pointer juggling and stuff.
+
 	if (PubChannel(channel))
 		buf[0] = '=';
 	else if (SecretChannel(channel))
@@ -117,7 +126,7 @@ CMD_FUNC(cmd_names)
 
 	idx = 1;
 	buf[idx++] = ' ';
-	for (s = channel->chname; *s; s++)
+	for (s = channel->name; *s; s++)
 		buf[idx++] = *s;
 	buf[idx++] = ' ';
 	buf[idx++] = ':';
@@ -140,34 +149,14 @@ CMD_FUNC(cmd_names)
 
 		if (!multiprefix)
 		{
-			/* Standard NAMES reply */
-#ifdef PREFIX_AQ
-			if (cm->flags & CHFL_CHANOWNER)
-				buf[idx++] = '~';
-			else if (cm->flags & CHFL_CHANADMIN)
-				buf[idx++] = '&';
-			else
-#endif
-			if (cm->flags & CHFL_CHANOP)
-				buf[idx++] = '@';
-			else if (cm->flags & CHFL_HALFOP)
-				buf[idx++] = '%';
-			else if (cm->flags & CHFL_VOICE)
-				buf[idx++] = '+';
+			/* Standard NAMES reply (single character) */
+			char c = mode_to_prefix(*cm->member_modes);
+			if (c)
+				buf[idx++] = c;
 		} else {
 			/* NAMES reply with all rights included (multi-prefix / NAMESX) */
-#ifdef PREFIX_AQ
-			if (cm->flags & CHFL_CHANOWNER)
-				buf[idx++] = '~';
-			if (cm->flags & CHFL_CHANADMIN)
-				buf[idx++] = '&';
-#endif
-			if (cm->flags & CHFL_CHANOP)
-				buf[idx++] = '@';
-			if (cm->flags & CHFL_HALFOP)
-				buf[idx++] = '%';
-			if (cm->flags & CHFL_VOICE)
-				buf[idx++] = '+';
+			strcpy(&buf[idx], modes_to_prefix(cm->member_modes));
+			idx += strlen(&buf[idx]);
 		}
 
 		if (!uhnames) {
@@ -187,7 +176,7 @@ CMD_FUNC(cmd_names)
 			buf[idx++] = ' ';
 		buf[idx] = '\0';
 		flag = 1;
-		if (mlen + idx + bufLen > BUFSIZE - 7)
+		if (mlen + idx + bufLen + MEMBERMODESLEN >= BUFSIZE - 1)
 		{
 			sendnumeric(client, RPL_NAMREPLY, buf);
 			idx = spos;

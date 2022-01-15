@@ -31,7 +31,7 @@ ModuleHeader MOD_HEADER
 	"5.0", /* Version */
 	"command /chgname", /* Short description of module */
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
     };
 
 
@@ -88,7 +88,7 @@ CMD_FUNC(cmd_chgname)
 		return;
 	}
 
-	if (!(target = find_person(parv[1], NULL)))
+	if (!(target = find_user(parv[1], NULL)))
 	{
 		sendnumeric(client, ERR_NOSUCHNICK, parv[1]);
 		return;
@@ -97,15 +97,11 @@ CMD_FUNC(cmd_chgname)
 	/* Let's log this first */
 	if (!IsULine(client))
 	{
-		sendto_snomask(SNO_EYES,
-		    "%s changed the GECOS of %s (%s@%s) to be %s",
-		    client->name, target->name, target->user->username,
-		    GetHost(target), parv[2]);
-		/* Logging ability added by XeRXeS */
-		ircd_log(LOG_CHGCMDS,
-			"CHGNAME: %s changed the GECOS of %s (%s@%s) to be %s",
-			client->name, target->name, target->user->username,
-			GetHost(target), parv[2]);
+		unreal_log(ULOG_INFO, "chgcmds", "CHGNAME_COMMAND", client,
+		           "CHGNAME: $client changed the realname of $target.details to be $new_realname",
+		           log_data_string("change_type", "realname"),
+			   log_data_client("target", target),
+		           log_data_string("new_realname", parv[2]));
 	}
 
 	/* set the realname to make ban checking work */

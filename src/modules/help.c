@@ -33,7 +33,7 @@ ModuleHeader MOD_HEADER
 	"5.0",
 	"command /help", 
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
     };
 
 MOD_INIT()
@@ -57,7 +57,7 @@ MOD_UNLOAD()
 #define HDR(str) sendto_one(client, NULL, ":%s 290 %s :%s", me.name, client->name, str);
 #define SND(str) sendto_one(client, NULL, ":%s 292 %s :%s", me.name, client->name, str);
 
-ConfigItem_help *find_Help(char *command)
+ConfigItem_help *find_Help(const char *command)
 {
 	ConfigItem_help *help;
 
@@ -80,7 +80,7 @@ ConfigItem_help *find_Help(char *command)
 	return NULL;
 }
 
-void parse_help(Client *client, char *name, char *help)
+void parse_help(Client *client, const char *help)
 {
 	ConfigItem_help *helpitem;
 	MOTDLine *text;
@@ -109,7 +109,7 @@ void parse_help(Client *client, char *name, char *help)
 		SND("   We're sorry, we don't have help available for the command you requested.");
 		SND(" -");
 		sendto_one(client, NULL, ":%s 292 %s : ***** Go to %s if you have any further questions *****",
-		    me.name, client->name, helpchan);
+		    me.name, client->name, HELP_CHANNEL);
 		SND(" -");
 		return;
 	}
@@ -131,7 +131,7 @@ void parse_help(Client *client, char *name, char *help)
 */
 CMD_FUNC(cmd_help)
 {
-	char *helptopic;
+	const char *helptopic;
 
 	if (!MyUser(client))
 		return; /* never remote */
@@ -141,5 +141,5 @@ CMD_FUNC(cmd_help)
 	if (helptopic && (*helptopic == '?'))
 		helptopic++;
 
-	parse_help(client, client->name, BadPtr(helptopic) ? NULL : helptopic);
+	parse_help(client, BadPtr(helptopic) ? NULL : helptopic);
 }

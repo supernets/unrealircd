@@ -186,7 +186,7 @@ int  crule_via(int numargs, void *crulearg[])
 	{
 		if (!match_simple((char *)crulearg[1], client->name))
 			continue;
-		if (!match_simple((char *)crulearg[0], client->serv->up))
+		if (!match_simple((char *)crulearg[0], client->uplink->name))
 			continue;
 		return (1);
 	}
@@ -372,11 +372,6 @@ char *crule_parse(char *rule)
 	}
 	if (ruleroot != NULL)
 		crule_free((char **)&ruleroot);
-#if !defined(CR_DEBUG) && !defined(CR_CHKCONF)
-	Debug((DEBUG_ERROR, "%s in rule: %s", crule_errstr[errcode], rule));
-#else
-	(void)fprintf(stderr, "%s in rule: %s\n", crule_errstr[errcode], rule);
-#endif
 	return NULL;
 }
 

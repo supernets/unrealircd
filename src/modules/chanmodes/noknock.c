@@ -25,15 +25,15 @@ ModuleHeader MOD_HEADER
 	"4.2",
 	"Channel Mode +K",
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
     };
 
 Cmode_t EXTCMODE_NOKNOCK;
 
-#define IsNoKnock(channel)    (channel->mode.extmode & EXTCMODE_NOKNOCK)
+#define IsNoKnock(channel)    (channel->mode.mode & EXTCMODE_NOKNOCK)
 
-int noknock_check (Client *client, Channel *channel);
-int noknock_mode_allow(Client *client, Channel *channel, char mode, char *para, int checkt, int what);
+int noknock_check_knock(Client *client, Channel *channel, const char **reason);
+int noknock_mode_allow(Client *client, Channel *channel, char mode, const char *para, int checkt, int what);
 int noknock_mode_del (Channel *channel, int modeChar);
 
 MOD_TEST()
@@ -47,11 +47,11 @@ CmodeInfo req;
 
 	memset(&req, 0, sizeof(req));
 	req.paracount = 0;
-	req.flag = 'K';
+	req.letter = 'K';
 	req.is_ok = noknock_mode_allow;
 	CmodeAdd(modinfo->handle, req, &EXTCMODE_NOKNOCK);
 	
-	HookAdd(modinfo->handle, HOOKTYPE_PRE_KNOCK, 0, noknock_check);
+	HookAdd(modinfo->handle, HOOKTYPE_PRE_KNOCK, 0, noknock_check_knock);
 	HookAdd(modinfo->handle, HOOKTYPE_MODECHAR_DEL, 0, noknock_mode_del);
 
 	
@@ -70,11 +70,11 @@ MOD_UNLOAD()
 }
 
 
-int noknock_check (Client *client, Channel *channel)
+int noknock_check_knock (Client *client, Channel *channel, const char **reason)
 {
 	if (MyUser(client) && IsNoKnock(channel))
 	{
-		sendnumeric(client, ERR_CANNOTKNOCK, channel->chname, "No knocks are allowed! (+K)");
+		sendnumeric(client, ERR_CANNOTKNOCK, channel->name, "No knocks are allowed! (+K)");
 		return HOOK_DENY;
 	}
 
@@ -85,14 +85,14 @@ int noknock_mode_del (Channel *channel, int modeChar)
 {
 	// Remove noknock when we're removing invite only
 	if (modeChar == 'i')
-		channel->mode.extmode &= ~EXTCMODE_NOKNOCK;
+		channel->mode.mode &= ~EXTCMODE_NOKNOCK;
 
 	return 0;
 }
 
-int noknock_mode_allow(Client *client, Channel *channel, char mode, char *para, int checkt, int what)
+int noknock_mode_allow(Client *client, Channel *channel, char mode, const char *para, int checkt, int what)
 {
-	if (!(channel->mode.mode & MODE_INVITEONLY))
+	if (!has_channel_mode(channel, 'i'))
 	{
 		if (checkt == EXCHK_ACCESS_ERR)
 		{

@@ -86,18 +86,12 @@ void isupport_init(void)
 {
 	ISupportSet(NULL, "INVEX", NULL);
 	ISupportSet(NULL, "EXCEPTS", NULL);
-#ifdef PREFIX_AQ
-	ISupportSet(NULL, "STATUSMSG", "~&@%+");
-#else
-	ISupportSet(NULL, "STATUSMSG", "@%+");
-#endif
 	ISupportSet(NULL, "ELIST", "MNUCT");
 	ISupportSet(NULL, "CASEMAPPING", "ascii");
-	ISupportSet(NULL, "NETWORK", ircnet005);
+	ISupportSet(NULL, "NETWORK", NETWORK_NAME_005);
 	ISupportSetFmt(NULL, "CHANMODES",
-	               CHPAR1 "%s," CHPAR2 "%s," CHPAR3 "%s," CHPAR4 "%s",
+	               CHPAR1 "%s,%s,%s,%s",
 	               EXPAR1, EXPAR2, EXPAR3, EXPAR4);
-	ISupportSet(NULL, "PREFIX", CHPFIX);
 	ISupportSet(NULL, "CHANTYPES", "#");
 	ISupportSetFmt(NULL, "MODES", "%d", MAXMODEPARAMS);
 	ISupportSetFmt(NULL, "SILENCE", "%d", SILENCE_LIMIT);
@@ -118,7 +112,6 @@ void isupport_init(void)
 	ISupportSetFmt(NULL, "MAXLIST", "b:%d,e:%d,I:%d", MAXBANS, MAXBANS, MAXBANS);
 	ISupportSetFmt(NULL, "CHANLIMIT", "#:%d", MAXCHANNELSPERUSER);
 	ISupportSetFmt(NULL, "MAXCHANNELS", "%d", MAXCHANNELSPERUSER);
-	ISupportSet(NULL, "HCN", NULL);
 	ISupportSet(NULL, "SAFELIST", NULL);
 	ISupportSet(NULL, "NAMESX", NULL);
 	if (UHNAMES_ENABLED)

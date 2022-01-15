@@ -24,7 +24,7 @@ ModuleHeader MOD_HEADER = {
 	"1.0.2",
 	"Restrict specific commands unless certain conditions have been met",
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
 };
 
 typedef struct RestrictedCommand RestrictedCommand;
@@ -45,14 +45,14 @@ typedef struct {
 } CmdMap;
 
 // Forward declarations
-char *find_cmd_byconftag(char *conftag);
-RestrictedCommand *find_restrictions_bycmd(char *cmd);
-RestrictedCommand *find_restrictions_byconftag(char *conftag);
+const char *find_cmd_byconftag(const char *conftag);
+RestrictedCommand *find_restrictions_bycmd(const char *cmd);
+RestrictedCommand *find_restrictions_byconftag(const char *conftag);
 int rcmd_configtest(ConfigFile *cf, ConfigEntry *ce, int type, int *errs);
 int rcmd_configrun(ConfigFile *cf, ConfigEntry *ce, int type);
-int rcmd_can_send_to_channel(Client *client, Channel *channel, Membership *lp, char **msg, char **errmsg, SendType sendtype);
-int rcmd_can_send_to_user(Client *client, Client *target, char **text, char **errmsg, SendType sendtype);
-int rcmd_block_message(Client *client, char *text, SendType sendtype, char **errmsg, char *display, char *conftag);
+int rcmd_can_send_to_channel(Client *client, Channel *channel, Membership *lp, const char **msg, const char **errmsg, SendType sendtype);
+int rcmd_can_send_to_user(Client *client, Client *target, const char **text, const char **errmsg, SendType sendtype);
+int rcmd_block_message(Client *client, const char *text, SendType sendtype, const char **errmsg, const char *display, const char *conftag);
 CMD_OVERRIDE_FUNC(rcmd_override);
 
 // Globals
@@ -110,7 +110,7 @@ MOD_UNLOAD()
 	return MOD_SUCCESS;
 }
 
-char *find_cmd_byconftag(char *conftag) {
+const char *find_cmd_byconftag(const char *conftag) {
 	CmdMap *cmap;
 	for (cmap = conf_cmdmaps; cmap->conftag; cmap++)
 	{
@@ -120,7 +120,7 @@ char *find_cmd_byconftag(char *conftag) {
 	return NULL;
 }
 
-RestrictedCommand *find_restrictions_bycmd(char *cmd) {
+RestrictedCommand *find_restrictions_bycmd(const char *cmd) {
 	RestrictedCommand *rcmd;
 	for (rcmd = RestrictedCommandList; rcmd; rcmd = rcmd->next)
 	{
@@ -130,7 +130,7 @@ RestrictedCommand *find_restrictions_bycmd(char *cmd) {
 	return NULL;
 }
 
-RestrictedCommand *find_restrictions_byconftag(char *conftag) {
+RestrictedCommand *find_restrictions_byconftag(const char *conftag) {
 	RestrictedCommand *rcmd;
 	for (rcmd = RestrictedCommandList; rcmd; rcmd = rcmd->next)
 	{
@@ -150,17 +150,17 @@ int rcmd_configtest(ConfigFile *cf, ConfigEntry *ce, int type, int *errs)
 	if (type != CONFIG_SET)
 		return 0;
 
-	if (!ce || strcmp(ce->ce_varname, "restrict-commands"))
+	if (!ce || strcmp(ce->name, "restrict-commands"))
 		return 0;
 
-	for (cep = ce->ce_entries; cep; cep = cep->ce_next)
+	for (cep = ce->items; cep; cep = cep->next)
 	{
-		for (cep2 = cep->ce_entries; cep2; cep2 = cep2->ce_next)
+		for (cep2 = cep->items; cep2; cep2 = cep2->next)
 		{
-			if (!strcmp(cep2->ce_varname, "disable"))
+			if (!strcmp(cep2->name, "disable"))
 			{
 				config_warn("%s:%i: set::restrict-commands::%s: the 'disable' option has been removed.",
-				            cep2->ce_fileptr->cf_filename, cep2->ce_varlinenum, cep->ce_varname);
+				            cep2->file->filename, cep2->line_number, cep->name);
 				if (!warn_disable)
 				{
 					config_warn("Simply remove 'disable yes;' from the configuration file and "
@@ -170,45 +170,45 @@ int rcmd_configtest(ConfigFile *cf, ConfigEntry *ce, int type, int *errs)
 				continue;
 			}
 
-			if (!cep2->ce_vardata)
+			if (!cep2->value)
 			{
-				config_error("%s:%i: blank set::restrict-commands::%s:%s without value", cep2->ce_fileptr->cf_filename, cep2->ce_varlinenum, cep->ce_varname, cep2->ce_varname);
+				config_error("%s:%i: blank set::restrict-commands::%s:%s without value", cep2->file->filename, cep2->line_number, cep->name, cep2->name);
 				errors++;
 				continue;
 			}
 
-			if (!strcmp(cep2->ce_varname, "connect-delay"))
+			if (!strcmp(cep2->name, "connect-delay"))
 			{
-				long v = config_checkval(cep2->ce_vardata, CFG_TIME);
+				long v = config_checkval(cep2->value, CFG_TIME);
 				if ((v < 1) || (v > 3600))
 				{
-					config_error("%s:%i: set::restrict-commands::%s::connect-delay should be in range 1-3600", cep2->ce_fileptr->cf_filename, cep2->ce_varlinenum, cep->ce_varname);
+					config_error("%s:%i: set::restrict-commands::%s::connect-delay should be in range 1-3600", cep2->file->filename, cep2->line_number, cep->name);
 					errors++;
 				}
 				continue;
 			}
 
-			if (!strcmp(cep2->ce_varname, "exempt-identified"))
+			if (!strcmp(cep2->name, "exempt-identified"))
 				continue;
 
-			if (!strcmp(cep2->ce_varname, "exempt-webirc"))
+			if (!strcmp(cep2->name, "exempt-webirc"))
 				continue;
 
-			if (!strcmp(cep2->ce_varname, "exempt-tls"))
+			if (!strcmp(cep2->name, "exempt-tls"))
 				continue;
 
-			if (!strcmp(cep2->ce_varname, "exempt-reputation-score"))
+			if (!strcmp(cep2->name, "exempt-reputation-score"))
 			{
-				int v = atoi(cep2->ce_vardata);
+				int v = atoi(cep2->value);
 				if (v <= 0)
 				{
-					config_error("%s:%i: set::restrict-commands::%s::exempt-reputation-score must be greater than 0", cep2->ce_fileptr->cf_filename, cep2->ce_varlinenum, cep->ce_varname);
+					config_error("%s:%i: set::restrict-commands::%s::exempt-reputation-score must be greater than 0", cep2->file->filename, cep2->line_number, cep->name);
 					errors++;
 				}
 				continue;
 			}
 
-			config_error("%s:%i: unknown directive set::restrict-commands::%s::%s", cep2->ce_fileptr->cf_filename, cep2->ce_varlinenum, cep->ce_varname, cep2->ce_varname);
+			config_error("%s:%i: unknown directive set::restrict-commands::%s::%s", cep2->file->filename, cep2->line_number, cep->name, cep2->name);
 			errors++;
 		}
 	}
@@ -220,24 +220,24 @@ int rcmd_configtest(ConfigFile *cf, ConfigEntry *ce, int type, int *errs)
 int rcmd_configrun(ConfigFile *cf, ConfigEntry *ce, int type)
 {
 	ConfigEntry *cep, *cep2;
-	char *cmd, *conftag;
+	const char *cmd, *conftag;
 	RestrictedCommand *rcmd;
 
 	// We are only interested in set::restrict-commands
 	if (type != CONFIG_SET)
 		return 0;
 
-	if (!ce || strcmp(ce->ce_varname, "restrict-commands"))
+	if (!ce || strcmp(ce->name, "restrict-commands"))
 		return 0;
 
-	for (cep = ce->ce_entries; cep; cep = cep->ce_next)
+	for (cep = ce->items; cep; cep = cep->next)
 	{
 		// May need to switch some stuff around for special cases where the config directive doesn't match the actual command
 		conftag = NULL;
-		if ((cmd = find_cmd_byconftag(cep->ce_varname)))
-			conftag = cep->ce_varname;
+		if ((cmd = find_cmd_byconftag(cep->name)))
+			conftag = cep->name;
 		else
-			cmd = cep->ce_varname;
+			cmd = cep->name;
 
 		// Try to add override before even allocating the struct so we can bail early
 		// Also don't override anything from the conf_cmdmaps[] list because those are handled through hooks instead
@@ -250,7 +250,7 @@ int rcmd_configrun(ConfigFile *cf, ConfigEntry *ce, int type)
 				continue;
 			}
 
-			if (!CommandOverrideAdd(ModInf.handle, cmd, rcmd_override))
+			if (!CommandOverrideAdd(ModInf.handle, cmd, 0, rcmd_override))
 			{
 				config_warn("[restrict-commands] Failed to add override for '%s' (NO RESTRICTIONS APPLY)", cmd);
 				continue;
@@ -260,38 +260,38 @@ int rcmd_configrun(ConfigFile *cf, ConfigEntry *ce, int type)
 		rcmd = safe_alloc(sizeof(RestrictedCommand));
 		safe_strdup(rcmd->cmd, cmd);
 		safe_strdup(rcmd->conftag, conftag);
-		for (cep2 = cep->ce_entries; cep2; cep2 = cep2->ce_next)
+		for (cep2 = cep->items; cep2; cep2 = cep2->next)
 		{
-			if (!cep2->ce_vardata)
+			if (!cep2->value)
 				continue;
 
-			if (!strcmp(cep2->ce_varname, "connect-delay"))
+			if (!strcmp(cep2->name, "connect-delay"))
 			{
-				rcmd->connect_delay = config_checkval(cep2->ce_vardata, CFG_TIME);
+				rcmd->connect_delay = config_checkval(cep2->value, CFG_TIME);
 				continue;
 			}
 
-			if (!strcmp(cep2->ce_varname, "exempt-identified"))
+			if (!strcmp(cep2->name, "exempt-identified"))
 			{
-				rcmd->exempt_identified = config_checkval(cep2->ce_vardata, CFG_YESNO);
+				rcmd->exempt_identified = config_checkval(cep2->value, CFG_YESNO);
 				continue;
 			}
 			
-			if (!strcmp(cep2->ce_varname, "exempt-webirc"))
+			if (!strcmp(cep2->name, "exempt-webirc"))
 			{
-				rcmd->exempt_webirc = config_checkval(cep2->ce_vardata, CFG_YESNO);
+				rcmd->exempt_webirc = config_checkval(cep2->value, CFG_YESNO);
 				continue;
 			}
 
-			if (!strcmp(cep2->ce_varname, "exempt-tls"))
+			if (!strcmp(cep2->name, "exempt-tls"))
 			{
-				rcmd->exempt_tls = config_checkval(cep2->ce_vardata, CFG_YESNO);
+				rcmd->exempt_tls = config_checkval(cep2->value, CFG_YESNO);
 				continue;
 			}
 
-			if (!strcmp(cep2->ce_varname, "exempt-reputation-score"))
+			if (!strcmp(cep2->name, "exempt-reputation-score"))
 			{
-				rcmd->exempt_reputation_score = atoi(cep2->ce_vardata);
+				rcmd->exempt_reputation_score = atoi(cep2->value);
 				continue;
 			}
 		}
@@ -313,12 +313,12 @@ int rcmd_canbypass(Client *client, RestrictedCommand *rcmd)
 		return 1;
 	if (rcmd->exempt_reputation_score > 0 && (GetReputation(client) >= rcmd->exempt_reputation_score))
 		return 1;
-	if (rcmd->connect_delay && client->local && (TStime() - client->local->firsttime >= rcmd->connect_delay))
+	if (rcmd->connect_delay && client->local && (TStime() - client->local->creationtime >= rcmd->connect_delay))
 		return 1;
 	return 0;
 }
 
-int rcmd_can_send_to_channel(Client *client, Channel *channel, Membership *lp, char **msg, char **errmsg, SendType sendtype)
+int rcmd_can_send_to_channel(Client *client, Channel *channel, Membership *lp, const char **msg, const char **errmsg, SendType sendtype)
 {
 	if (rcmd_block_message(client, *msg, sendtype, errmsg, "channel", (sendtype == SEND_TYPE_NOTICE ? "channel-notice" : "channel-message")))
 		return HOOK_DENY;
@@ -326,7 +326,7 @@ int rcmd_can_send_to_channel(Client *client, Channel *channel, Membership *lp, c
 	return HOOK_CONTINUE;
 }
 
-int rcmd_can_send_to_user(Client *client, Client *target, char **text, char **errmsg, SendType sendtype)
+int rcmd_can_send_to_user(Client *client, Client *target, const char **text, const char **errmsg, SendType sendtype)
 {
 	// Need a few extra exceptions for user messages only =]
 	if ((client == target) || IsULine(target))
@@ -338,7 +338,7 @@ int rcmd_can_send_to_user(Client *client, Client *target, char **text, char **er
 	return HOOK_CONTINUE;
 }
 
-int rcmd_block_message(Client *client, char *text, SendType sendtype, char **errmsg, char *display, char *conftag)
+int rcmd_block_message(Client *client, const char *text, SendType sendtype, const char **errmsg, const char *display, const char *conftag)
 {
 	RestrictedCommand *rcmd;
 	static char errbuf[256];

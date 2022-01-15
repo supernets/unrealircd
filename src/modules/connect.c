@@ -32,7 +32,7 @@ ModuleHeader MOD_HEADER
 	"5.0",
 	"command /connect", 
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
     };
 
 MOD_INIT()
@@ -76,7 +76,7 @@ CMD_FUNC(cmd_connect)
 		sendnumeric(client, ERR_NOPRIVILEGES);
 		return;
 	}
-	if (hunt_server(client, recv_mtags, ":%s CONNECT %s %s :%s", 3, parc, parv) != HUNTED_ISME)
+	if (hunt_server(client, recv_mtags, "CONNECT", 3, parc, parv) != HUNTED_ISME)
 		return;
 
 	if (parc < 2 || *parv[1] == '\0')
@@ -117,7 +117,7 @@ CMD_FUNC(cmd_connect)
 	/* Evaluate deny link */
 	for (deny = conf_deny_link; deny; deny = deny->next)
 	{
-		if (deny->flag.type == CRULE_ALL && match_simple(deny->mask, aconf->servername)
+		if (deny->flag.type == CRULE_ALL && unreal_mask_match_string(aconf->servername, deny->mask)
 			&& crule_eval(deny->rule))
 		{
 			sendnotice(client, "*** Connect: Disallowed by connection rule");
@@ -134,22 +134,5 @@ CMD_FUNC(cmd_connect)
 		    get_client_name(client, FALSE));
 	}
 
-	switch (retval = connect_server(aconf, client, NULL))
-	{
-	  case 0:
-		  sendnotice(client, "*** Trying to activate link with server %s[%s]...",
-		      aconf->servername, aconf->outgoing.hostname);
-		  break;
-	  case -1:
-		  sendnotice(client, "*** Couldn't connect to %s[%s]",
-		  	aconf->servername, aconf->outgoing.hostname);
-		  break;
-	  case -2:
-		  sendnotice(client, "*** Resolving hostname '%s'...",
-		  	aconf->outgoing.hostname);
-		  break;
-	  default:
-		  sendnotice(client, "*** Connection to %s[%s] failed: %s",
-		  	aconf->servername, aconf->outgoing.hostname, STRERROR(retval));
-	}
+	connect_server(aconf, client, NULL);
 }

@@ -7,7 +7,7 @@ dnl src/windows/unrealinst.iss
 dnl doc/Config.header
 dnl src/version.c.SH
 
-AC_INIT([unrealircd], [5.2.0.1], [https://bugs.unrealircd.org/], [], [https://unrealircd.org/])
+AC_INIT([unrealircd], [6.0.1.1], [https://bugs.unrealircd.org/], [], [https://unrealircd.org/])
 AC_CONFIG_SRCDIR([src/ircd.c])
 AC_CONFIG_HEADER([include/setup.h])
 AC_CONFIG_AUX_DIR([autoconf])
@@ -26,15 +26,15 @@ BUILDDIR_NOW="`pwd`"
 
 dnl Calculate the versions. Perhaps the use of expr is a little too extravagant
 # Generation version number (e.g.: X in X.Y.Z)
-UNREAL_VERSION_GENERATION=["5"]
+UNREAL_VERSION_GENERATION=["6"]
 AC_DEFINE_UNQUOTED([UNREAL_VERSION_GENERATION], [$UNREAL_VERSION_GENERATION], [Generation version number (e.g.: X for X.Y.Z)])
 
 # Major version number (e.g.: Y in X.Y.Z)
-UNREAL_VERSION_MAJOR=["2"]
+UNREAL_VERSION_MAJOR=["0"]
 AC_DEFINE_UNQUOTED([UNREAL_VERSION_MAJOR], [$UNREAL_VERSION_MAJOR], [Major version number (e.g.: Y for X.Y.Z)])
 
 # Minor version number (e.g.: Z in X.Y.Z)
-UNREAL_VERSION_MINOR=["0"]
+UNREAL_VERSION_MINOR=["1"]
 AC_DEFINE_UNQUOTED([UNREAL_VERSION_MINOR], [$UNREAL_VERSION_MINOR], [Minor version number (e.g.: Z for X.Y.Z)])
 
 # The version suffix such as a beta marker or release candidate
@@ -189,17 +189,25 @@ CFLAGS="$CFLAGS -funsigned-char"
 
 dnl Compiler -W checks...
 
+dnl == ADD THESE WARNINGS ==
+
 dnl We should be able to turn this on unconditionally:
 CFLAGS="$CFLAGS -Wall"
 
 dnl More warnings (if the compiler supports it):
 check_cc_flag([-Wextra], [CFLAGS="$CFLAGS -Wextra"])
 check_cc_flag([-Waggregate-return], [CFLAGS="$CFLAGS -Waggregate-return"])
+check_cc_flag([-Wformat-nonliteral], [CFLAGS="$CFLAGS -Wformat-nonliteral"])
+
 dnl The following few are more experimental, if they have false positives we'll have
 dnl to disable them:
 dnl Can't use this, too bad: check_cc_flag([-Wlogical-op], [CFLAGS="$CFLAGS -Wlogical-op"])
 check_cc_flag([-Wduplicated-cond], [CFLAGS="$CFLAGS -Wduplicated-cond"])
 check_cc_flag([-Wduplicated-branches], [CFLAGS="$CFLAGS -Wduplicated-branches"])
+
+check_cc_flag([-Wparentheses], [CFLAGS="$CFLAGS -Wparentheses"])
+
+dnl == REMOVE THESE WARNINGS ==
 
 dnl And now to filter out certain warnings:
 dnl [!] NOTE REGARDING THE check_cc_flag used by these:
@@ -247,12 +255,31 @@ check_cc_flag([-Wsign-compare], [CFLAGS="$CFLAGS -Wno-sign-compare"])
 dnl Don't warn about empty body, we use this, eg via Debug(()) or in if's.
 check_cc_flag([-Wempty-body], [CFLAGS="$CFLAGS -Wno-empty-body"])
 
-dnl This one fails with ircstrdup(var, staticstring)
-dnl Shame we have to turn it off completely...
-check_cc_flag([-Waddress], [CFLAGS="$CFLAGS -Wno-address"])
+dnl Yeah this old clang version is a bit problematic
+dnl (ships in Ubuntu 16.04 for example)
+dnl -Wtautological-compare has false positives
+dnl -Wno-pragmas is needed, despite -Wno-unknown-warning-option
+AS_IF([$CC --version | grep -q "clang version 3."],
+        [CFLAGS="$CFLAGS -Wno-tautological-compare -Wno-pragmas"])
 
-dnl This one breaks our TO_INTFUNC() that is used in m_tkl for tkl_typetochar
-check_cc_flag([-Wcast-function-type], [CFLAGS="$CFLAGS -Wno-cast-function-type"])
+dnl This one MUST be LAST!!
+dnl It disables -Wsomeunknownoption being an error. Which is needed for
+dnl the pragma's in individual files to selectively disable some warnings
+dnl on clang/gcc (that may exist in eg gcc but not in clang or vice versa).
+check_cc_flag([-Wpragmas], [no_pragmas=1],[no_pragmas=0])
+check_cc_flag([-Wunknown-warning-option], [unknown_warning_option=1], [unknown_warning_option=0])
+
+if test "$unknown_warning_option" = "1"; then
+	dnl This is the best option
+	CFLAGS="$CFLAGS -Wno-unknown-warning-option"
+else
+	if test "$no_pragmas" = "1"; then
+		dnl This is a fallback needed for older gcc/clang, it also
+		dnl disables several other useful warnings/errors related
+		dnl to pragma's unfortunately.
+		CFLAGS="$CFLAGS -Wno-pragmas"
+	fi
+fi
 
 dnl End of -W... compiler checks.
 
@@ -352,6 +379,8 @@ AC_CHECK_FUNCS(strlcat,
 	AC_DEFINE([HAVE_STRLCAT], [], [Define if you have strlcat]))
 AC_CHECK_FUNCS(strlncat,
 	AC_DEFINE([HAVE_STRLNCAT], [], [Define if you have strlncat]))
+AC_CHECK_FUNCS(strlncpy,
+	AC_DEFINE([HAVE_STRLNCPY], [], [Define if you have strlncpy]))
 
 AC_CHECK_FUNCS([getrusage],
 	[AC_DEFINE([GETRUSAGE_2], [], [Define if you have getrusage])],
@@ -492,17 +521,6 @@ AC_ARG_WITH(maxconnections, [AS_HELP_STRING([--with-maxconnections=size], [Speci
 	[ac_fd=0])
 AC_DEFINE_UNQUOTED([MAXCONNECTIONS_REQUEST], [$ac_fd], [Set to the maximum number of connections you want])
 
-AC_ARG_ENABLE([prefixaq],
-	[AS_HELP_STRING([--disable-prefixaq],[Disable chanadmin (+a) and chanowner (+q) prefixes])],
-	[],
-	[enable_prefixaq=yes])
-AS_IF([test $enable_prefixaq = "yes"],
-	[AC_DEFINE([PREFIX_AQ], [], [Define if you want +a/+q prefixes])])
-
-AC_ARG_WITH(showlistmodes,
-	[AS_HELP_STRING([--with-showlistmodes], [Specify whether modes are shown in /list])],
-	[AS_IF([test $withval = "yes"],
-		[AC_DEFINE([LIST_SHOW_MODES], [], [Define if you want modes shown in /list])])])
 AC_ARG_WITH(no-operoverride, [AS_HELP_STRING([--with-no-operoverride], [Disable OperOverride])],
 	[AS_IF([test $withval = "yes"],
 		[AC_DEFINE([NO_OPEROVERRIDE], [], [Define if you want OperOverride disabled])])])
@@ -513,6 +531,7 @@ AC_ARG_WITH(system-pcre2, [AS_HELP_STRING([--without-system-pcre2], [Use the sys
 AC_ARG_WITH(system-argon2, [AS_HELP_STRING([--without-system-argon2], [Use bundled version instead of system argon2 library. Normally autodetected via pkg-config])], [], [with_system_argon2=yes])
 AC_ARG_WITH(system-sodium, [AS_HELP_STRING([--without-system-sodium], [Use bundled version instead of system sodium library. Normally autodetected via pkg-config])], [], [with_system_sodium=yes])
 AC_ARG_WITH(system-cares, [AS_HELP_STRING([--without-system-cares], [Use bundled version instead of system c-ares. Normally autodetected via pkg-config.])], [], [with_system_cares=yes])
+AC_ARG_WITH(system-jansson, [AS_HELP_STRING([--without-system-jansson], [Use bundled version instead of system jansson. Normally autodetected via pkg-config.])], [], [with_system_jansson=yes])
 CHECK_SSL
 CHECK_SSL_CTX_SET1_CURVES_LIST
 CHECK_SSL_CTX_SET_MIN_PROTO_VERSION
@@ -697,7 +716,7 @@ AS_IF([test "$has_system_cares" = "no"], [
 dnl REMEMBER TO CHANGE WITH A NEW C-ARES RELEASE!
 dnl NOTE: when changing this here, ALSO change it in extras/curlinstall
 dnl       and in the comment in this file around line 400!
-cares_version="1.17.1"
+cares_version="1.17.2"
 AC_MSG_RESULT(extracting c-ares resolver library)
 cur_dir=`pwd`
 cd extras
@@ -763,9 +782,64 @@ AC_SUBST(CARES_LIBS)
 cd $cur_dir
 ])
 
+dnl Use system jansson when available, unless --without-system-jansson
+has_system_jansson="no"
+AS_IF([test "x$with_system_jansson" = "xyes"],[
+PKG_CHECK_MODULES([JANSSON], [jansson >= 2.0.0],[has_system_jansson=yes
+AS_IF([test "x$PRIVATELIBDIR" != "x"], [rm -f "$PRIVATELIBDIR/"libjansson*])],[has_system_jansson=no])])
+
+AS_IF([test "$has_system_jansson" = "no"],[
+dnl REMEMBER TO CHANGE WITH A NEW JANSSON RELEASE!
+jansson_version="2.13.1"
+AC_MSG_RESULT(extracting jansson library)
+cur_dir=`pwd`
+cd extras
+dnl remove old jansson directory to force a recompile...
+dnl and remove its installation prefix just to clean things up.
+rm -rf jansson-$jansson_version jansson
+if test "x$ac_cv_path_GUNZIP" = "x" ; then
+	tar xfz jansson.tar.gz
+else
+	cp jansson.tar.gz jansson.tar.gz.bak
+	gunzip -f jansson.tar.gz
+	cp jansson.tar.gz.bak jansson.tar.gz
+	tar xf jansson.tar
+fi
+AC_MSG_RESULT(compiling jansson library)
+cd jansson-$jansson_version
+save_cflags="$CFLAGS"
+CFLAGS="$orig_cflags"
+export CFLAGS
+./configure --prefix=$cur_dir/extras/jansson --libdir=$PRIVATELIBDIR --enable-shared --disable-static --enable-opt || exit 1
+CFLAGS="$save_cflags"
+AC_MSG_RESULT(compiling jansson resolver library)
+$ac_cv_prog_MAKER || exit 1
+AC_MSG_RESULT(installing jansson resolver library)
+$ac_cv_prog_MAKER install || exit 1
+JANSSON_CFLAGS="-I$cur_dir/extras/jansson/include"
+AC_SUBST(JANSSON_CFLAGS)
+JANSSON_LIBS=
+dnl See c-ares's compilation section for more info on this hack.
+dnl ensure that we're linking against the bundled version
+dnl (we only reach this code if linking against the bundled version is desired).
+AS_IF([test -n "$ac_cv_path_PKGCONFIG"],
+       [JANSSON_LIBS="`$ac_cv_path_PKGCONFIG --libs jansson.pc`"])
+dnl ^^^ FIXME FIXME this is likely incorrect the .pc etc
+dnl For when pkg-config isn't available
+AS_IF([test -z "$JANSSON_LIBS"],
+       [JANSSON_LIBS="-L$PRIVATELIBDIR -ljansson"])
+AC_SUBST(JANSSON_LIBS)
+cd $cur_dir
+])
+
+
 AX_PTHREAD()
 
 CHECK_LIBCURL
+
+CHECK_GEOIP_CLASSIC
+
+CHECK_LIBMAXMINDDB
 
 UNRLINCDIR="`pwd`/include"
 
@@ -789,7 +863,6 @@ AC_CONFIG_FILES([Makefile
 	src/modules/Makefile
 	src/modules/chanmodes/Makefile
 	src/modules/usermodes/Makefile
-	src/modules/snomasks/Makefile
 	src/modules/extbans/Makefile
 	src/modules/third/Makefile
 	extras/unrealircd-upgrade-script

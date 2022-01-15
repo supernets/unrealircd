@@ -77,8 +77,7 @@ VOID WINAPI IRCDCtrlHandler(DWORD opcode)
 	/* Rehash */
 	else if (opcode == IRCD_SERVICE_CONTROL_REHASH) 
 	{
-		rehash(&me,0);
-		reread_motdsandrules();
+		request_rehash(NULL);
 	}
 
 	SetServiceStatus(IRCDStatusHandle, &IRCDStatus);
@@ -112,7 +111,7 @@ VOID WINAPI ServiceMain(DWORD dwArgc, LPTSTR *lpszArgv)
 	chdir(path);
 
 	/* Go one level up, since we are currently in the bin\ subdir
-	 * and we want to be in (f.e.) "C:\Program Files\UnrealIRCd 5"
+	 * and we want to be in (f.e.) "C:\Program Files\UnrealIRCd 6"
 	 */
 	chdir("..");
 

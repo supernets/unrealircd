@@ -60,13 +60,15 @@ HistoryBackend *HistoryBackendAdd(Module *module, HistoryBackendInfo *mreq)
 {
 	HistoryBackend *m;
 	int exists = 0;
+	ModuleObject *mobj;
 
 	if (!mreq->history_add || !mreq->history_request ||
 	    !mreq->history_destroy || !mreq->history_set_limit)
 	{
-		if (module)
-			module->errorcode = MODERR_INVALID;
-		ircd_log(LOG_ERROR, "HistoryBackendAdd(): missing a handler for add/del/request/destroy/set_limit");
+		module->errorcode = MODERR_INVALID;
+		unreal_log(ULOG_ERROR, "module", "HISTORYBACKENDADD_API_ERROR", NULL,
+			   "HistoryBackendAdd(): missing a handler for add/del/request/destroy/set_limit. Module: $module_name",
+			   log_data_string("module_name", module->header->name));
 		return NULL;
 	}
 	m = HistoryBackendFind(mreq->name);
@@ -77,8 +79,7 @@ HistoryBackend *HistoryBackendAdd(Module *module, HistoryBackendInfo *mreq)
 		{
 			m->unloaded = 0;
 		} else {
-			if (module)
-				module->errorcode = MODERR_EXISTS;
+			module->errorcode = MODERR_EXISTS;
 			return NULL;
 		}
 	} else {
@@ -97,14 +98,11 @@ HistoryBackend *HistoryBackendAdd(Module *module, HistoryBackendInfo *mreq)
 	if (!exists)
 		AddListItem(m, historybackends);
 
-	if (module)
-	{
-		ModuleObject *mobj = safe_alloc(sizeof(ModuleObject));
-		mobj->type = MOBJ_HISTORY_BACKEND;
-		mobj->object.history_backend = m;
-		AddListItem(mobj, module->objects);
-		module->errorcode = MODERR_NOERROR;
-	}
+	mobj = safe_alloc(sizeof(ModuleObject));
+	mobj->type = MOBJ_HISTORY_BACKEND;
+	mobj->object.history_backend = m;
+	AddListItem(mobj, module->objects);
+	module->errorcode = MODERR_NOERROR;
 
 	return m;
 }
@@ -138,7 +136,7 @@ void HistoryBackendDel(HistoryBackend *m)
 		m->owner = NULL;
 	}
 
-	if (loop.ircd_rehashing)
+	if (loop.rehashing)
 		m->unloaded = 1;
 	else
 		unload_history_backend_commit(m);
@@ -156,7 +154,7 @@ void unload_all_unused_history_backends(void)
 	}
 }
 
-int history_add(char *object, MessageTag *mtags, char *line)
+int history_add(const char *object, MessageTag *mtags, const char *line)
 {
 	HistoryBackend *hb;
 
@@ -166,7 +164,7 @@ int history_add(char *object, MessageTag *mtags, char *line)
 	return 1;
 }
 
-HistoryResult *history_request(char *object, HistoryFilter *filter)
+HistoryResult *history_request(const char *object, HistoryFilter *filter)
 {
 	HistoryBackend *hb = historybackends;
 	HistoryResult *r;
@@ -183,7 +181,7 @@ HistoryResult *history_request(char *object, HistoryFilter *filter)
 	return NULL;
 }
 
-int history_destroy(char *object)
+int history_destroy(const char *object)
 {
 	HistoryBackend *hb;
 
@@ -193,7 +191,7 @@ int history_destroy(char *object)
 	return 1;
 }
 
-int history_set_limit(char *object, int max_lines, long max_t)
+int history_set_limit(const char *object, int max_lines, long max_t)
 {
 	HistoryBackend *hb;
 
@@ -230,7 +228,7 @@ int can_receive_history(Client *client)
 	return 0;
 }
 
-static void history_send_result_line(Client *client, HistoryLogLine *l, char *batchid)
+static void history_send_result_line(Client *client, HistoryLogLine *l, const char *batchid)
 {
 	if (BadPtr(batchid))
 	{
@@ -238,9 +236,10 @@ static void history_send_result_line(Client *client, HistoryLogLine *l, char *ba
 	} else {
 		MessageTag *m = safe_alloc(sizeof(MessageTag));
 		m->name = "batch";
-		m->value = batchid;
+		m->value = strdup(batchid);
 		AddListItem(m, l->mtags);
 		sendto_one(client, l->mtags, "%s", l->line);
+		safe_free(m->value);
 		DelListItem(m, l->mtags);
 		safe_free(m);
 	}

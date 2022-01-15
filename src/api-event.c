@@ -45,7 +45,7 @@ extern EVENT(unrealdb_expire_secret_cache);
  *        can be later, in case of high load, in very extreme cases even up to 1000 or 2000
  *        msec later but that would be very unusual. Just saying, it's not a guarantee..
  */
-Event *EventAdd(Module *module, char *name, vFP event, void *data, long every_msec, int count)
+Event *EventAdd(Module *module, const char *name, vFP event, void *data, long every_msec, int count)
 {
 	Event *newevent;
 
@@ -54,16 +54,6 @@ Event *EventAdd(Module *module, char *name, vFP event, void *data, long every_ms
 		if (module)
 			module->errorcode = MODERR_INVALID;
 		return NULL;
-	}
-
-	if ((every_msec < 100) && (count == 0))
-	{
-		ircd_log(LOG_ERROR, "[BUG] EventAdd() '%s' from module '%s' with suspiciously low every_msec value (%ld). "
-		                    "Note that it is in milliseconds now (1000 = 1 second)!",
-		                    name,
-		                    module ? module->header->name : "???",
-		                    every_msec);
-		every_msec = 100;
 	}
 
 	newevent = safe_alloc(sizeof(Event));
@@ -128,12 +118,16 @@ static void EventDelReal(Event *e)
 {
 	if (!e->deleted)
 	{
-		ircd_log(LOG_ERROR, "EventDelReal called while e->deleted is 0. This cannot happen. Event name: %s.", e->name);
+		unreal_log(ULOG_FATAL, "module", "BUG_EVENTDELREAL_ZERO", NULL,
+		           "[BUG] EventDelReal called while e->deleted is 0. This cannot happen. Event name: $event_name",
+		           log_data_string("event_name", e->name));
 		abort();
 	}
 	if (e->owner)
 	{
-		ircd_log(LOG_ERROR, "EventDelReal called while e->owner is non-NULL. This cannot happen. Event name: %s.", e->name);
+		unreal_log(ULOG_FATAL, "module", "BUG_EVENTDELREAL_NULL", NULL,
+		           "[BUG] EventDelReal called while e->owner is NULL. This cannot happen. Event name: $event_name",
+		           log_data_string("event_name", e->name));
 		abort();
 	}
 	safe_free(e->name);
@@ -153,7 +147,7 @@ static void CleanupEvents(void)
 	}
 }
 
-Event *EventFind(char *name)
+Event *EventFind(const char *name)
 {
 	Event *eventptr;
 
@@ -173,19 +167,7 @@ int EventMod(Event *event, EventInfo *mods)
 	}
 
 	if (mods->flags & EMOD_EVERY)
-	{
-		if (mods->every_msec < 100)
-		{
-			ircd_log(LOG_ERROR, "[BUG] EventMod() for '%s' from module '%s' with suspiciously low every_msec value (%lld). "
-					    "Note that it is in milliseconds now (1000 = 1 second)!",
-					    event->name,
-					    event->owner ? event->owner->header->name : "???",
-					    (long long)mods->every_msec);
-			mods->every_msec = 100;
-		}
-
 		event->every_msec = mods->every_msec;
-	}
 	if (mods->flags & EMOD_HOWMANY)
 		event->count = mods->count;
 	if (mods->flags & EMOD_NAME)
@@ -240,7 +222,7 @@ void SetupEvents(void)
 	EventAdd(NULL, "check_pings", check_pings, NULL, 1000, 0);
 	EventAdd(NULL, "check_deadsockets", check_deadsockets, NULL, 1000, 0);
 	EventAdd(NULL, "handshake_timeout", handshake_timeout, NULL, 1000, 0);
-	EventAdd(NULL, "try_connections", try_connections, NULL, 2000, 0);
 	EventAdd(NULL, "tls_check_expiry", tls_check_expiry, NULL, (86400/2)*1000, 0);
 	EventAdd(NULL, "unrealdb_expire_secret_cache", unrealdb_expire_secret_cache, NULL, 61000, 0);
+	EventAdd(NULL, "throttling_check_expire", throttling_check_expire, NULL, 1000, 0);
 }

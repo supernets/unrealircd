@@ -39,6 +39,7 @@
 #include <openssl/rand.h>
 #include <openssl/md5.h>
 #include <openssl/ripemd.h>
+#include <jansson.h>
 #include "common.h"
 #include "sys.h"
 #include <stdio.h>
@@ -54,6 +55,14 @@
 # ifdef SYSSYSLOGH
 #  include <sys/syslog.h>
 # endif
+#ifndef UNREAL_LOGGER_CODE
+/* undef these as they cause confusion with our ULOG_xxx codes */
+#undef LOG_DEBUG
+#undef LOG_INFO
+#undef LOG_WARNING
+#undef LOG_ERROR
+#undef LOG_FATAL
+#endif
 #endif
 #define PCRE2_CODE_UNIT_WIDTH 8
 #include "pcre2.h"
@@ -92,19 +101,15 @@ typedef struct ConfigFlag_allow ConfigFlag_allow;
 typedef struct ConfigItem_allow_channel ConfigItem_allow_channel;
 typedef struct ConfigItem_allow_dcc ConfigItem_allow_dcc;
 typedef struct ConfigItem_vhost ConfigItem_vhost;
-typedef struct ConfigItem_except ConfigItem_except;
 typedef struct ConfigItem_link	ConfigItem_link;
 typedef struct ConfigItem_ban ConfigItem_ban;
 typedef struct ConfigItem_deny_dcc ConfigItem_deny_dcc;
 typedef struct ConfigItem_deny_link ConfigItem_deny_link;
 typedef struct ConfigItem_deny_channel ConfigItem_deny_channel;
 typedef struct ConfigItem_deny_version ConfigItem_deny_version;
-typedef struct ConfigItem_log ConfigItem_log;
-typedef struct ConfigItem_unknown ConfigItem_unknown;
-typedef struct ConfigItem_unknown_ext ConfigItem_unknown_ext;
 typedef struct ConfigItem_alias ConfigItem_alias;
 typedef struct ConfigItem_alias_format ConfigItem_alias_format;
-typedef struct ConfigItem_include ConfigItem_include;
+typedef struct ConfigResource ConfigResource;
 typedef struct ConfigItem_blacklist_module ConfigItem_blacklist_module;
 typedef struct ConfigItem_help ConfigItem_help;
 typedef struct ConfigItem_offchans ConfigItem_offchans;
@@ -129,9 +134,6 @@ typedef struct Mode Mode;
 typedef struct MessageTag MessageTag;
 typedef struct MOTDFile MOTDFile; /* represents a whole MOTD, including remote MOTD support info */
 typedef struct MOTDLine MOTDLine; /* one line of a MOTD stored as a linked list */
-#ifdef USE_LIBCURL
-typedef struct MOTDDownload MOTDDownload; /* used to coordinate download of a remote MOTD */
-#endif
 
 typedef struct RealCommand RealCommand;
 typedef struct CommandOverride CommandOverride;
@@ -163,13 +165,11 @@ typedef OperPermission (*OperClassEntryEvalCallback)(OperClassACLEntryVar* varia
 #include "dbuf.h"		/* THIS REALLY SHOULDN'T BE HERE!!! --msa */
 #endif
 
-#define	HOSTLEN		63	/* Length of hostname.  Updated to         */
-				/* comply with RFC1123                     */
-
+#define	HOSTLEN		63	/* Length of hostname */
 #define	NICKLEN		30
 #define	USERLEN		10
 #define	REALLEN	 	50
-#define SVIDLEN		30
+#define ACCOUNTLEN	30
 #define MAXTOPICLEN	360	/* absolute maximum permitted topic length (above this = potential desync) */
 #define MAXAWAYLEN	360	/* absolute maximum permitted away length (above this = potential desync) */
 #define MAXKICKLEN	360	/* absolute maximum kick length (above this = only cutoff danger) */
@@ -182,8 +182,8 @@ typedef OperPermission (*OperClassEntryEvalCallback)(OperClassACLEntryVar* varia
 #define READBUFSIZE	8192	/* for the read buffer */
 #define	MAXRECIPIENTS 	20
 #define	MAXSILELENGTH	NICKLEN+USERLEN+HOSTLEN+10
-#define IDLEN		10
-#define SIDLEN           3
+#define IDLEN		12
+#define SIDLEN		3
 #define SWHOISLEN	256
 #define UMODETABLESZ (sizeof(long) * 8)
 #define MAXCCUSERS		20 /* Maximum for set::anti-flood::max-concurrent-conversations */
@@ -203,16 +203,77 @@ typedef OperPermission (*OperClassEntryEvalCallback)(OperClassACLEntryVar* varia
 /* Logging types */
 #define LOG_ERROR 0x0001
 #define LOG_KILL  0x0002
-#define LOG_TKL   0x0004
-#define LOG_KLINE 0x0008
-#define LOG_CLIENT 0x0010
-#define LOG_SERVER 0x0020
-#define LOG_OPER   0x0040
 #define LOG_SACMDS 0x0080
 #define LOG_CHGCMDS 0x0100
 #define LOG_OVERRIDE 0x0200
-#define LOG_SPAMFILTER 0x0400
-#define LOG_FLOOD 0x0800
+
+typedef enum LogFieldType {
+	LOG_FIELD_INTEGER, // and unsigned?
+	LOG_FIELD_STRING,
+	LOG_FIELD_CLIENT,
+	LOG_FIELD_CHANNEL,
+	LOG_FIELD_OBJECT
+} LogFieldType;
+
+typedef struct LogData {
+	LogFieldType type;
+	char *key;
+	union {
+		int64_t integer;
+		char *string;
+		Client *client;
+		Channel *channel;
+		json_t *object;
+	} value;
+} LogData;
+
+/** New log levels for unreal_log() */
+/* Note: the reason for these high numbers is so we can easily catch
+ * if someone makes a mistake to use LOG_INFO (from syslog.h) instead
+ * of the ULOG_xxx levels.
+ */
+typedef enum LogLevel {
+	ULOG_INVALID = 0,
+	ULOG_DEBUG = 1000,
+	ULOG_INFO = 2000,
+	ULOG_WARNING = 3000,
+	ULOG_ERROR = 4000,
+	ULOG_FATAL = 5000
+} LogLevel;
+
+/** Logging types (text, json, etc) */
+typedef enum LogType {
+	LOG_TYPE_INVALID = 0,
+	LOG_TYPE_TEXT = 1,
+	LOG_TYPE_JSON = 2,
+} LogType;
+
+#define LOG_CATEGORY_LEN	32
+#define LOG_EVENT_ID_LEN	64
+typedef struct LogSource LogSource;
+struct LogSource {
+	LogSource *prev, *next;
+	LogLevel loglevel;
+	char negative; /**< 1 if negative match (eg !operoverride), 0 if normal */
+	char subsystem[LOG_CATEGORY_LEN+1];
+	char event_id[LOG_EVENT_ID_LEN+1];
+};
+
+typedef struct Log Log;
+struct Log {
+	Log *prev, *next;
+	LogSource *sources;
+	char destination[CHANNELLEN+1];
+	char *file;
+	char *filefmt;
+	long maxsize;
+	int type;
+	int logfd;
+};
+
+/** This is used for deciding the <index> in logs[<index>] and temp_logs[<index>] */
+typedef enum LogDestination { LOG_DEST_SNOMASK=0, LOG_DEST_OPER=1, LOG_DEST_REMOTE=2, LOG_DEST_CHANNEL=3, LOG_DEST_DISK=4 } LogDestination;
+#define NUM_LOG_DESTINATIONS 5
 
 /*
 ** 'offsetof' is defined in ANSI-C. The following definition
@@ -251,7 +312,7 @@ typedef OperPermission (*OperClassEntryEvalCallback)(OperClassACLEntryVar* varia
 
 /** This specifies the current client status or the client type - see @link ClientStatus @endlink in particular.
  * You may think "server" or "client" are the only choices here, but there are many more
- * such as states where the user is in the middle of an SSL/TLS handshake.
+ * such as states where the user is in the middle of an TLS handshake.
  * @defgroup ClientStatuses Client statuses / types
  * @{
  */
@@ -259,8 +320,8 @@ typedef enum ClientStatus {
 	CLIENT_STATUS_LOG			= -7,	/**< Client is a log file */
 	CLIENT_STATUS_TLS_STARTTLS_HANDSHAKE	= -8,	/**< Client is doing a STARTTLS handshake */
 	CLIENT_STATUS_CONNECTING		= -6,	/**< Client is an outgoing connect */
-	CLIENT_STATUS_TLS_CONNECT_HANDSHAKE	= -5,	/**< Client is doing an SSL/TLS handshake - outgoing connection */
-	CLIENT_STATUS_TLS_ACCEPT_HANDSHAKE	= -4,	/**< Client is doing an SSL/TLS handshake - incoming connection */
+	CLIENT_STATUS_TLS_CONNECT_HANDSHAKE	= -5,	/**< Client is doing an TLS handshake - outgoing connection */
+	CLIENT_STATUS_TLS_ACCEPT_HANDSHAKE	= -4,	/**< Client is doing an TLS handshake - incoming connection */
 	CLIENT_STATUS_HANDSHAKE			= -3,	/**< Client is doing a server handshake - outgoing connection */
 	CLIENT_STATUS_ME			= -2,	/**< Client is &me (this server) */
 	CLIENT_STATUS_UNKNOWN			= -1,	/**< Client is doing a hanshake. May become a server or user later, we don't know yet */
@@ -325,16 +386,17 @@ typedef enum ClientStatus {
 #define CLIENT_FLAG_DCCNOTICE		0x00200000	/**< Has the user seen a notice on how to use DCCALLOW already? */
 #define CLIENT_FLAG_SHUNNED		0x00400000	/**< Connection is shunned (user cannot execute any commands) */
 #define CLIENT_FLAG_VIRUS		0x00800000	/**< Tagged by spamfilter as a virus */
-#define CLIENT_FLAG_TLS			0x01000000	/**< Connection is using SSL/TLS */
+#define CLIENT_FLAG_TLS			0x01000000	/**< Connection is using TLS */
 #define CLIENT_FLAG_NOFAKELAG		0x02000000	/**< Exemption from fake lag */
 #define CLIENT_FLAG_DCCBLOCK		0x04000000	/**< Block all DCC send requests */
 #define CLIENT_FLAG_MAP			0x08000000	/**< Show this entry in /MAP (only used in map module) */
 #define CLIENT_FLAG_PINGWARN		0x10000000	/**< Server ping warning (remote server slow with responding to PINGs) */
 #define CLIENT_FLAG_NOHANDSHAKEDELAY	0x20000000	/**< No handshake delay */
+#define CLIENT_FLAG_SERVER_DISCONNECT_LOGGED	0x40000000	/**< Server disconnect message is (already) logged */
+
 /** @} */
 
-#define SNO_DEFOPER "+kscfvGqobS"
-#define SNO_DEFUSER "+ks"
+#define OPER_SNOMASKS "+bBcdfkqsSoO"
 
 #define SEND_UMODES (SendUmodes)
 #define ALL_UMODES (AllUmodes)
@@ -346,13 +408,14 @@ typedef enum ClientStatus {
  * Note that client protocol extensions have been moved
  * to the ClientCapability API which uses acptr->local->caps.
  */
-#define PROTO_VL	0x000040	/* Negotiated VL protocol */
-#define PROTO_VHP	0x000100	/* Send hostnames in NICKv2 even if not sethosted */
-#define PROTO_CLK	0x001000	/* Send cloaked host in the NICK command (regardless of +x/-x) */
-#define PROTO_MLOCK	0x002000	/* server supports MLOCK */
-#define PROTO_EXTSWHOIS 0x004000	/* extended SWHOIS support */
-#define PROTO_SJSBY	0x008000	/* SJOIN setby information (TS and nick) */
-#define PROTO_MTAGS	0x010000	/* Support message tags and big buffers */
+#define PROTO_VL	0x000001	/* Negotiated VL protocol */
+#define PROTO_VHP	0x000002	/* Send hostnames in NICKv2 even if not sethosted */
+#define PROTO_CLK	0x000004	/* Send cloaked host in the NICK command (regardless of +x/-x) */
+#define PROTO_MLOCK	0x000008	/* server supports MLOCK */
+#define PROTO_EXTSWHOIS 0x000010	/* extended SWHOIS support */
+#define PROTO_SJSBY	0x000020	/* SJOIN setby information (TS and nick) */
+#define PROTO_MTAGS	0x000040	/* Support message tags and big buffers */
+#define PROTO_NEXTBANS	0x000080	/* Server supports named extended bans */
 
 /* For client capabilities: */
 #define CAP_INVERT	1L
@@ -368,40 +431,20 @@ typedef enum ClientStatus {
 #define IsDeaf(x)               ((x)->umodes & UMODE_DEAF)
 #define	IsOper(x)		((x)->umodes & UMODE_OPER)
 #define	IsInvisible(x)		((x)->umodes & UMODE_INVISIBLE)
-#define IsARegNick(x)		((x)->umodes & (UMODE_REGNICK))
 #define IsRegNick(x)		((x)->umodes & UMODE_REGNICK)
-#define	SendWallops(x)		(!IsMe(x) && IsUser(x) && ((x)->umodes & UMODE_WALLOP))
 #define IsHidden(x)             ((x)->umodes & UMODE_HIDE)
 #define IsSetHost(x)		((x)->umodes & UMODE_SETHOST)
 #define IsHideOper(x)		((x)->umodes & UMODE_HIDEOPER)
 #define	SetOper(x)		((x)->umodes |= UMODE_OPER)
 #define	SetInvisible(x)		((x)->umodes |= UMODE_INVISIBLE)
-#define	SetWallops(x)  		((x)->umodes |= UMODE_WALLOP)
 #define SetRegNick(x)		((x)->umodes & UMODE_REGNICK)
 #define SetHidden(x)            ((x)->umodes |= UMODE_HIDE)
 #define SetHideOper(x)		((x)->umodes |= UMODE_HIDEOPER)
 #define IsSecureConnect(x)	((x)->umodes & UMODE_SECURE)
 #define	ClearOper(x)		((x)->umodes &= ~UMODE_OPER)
 #define	ClearInvisible(x)	((x)->umodes &= ~UMODE_INVISIBLE)
-#define	ClearWallops(x)		((x)->umodes &= ~UMODE_WALLOP)
 #define ClearHidden(x)          ((x)->umodes &= ~UMODE_HIDE)
 #define ClearHideOper(x)	((x)->umodes &= ~UMODE_HIDEOPER)
-
-/* Snomask macros: */
-#define	SendServNotice(x)	(((x)->user) && ((x)->user->snomask & SNO_SNOTICE))
-#define IsKillsF(x)		((x)->user->snomask & SNO_KILLS)
-#define IsClientF(x)		((x)->user->snomask & SNO_CLIENT)
-#define IsFloodF(x)		((x)->user->snomask & SNO_FLOOD)
-#define IsEyes(x)		((x)->user->snomask & SNO_EYES)
-#define SetKillsF(x)		((x)->user->snomask |= SNO_KILLS)
-#define SetClientF(x)		((x)->user->snomask |= SNO_CLIENT)
-#define SetFloodF(x)		((x)->user->snomask |= SNO_FLOOD)
-#define SetEyes(x)		((x)->user->snomask |= SNO_EYES)
-#define ClearKillsF(x)		((x)->user->snomask &= ~SNO_KILLS)
-#define ClearClientF(x)		((x)->user->snomask &= ~SNO_CLIENT)
-#define ClearFloodF(x)		((x)->user->snomask &= ~SNO_FLOOD)
-#define ClearEyes(x)		((x)->user->snomask &= ~SNO_EYES)
-
 
 /* Client flags macros: to check for via IsXX(),
  * to set via SetXX() and to clear the flag via ClearXX()
@@ -416,6 +459,7 @@ typedef enum ClientStatus {
 #define IsDCCNotice(x)			((x)->flags & CLIENT_FLAG_DCCNOTICE)
 #define IsDead(x)			((x)->flags & CLIENT_FLAG_DEAD)
 #define IsDeadSocket(x)			((x)->flags & CLIENT_FLAG_DEADSOCKET)
+#define IsServerDisconnectLogged(x)	((x)->flags & CLIENT_FLAG_SERVER_DISCONNECT_LOGGED)
 #define IsUseIdent(x)			((x)->flags & CLIENT_FLAG_USEIDENT)
 #define IsDNSLookup(x)			((x)->flags & CLIENT_FLAG_DNSLOOKUP)
 #define IsEAuth(x)			((x)->flags & CLIENT_FLAG_EAUTH)
@@ -447,6 +491,7 @@ typedef enum ClientStatus {
 #define SetDCCNotice(x)			do { (x)->flags |= CLIENT_FLAG_DCCNOTICE; } while(0)
 #define SetDead(x)			do { (x)->flags |= CLIENT_FLAG_DEAD; } while(0)
 #define SetDeadSocket(x)		do { (x)->flags |= CLIENT_FLAG_DEADSOCKET; } while(0)
+#define SetServerDisconnectLogged(x)	do { (x)->flags |= CLIENT_FLAG_SERVER_DISCONNECT_LOGGED; } while(0)
 #define SetUseIdent(x)			do { (x)->flags |= CLIENT_FLAG_USEIDENT; } while(0)
 #define SetDNSLookup(x)			do { (x)->flags |= CLIENT_FLAG_DNSLOOKUP; } while(0)
 #define SetEAuth(x)			do { (x)->flags |= CLIENT_FLAG_EAUTH; } while(0)
@@ -508,9 +553,9 @@ typedef enum ClientStatus {
 #define	IsNotSpoof(x)	((x)->local->nospoof == 0)
 #define GetHost(x)	(IsHidden(x) ? (x)->user->virthost : (x)->user->realhost)
 #define GetIP(x)	(x->ip ? x->ip : "255.255.255.255")
-#define IsLoggedIn(x)	(IsRegNick(x) || (x->user && (*x->user->svid != '*') && !isdigit(*x->user->svid))) /* registered nick (+r) or just logged into services (may be -r) */
-#define IsSynched(x)	(x->serv->flags.synced)
-#define IsServerSent(x) (x->serv && x->serv->flags.server_sent)
+#define IsLoggedIn(x)	(x->user && (*x->user->account != '*') && !isdigit(*x->user->account)) /**< Logged into services */
+#define IsSynched(x)	(x->server->flags.synced)
+#define IsServerSent(x) (x->server && x->server->flags.server_sent)
 
 /* And more that access client stuff - but actually modularized */
 #define GetReputation(client) (moddata_client_get(client, "reputation") ? atoi(moddata_client_get(client, "reputation")) : 0) /**< Get reputation value for a client */
@@ -527,33 +572,14 @@ typedef enum ClientStatus {
 #define SupportVHP(x)		(CHECKSERVERPROTO(x, PROTO_VHP))
 #define SupportCLK(x)		(CHECKSERVERPROTO(x, PROTO_CLK))
 #define SupportMTAGS(x)		(CHECKSERVERPROTO(x, PROTO_MTAGS))
+#define SupportNEXTBANS(x)	(CHECKSERVERPROTO(x, PROTO_NEXTBANS))
 
 #define SetVL(x)		((x)->local->proto |= PROTO_VL)
 #define SetSJSBY(x)		((x)->local->proto |= PROTO_SJSBY)
 #define SetVHP(x)		((x)->local->proto |= PROTO_VHP)
 #define SetCLK(x)		((x)->local->proto |= PROTO_CLK)
 #define SetMTAGS(x)		((x)->local->proto |= PROTO_MTAGS)
-
-/*
- * defined debugging levels
- */
-#define	DEBUG_FATAL  0
-#define	DEBUG_ERROR  1		/* report_error() and other errors that are found */
-#define	DEBUG_NOTICE 3
-#define	DEBUG_DNS    4		/* used by all DNS related routines - a *lot* */
-#define	DEBUG_INFO   5		/* general usful info */
-#define	DEBUG_NUM    6		/* numerics */
-#define	DEBUG_SEND   7		/* everything that is sent out */
-#define	DEBUG_DEBUG  8		/* anything to do with debugging, ie unimportant :) */
-#define	DEBUG_MALLOC 9		/* malloc/free calls */
-#define	DEBUG_LIST  10		/* debug list use */
-
-/*
- * defines for curses in client
- */
-#define	DUMMY_TERM	0
-#define	CURSES_TERM	1
-#define	TERMCAP_TERM	2
+#define SetNEXTBANS(x)		((x)->local->proto |= PROTO_NEXTBANS)
 
 /* Dcc deny types (see src/s_extra.c) */
 #define DCCDENY_HARD	0
@@ -576,12 +602,20 @@ union ModData
 #ifndef _WIN32
  #define CHECK_LIST_ENTRY(list)		if (offsetof(typeof(*list),prev) != offsetof(ListStruct,prev)) \
 					{ \
-						ircd_log(LOG_ERROR, "[BUG] %s:%d: List operation on struct with incorrect order (->prev must be 1st struct member)", __FILE__, __LINE__); \
+						unreal_log(ULOG_FATAL, "main", "BUG_LIST_OPERATION", NULL, \
+						           "[BUG] $file:$line: List operation on struct with incorrect order ($error_details)", \
+						           log_data_string("error_details", "->prev must be 1st struct member"), \
+						           log_data_string("file", __FILE__), \
+						           log_data_integer("line", __LINE__)); \
 						abort(); \
 					} \
 					if (offsetof(typeof(*list),next) != offsetof(ListStruct,next)) \
 					{ \
-						ircd_log(LOG_ERROR, "[BUG] %s:%d: List operation on struct with incorrect order (->next must be 2nd struct member))", __FILE__, __LINE__); \
+						unreal_log(ULOG_FATAL, "main", "BUG_LIST_OPERATION", NULL, \
+						           "[BUG] $file:$line: List operation on struct with incorrect order ($error_details)", \
+						           log_data_string("error_details", "->next must be 2nd struct member"), \
+						           log_data_string("file", __FILE__), \
+						           log_data_integer("line", __LINE__)); \
 						abort(); \
 					}
 #else
@@ -591,17 +625,29 @@ union ModData
 #ifndef _WIN32
  #define CHECK_PRIO_LIST_ENTRY(list)	if (offsetof(typeof(*list),prev) != offsetof(ListStructPrio,prev)) \
 					{ \
-						ircd_log(LOG_ERROR, "[BUG] %s:%d: List operation on struct with incorrect order (->prev must be 1st struct member)", __FILE__, __LINE__); \
+						unreal_log(ULOG_FATAL, "main", "BUG_LIST_OPERATION", NULL, \
+						           "[BUG] $file:$line: List operation on struct with incorrect order ($error_details)", \
+						           log_data_string("error_details", "->prev must be 1st struct member"), \
+						           log_data_string("file", __FILE__), \
+						           log_data_integer("line", __LINE__)); \
 						abort(); \
 					} \
 					if (offsetof(typeof(*list),next) != offsetof(ListStructPrio,next)) \
 					{ \
-						ircd_log(LOG_ERROR, "[BUG] %s:%d: List operation on struct with incorrect order (->next must be 2nd struct member))", __FILE__, __LINE__); \
+						unreal_log(ULOG_FATAL, "main", "BUG_LIST_OPERATION", NULL, \
+						           "[BUG] $file:$line: List operation on struct with incorrect order ($error_details)", \
+						           log_data_string("error_details", "->next must be 2nd struct member"), \
+						           log_data_string("file", __FILE__), \
+						           log_data_integer("line", __LINE__)); \
 						abort(); \
 					} \
 					if (offsetof(typeof(*list),priority) != offsetof(ListStructPrio,priority)) \
 					{ \
-						ircd_log(LOG_ERROR, "[BUG] %s:%d: List operation on struct with incorrect order (->priority must be 3rd struct member))", __FILE__, __LINE__); \
+						unreal_log(ULOG_FATAL, "main", "BUG_LIST_OPERATION", NULL, \
+						           "[BUG] $file:$line: List operation on struct with incorrect order ($error_details)", \
+						           log_data_string("error_details", "->priority must be 3rd struct member"), \
+						           log_data_string("file", __FILE__), \
+						           log_data_integer("line", __LINE__)); \
 						abort(); \
 					}
 #else
@@ -610,7 +656,10 @@ union ModData
 
 #define CHECK_NULL_LIST_ITEM(item)	if ((item)->prev || (item)->next) \
 					{ \
-						ircd_log(LOG_ERROR, "[BUG] %s:%d: List operation on item with non-NULL 'prev' or 'next' -- are you adding to a list twice?", __FILE__, __LINE__); \
+						unreal_log(ULOG_FATAL, "main", "BUG_LIST_OPERATION_DOUBLE_ADD", NULL, \
+						           "[BUG] $file:$line: List operation on item with non-NULL 'prev' or 'next' -- are you adding to a list twice?", \
+						           log_data_string("file", __FILE__), \
+						           log_data_integer("line", __LINE__)); \
 						abort(); \
 					}
 
@@ -711,43 +760,10 @@ struct MultiLine {
 	char *line;
 };
 
-#ifdef USE_LIBCURL
-struct MOTDDownload
-{
-	MOTDFile *themotd;
-};
-#endif /* USE_LIBCURL */
-
 struct MOTDFile 
 {
 	struct MOTDLine *lines;
 	struct tm last_modified; /* store the last modification time */
-
-#ifdef USE_LIBCURL
-	/*
-	  This pointer is used to communicate with an asynchronous MOTD
-	  download. The problem is that a download may take 10 seconds or
-	  more to complete and, in that time, the IRCd could be rehashed.
-	  This would mean that TLD blocks are reallocated and thus the
-	  aMotd structs would be free()d in the meantime.
-
-	  To prevent such a situation from leading to a segfault, we
-	  introduce this remote control pointer. It works like this:
-	  1. read_motd() is called with a URL. A new MOTDDownload is
-	     allocated and the pointer is placed here. This pointer is
-	     also passed to the asynchrnous download handler.
-	  2.a. The download is completed and read_motd_async_downloaded()
-	       is called with the same pointer. From this function, this pointer
-	       if free()d. No other code may free() the pointer. Not even free_motd().
-	    OR
-	  2.b. The user rehashes the IRCd before the download is completed.
-	       free_motd() is called, which sets motd_download->themotd to NULL
-	       to signal to read_motd_async_downloaded() that it should ignore
-	       the download. read_motd_async_downloaded() is eventually called
-	       and frees motd_download.
-	 */
-	struct MOTDDownload *motd_download;
-#endif /* USE_LIBCURL */
 };
 
 struct MOTDLine {
@@ -758,16 +774,17 @@ struct MOTDLine {
 struct LoopStruct {
 	unsigned do_garbage_collect : 1;
 	unsigned config_test : 1;
-	unsigned ircd_booted : 1;
-	unsigned ircd_forked : 1;
+	unsigned booted : 1;
+	unsigned forked : 1;
 	unsigned do_bancheck : 1; /* perform *line bancheck? */
 	unsigned do_bancheck_spamf_user : 1; /* perform 'user' spamfilter bancheck */
 	unsigned do_bancheck_spamf_away : 1; /* perform 'away' spamfilter bancheck */
-	unsigned ircd_rehashing : 1;
-	unsigned ircd_terminating : 1;
+	unsigned rehashing : 1;
+	unsigned terminating : 1;
+	unsigned config_load_failed : 1;
+	unsigned rehash_download_busy : 1; /* don't return "all downloads complete", needed for race condition */
 	unsigned tainted : 1;
-	Client *rehash_save_cptr, *rehash_save_client;
-	int rehash_save_sig;
+	Client *rehash_save_client;
 	void (*boot_function)();
 };
 
@@ -801,7 +818,7 @@ typedef struct Whowas {
 	struct Whowas *prev;	/* for hash table... */
 	struct Whowas *cnext;	/* for client struct linked list */
 	struct Whowas *cprev;	/* for client struct linked list */
-} aWhowas;
+} WhoWas;
 
 typedef struct SWhois SWhois;
 struct SWhois {
@@ -848,7 +865,7 @@ struct SWhois {
  *        Note that reading parv[parc] and beyond is OUT OF BOUNDS and will cause a crash.
  *        E.g. parv[3] in the above example is out of bounds.
  */
-#define CMD_FUNC(x) void (x) (Client *client, MessageTag *recv_mtags, int parc, char *parv[])
+#define CMD_FUNC(x) void (x) (Client *client, MessageTag *recv_mtags, int parc, const char *parv[])
 /** @} */
 
 /** Command override function - used by all command override handlers.
@@ -865,13 +882,13 @@ struct SWhois {
  *        Note that reading parv[parc] and beyond is OUT OF BOUNDS and will cause a crash.
  *        E.g. parv[3] in the above example.
  */
-#define CMD_OVERRIDE_FUNC(x) void (x)(CommandOverride *ovr, Client *client, MessageTag *recv_mtags, int parc, char *parv[])
+#define CMD_OVERRIDE_FUNC(x) void (x)(CommandOverride *ovr, Client *client, MessageTag *recv_mtags, int parc, const char *parv[])
 
 
 
-typedef void (*CmdFunc)(Client *client, MessageTag *mtags, int parc, char *parv[]);
-typedef void (*AliasCmdFunc)(Client *client, MessageTag *mtags, int parc, char *parv[], char *cmd);
-typedef void (*OverrideCmdFunc)(CommandOverride *ovr, Client *client, MessageTag *mtags, int parc, char *parv[]);
+typedef void (*CmdFunc)(Client *client, MessageTag *mtags, int parc, const char *parv[]);
+typedef void (*AliasCmdFunc)(Client *client, MessageTag *mtags, int parc, const char *parv[], const char *cmd);
+typedef void (*OverrideCmdFunc)(CommandOverride *ovr, Client *client, MessageTag *mtags, int parc, const char *parv[]);
 
 #include <sodium.h>
 
@@ -1106,21 +1123,30 @@ struct SpamExcept {
 /** IRC Counts, used for /LUSERS */
 typedef struct IRCCounts IRCCounts;
 struct IRCCounts {
-	int  clients;		/* total */
-	int  invisible;		/* invisible */
-	unsigned short  servers;		/* servers */
-	int  operators;		/* operators */
-	int  unknown;		/* unknown local connections */
-	int  channels;		/* channels */
-	int  me_clients;	/* my clients */
-	unsigned short  me_servers;	/* my servers */
-	int  me_max;		/* local max */
-	int  global_max;	/* global max */
+	int clients;		/* total */
+	int invisible;		/* invisible */
+	int servers;		/* servers */
+	int operators;		/* operators */
+	int unknown;		/* unknown local connections */
+	int channels;		/* channels */
+	int me_clients;		/* my clients */
+	int me_servers;		/* my servers */
+	int me_max;		/* local max */
+	int global_max;		/* global max */
 };
 
 /** The /LUSERS stats information */
 extern MODVAR IRCCounts irccounts;
 
+typedef struct NameValue NameValue;
+/** Name and value list used in a static array, such as in conf.c */
+struct NameValue
+{
+	long value;
+	char *name;
+};
+
+/** Name and value list used in dynamic linked lists */
 typedef struct NameValueList NameValueList;
 struct NameValueList {
 	NameValueList *prev, *next;
@@ -1166,20 +1192,11 @@ struct CommandOverride {
 	OverrideCmdFunc		func;
 };
 
-extern MODVAR Umode *Usermode_Table;
-extern MODVAR short	 Usermode_highest;
-
-extern MODVAR Snomask *Snomask_Table;
-extern MODVAR short Snomask_highest;
-
-extern MODVAR Cmode *Channelmode_Table;
-extern MODVAR unsigned short Channelmode_highest;
+extern MODVAR Umode *usermodes;
+extern MODVAR Cmode *channelmodes;
 
 extern Umode *UmodeAdd(Module *module, char ch, int options, int unset_on_deoper, int (*allowed)(Client *client, int what), long *mode);
 extern void UmodeDel(Umode *umode);
-
-extern Snomask *SnomaskAdd(Module *module, char ch, int (*allowed)(Client *client, int what), long *mode);
-extern void SnomaskDel(Snomask *sno);
 
 extern Cmode *CmodeAdd(Module *reserved, CmodeInfo req, Cmode_t *mode);
 extern void CmodeDel(Cmode *cmode);
@@ -1199,16 +1216,13 @@ extern void unload_all_unused_moddata(void);
 #define IsServersOnlyListener(x)	((x) && ((x)->options & LISTENER_SERVERSONLY))
 
 #define CONNECT_TLS		0x000001
-//0x000002 unused (was ziplinks)
-#define CONNECT_AUTO		0x000004
-#define CONNECT_QUARANTINE	0x000008
-#define CONNECT_NODNSCACHE	0x000010
-#define CONNECT_NOHOSTCHECK	0x000020
-#define CONNECT_INSECURE	0x000040
+#define CONNECT_AUTO		0x000002
+#define CONNECT_QUARANTINE	0x000004
+#define CONNECT_INSECURE	0x000008
 
-#define TLSFLAG_FAILIFNOCERT 	0x1
-#define TLSFLAG_NOSTARTTLS	0x8
-#define TLSFLAG_DISABLECLIENTCERT 0x10
+#define TLSFLAG_FAILIFNOCERT 		0x0001
+#define TLSFLAG_NOSTARTTLS		0x0002
+#define TLSFLAG_DISABLECLIENTCERT	0x0004
 
 /** Flood counters for local clients */
 typedef struct FloodCounter {
@@ -1225,9 +1239,17 @@ typedef enum FloodOption {
 	FLD_INVITE		= 3,	/**< invite-flood */
 	FLD_KNOCK		= 4,	/**< knock-flood */
 	FLD_CONVERSATIONS	= 5,	/**< max-concurrent-conversations */
+	FLD_LAG_PENALTY		= 6,	/**< lag-penalty / lag-penalty-bytes */
 } FloodOption;
 #define MAXFLOODOPTIONS 10
 
+typedef struct TrafficStats TrafficStats;
+struct TrafficStats {
+	long long messages_sent;	/* IRC lines sent */
+	long long messages_received;	/* IRC lines received */
+	long long bytes_sent;		/* Bytes sent */
+	long long bytes_received;	/* Received bytes */
+};
 
 /** This shows the Client struct (any client), the User struct (a user), Server (a server) that are commonly accessed both in the core and by 3rd party coders.
  * @defgroup CommonStructs Common structs
@@ -1242,7 +1264,7 @@ struct Client {
 	struct list_head special_node;		/**< For special lists (server || unknown || oper) */
 	LocalClient *local;			/**< Additional information regarding locally connected clients */
 	User *user;				/**< Additional information, if this client is a user */
-	Server *serv;				/**< Additional information, if this is a server */
+	Server *server;				/**< Additional information, if this is a server */
 	ClientStatus status;			/**< Client status, one of CLIENT_STATUS_* */
 	struct list_head client_hash;		/**< For name hash table (clientTable) */
 	char name[HOSTLEN + 1];			/**< Unique name of the client: nickname for users, hostname for servers */
@@ -1257,7 +1279,7 @@ struct Client {
 	char info[REALLEN + 1];			/**< Additional client information text. For users this is gecos/realname */
 	char id[IDLEN + 1];			/**< Unique ID: SID or UID */
 	struct list_head id_hash;		/**< For UID/SID hash table (idTable) */
-	Client *srvptr;				/**< Server on where this client is connected to (can be &me) */
+	Client *uplink;				/**< Server on where this client is connected to (can be &me) */
 	char *ip;				/**< IP address of user or server (never NULL) */
 	ModData moddata[MODDATA_MAX_CLIENT];	/**< Client attached module data, used by the ModData system */
 };
@@ -1266,10 +1288,11 @@ struct Client {
  */
 struct LocalClient {
 	int fd;				/**< File descriptor, can be <0 if socket has been closed already. */
-	SSL *ssl;			/**< OpenSSL/LibreSSL struct for SSL/TLS connection */
-	time_t since;			/**< Time when user will next be allowed to send something (actually since<currenttime+10) */
-	time_t firsttime;		/**< Time user was created (connected on IRC) */
-	time_t lasttime;		/**< Last time any message was received */
+	SSL *ssl;			/**< OpenSSL/LibreSSL struct for TLS connection */
+	time_t fake_lag;		/**< Time when user will next be allowed to send something (actually fake_lag<currenttime+10) */
+	int fake_lag_msec;		/**< Used for calculating 'fake_lag' penalty (modulo) */
+	time_t creationtime;		/**< Time user was created (connected on IRC) */
+	time_t last_msg_received;	/**< Last time any message was received */
 	dbuf sendQ;			/**< Outgoing send queue (data to be sent) */
 	dbuf recvQ;			/**< Incoming receive queue (incoming data yet to be parsed) */
 	ConfigItem_class *class;	/**< The class { } block associated to this client */
@@ -1279,27 +1302,16 @@ struct LocalClient {
 	u_char targets[MAXCCUSERS];	/**< Hash values of targets for target limiting */
 	ConfigItem_listen *listener;	/**< If this client IsListening() then this is the listener configuration attached to it */
 	long serial;			/**< Current serial number for send.c functions (to avoid sending duplicate messages) */
-	time_t nextnick;		/**< Time the next nick change will be allowed */
-	time_t last;			/**< Last time a RESETIDLE message was received (PRIVMSG) */
-	long sendM;			/**< Statistics: protocol messages send */
-	long sendK;			/**< Statistics: total k-bytes send */
-	long receiveM;			/**< Statistics: protocol messages received */
-	long receiveK;			/**< Statistics: total k-bytes received */
-	u_short sendB;			/**< Statistics: counters to count upto 1-k lots of bytes */
-	u_short receiveB;		/**< Statistics: sent and received (???) */
-	short lastsq;			/**< # of 2k blocks when sendqueued called last */
-	Link *watch;			/**< Watch notification list (WATCH) for this user */
-	u_short watches;		/**< Number of entries in the watch list */
+	time_t next_nick_allowed;		/**< Time the next nick change will be allowed */
+	time_t idle_since;		/**< Last time a RESETIDLE message was received (PRIVMSG) */
+	TrafficStats traffic;		/**< Traffic statistics */
 	ModData moddata[MODDATA_MAX_LOCAL_CLIENT];	/**< LocalClient attached module data, used by the ModData system */
-#ifdef DEBUGMODE
-	time_t cputime;			/**< Something with debugging (why is this a time_t? TODO) */
-#endif
 	char *error_str;		/**< Quit reason set by dead_socket() in case of socket/buffer error, later used by exit_client() */
 	char sasl_agent[NICKLEN + 1];	/**< SASL: SASL Agent the user is interacting with */
 	unsigned char sasl_out;		/**< SASL: Number of outgoing sasl messages */
 	unsigned char sasl_complete;	/**< SASL: >0 if SASL authentication was successful */
 	time_t sasl_sent_time;		/**< SASL: 0 or the time that the (last) AUTHENTICATE command has been sent */
-	char *sni_servername;		/**< Servername as sent by client via SNI (Server Name Indication) in SSL/TLS, otherwise NULL */
+	char *sni_servername;		/**< Servername as sent by client via SNI (Server Name Indication) in TLS, otherwise NULL */
 	int cap_protocol;		/**< CAP protocol in use. At least 300 for any CAP capable client. 302 for 3.2, etc.. */
 	uint32_t nospoof;		/**< Anti-spoofing random number (used in user handshake PING/PONG) */
 	char *passwd;			/**< Password used during connect, if any (freed once connected and set to NULL) */
@@ -1315,38 +1327,27 @@ struct LocalClient {
  */
 struct User {
 	Membership *channel;		/**< Channels that the user is in (linked list) */
-	Link *invited;			/**< Channels has the user been invited to (linked list) */
 	Link *dccallow;			/**< DCCALLOW list (linked list) */
-	char *away;			/**< AWAY message, or NULL if not away */
-	char svid[SVIDLEN + 1];		/**< Services account name or ID (SVID) */
-	unsigned short joined;		/**< Number of channels joined */
+	char account[ACCOUNTLEN + 1];	/**< Services account name or ID (SVID) - use IsLoggedIn(client) to check if logged in */
+	int joined;			/**< Number of channels joined */
 	char username[USERLEN + 1];	/**< Username, the user portion in nick!user@host. */
 	char realhost[HOSTLEN + 1];	/**< Realhost, the real host of the user (IP or hostname) - usually this is not shown to other users */
 	char cloakedhost[HOSTLEN + 1];	/**< Cloaked host - generated by cloaking algorithm */
 	char *virthost;			/**< Virtual host - when user has user mode +x this is the active host */
 	char *server;			/**< Server name the user is on (?) */
 	SWhois *swhois;			/**< Special "additional" WHOIS entries such as "a Network Administrator" */
-	aWhowas *whowas;		/**< Something for whowas :D :D */
-	int snomask;			/**< Server Notice Mask (snomask) - only for IRCOps */
-	char *operlogin;		/**< Which oper { } block was used to oper up, otherwise NULL - used by oper::maxlogins */
-	struct {
-		time_t nick_t;		/**< For set::anti-flood::nick-flood: time */
-		time_t knock_t;		/**< For set::anti-flood::knock-flood: time */
-		time_t invite_t;	/**< For set::anti-flood::invite-flood: time */
-		unsigned char nick_c;	/**< For set::anti-flood::nick-flood: counter */
-		unsigned char knock_c;	/**< For set::anti-flood::knock-flood: counter */
-		unsigned char invite_c;	/**< For set::anti-flood::invite-flood: counter */
-	} flood;			/**< Anti-flood counters */
-	time_t lastaway;		/**< Last time the user went AWAY */
+	WhoWas *whowas;			/**< Something for whowas :D :D */
+	char *snomask;			/**< Server Notice Mask (snomask) - only for IRCOps */
+	char *operlogin;		/**< Which oper { } block was used to oper up, otherwise NULL - used for auditting and by oper::maxlogins */
+	char *away;			/**< AWAY message, or NULL if not away */
+	time_t away_since;		/**< Last time the user went AWAY */
 };
 
-/** Server information (local servers and remote servers), you use client->serv to access these (see also @link Client @endlink).
+/** Server information (local servers and remote servers), you use client->server to access these (see also @link Client @endlink).
  */
 struct Server {
-	char *up;			/**< Name of uplink for this server */
 	char by[NICKLEN + 1];		/**< Uhhhh - who activated this connection - AGAIN? */
 	ConfigItem_link *conf;		/**< link { } block associated with this server, or NULL */
-	time_t timestamp;		/**< Remotely determined connect try time */
 	long users;			/**< Number of users on this server */
 	time_t boottime;		/**< Startup time of server (boot time) */
 	struct {
@@ -1424,20 +1425,29 @@ struct ConditionalConfig
 	char *opt; /**< Only for IF_VALUE */
 };
 
+/** Configuration file (config parser) */
 struct ConfigFile
 {
-        char            *cf_filename;
-        ConfigEntry     *cf_entries;
-        ConfigFile     *cf_next;
+	char *filename;		/**< Filename of configuration file */
+	ConfigEntry *items;	/**< All items in the configuration file */
+	ConfigFile *next;	/**< Next configuration file */
 };
 
+/** Configuration entry (config parser) */
 struct ConfigEntry
 {
-        ConfigFile	*ce_fileptr;
-        int 	 	ce_varlinenum, ce_fileposstart, ce_fileposend, ce_sectlinenum;
-        char 		*ce_varname, *ce_vardata;
-        ConfigEntry     *ce_entries, *ce_prevlevel, *ce_next;
-        ConditionalConfig *ce_cond;
+	char *name;			/**< Variable name */
+	char *value;			/**< Variable value, can be NULL */
+	ConfigEntry *next;		/**< Next ConfigEntry */
+	ConfigEntry *items;		/**< Items (children), can be NULL */
+	ConfigFile *file;		/**< To which configfile does this belong? */
+	int line_number;		/**< Line number of the variable name (this one is usually used for errors) */
+	int file_position_start;	/**< Position (byte) within configuration file of the start of the block, rarely used */
+	int file_position_end;		/**< Position (byte) within configuration file of the end of the block, rarely used */
+	int section_linenumber;		/**< Line number of the section (only used internally for parse errors) */
+	ConfigEntry *parent;		/**< Parent item, can be NULL */
+	ConditionalConfig *conditional_config;	/**< Used for conditional config by the main parser */
+	unsigned escaped:1;
 };
 
 struct ConfigFlag 
@@ -1524,8 +1534,7 @@ struct ConfigFlag_allow {
 struct ConfigItem_allow {
 	ConfigItem_allow *prev, *next;
 	ConfigFlag flag;
-	char *ip;
-	char *hostname;
+	ConfigItem_mask *mask;
 	char *server;
 	AuthConfig *auth;
 	int maxperip; /**< Maximum connections permitted per IP address (locally) */
@@ -1533,7 +1542,7 @@ struct ConfigItem_allow {
 	int port;
 	ConfigItem_class *class;
 	ConfigFlag_allow flags;
-	unsigned short ipv6_clone_mask;
+	int ipv6_clone_mask;
 };
 
 struct OperClassACLPath
@@ -1576,7 +1585,7 @@ struct OperClassCheckParams
         Client *client;
         Client *victim;
         Channel *channel;
-        void *extra;
+        const void *extra;
 };
 
 struct ConfigItem_operclass {
@@ -1596,9 +1605,10 @@ struct ConfigItem_oper {
 	unsigned long modes, require_modes;
 	char *vhost;
 	int maxlogins;
+	int server_notice_colors;
 };
 
-/** The SSL/TLS options that are used in set::tls and otherblocks::tls-options.
+/** The TLS options that are used in set::tls and otherblocks::tls-options.
  * NOTE: If you add something here then you must also update the
  *       conf_tlsblock() function in s_conf.c to have it inherited
  *       from set::tls to the other config blocks!
@@ -1645,7 +1655,8 @@ struct ConfigItem_ulines {
 struct ConfigItem_tld {
 	ConfigItem_tld 	*prev, *next;
 	ConfigFlag_tld 	flag;
-	char 		*mask, *channel;
+	ConfigItem_mask *mask;
+	char 		*channel;
 	char 		*motd_file, *rules_file, *smotd_file;
 	char 		*botmotd_file, *opermotd_file;
 	MOTDFile	rules, motd, smotd, botmotd, opermotd;
@@ -1663,6 +1674,7 @@ struct ConfigItem_listen {
 	SSL_CTX *ssl_ctx;
 	TLSOptions *tls_options;
 	int websocket_options; /* should be in module, but lazy */
+	char *websocket_forward;
 };
 
 struct ConfigItem_sni {
@@ -1711,13 +1723,6 @@ struct ConfigItem_link {
 	TLSOptions *tls_options; /**< SSL Options for outgoing connection (optional) */
 };
 
-struct ConfigItem_except {
-	ConfigItem_except      *prev, *next;
-	ConfigFlag_except      flag;
-	int type;
-	char		*mask;
-};
-
 struct ConfigItem_ban {
 	ConfigItem_ban	*prev, *next;
 	ConfigFlag_ban	flag;
@@ -1734,7 +1739,8 @@ struct ConfigItem_deny_dcc {
 struct ConfigItem_deny_link {
 	ConfigItem_deny_link *prev, *next;
 	ConfigFlag_except flag;
-	char *mask, *rule, *prettyrule;
+	ConfigItem_mask  *mask;
+	char *rule, *prettyrule;
 };
 
 struct ConfigItem_deny_version {
@@ -1764,32 +1770,6 @@ struct ConfigItem_allow_dcc {
 	char			*filename;
 };
 
-struct ConfigItem_log {
-	ConfigItem_log *prev, *next;
-	ConfigFlag flag;
-	char *file; /**< Filename to log to (either generated or specified) */
-	char *filefmt; /**< Filename with dynamic % stuff */
-	long maxsize;
-	int  flags;
-	int  logfd;
-};
-
-struct ConfigItem_unknown {
-	ConfigItem_unknown *prev, *next;
-	ConfigFlag flag;
-	ConfigEntry *ce;
-};
-
-struct ConfigItem_unknown_ext {
-	ConfigItem_unknown_ext *prev, *next;
-	ConfigFlag flag;
-	char *ce_varname, *ce_vardata;
-	ConfigFile      *ce_fileptr;
-	int             ce_varlinenum;
-	ConfigEntry     *ce_entries;
-};
-
-
 typedef enum { 
 	ALIAS_SERVICES=1, ALIAS_STATS, ALIAS_NORMAL, ALIAS_COMMAND, ALIAS_CHANNEL, ALIAS_REAL
 } AliasType;
@@ -1812,33 +1792,23 @@ struct ConfigItem_alias_format {
 	Match *expr;
 };
 
-/**
- * In a rehash scenario, conf_include will contain all of the included
- * configs that are actually in use. It also will contain includes
- * that are being processed so that the configuration may be updated.
- * INCLUDE_NOTLOADED is set on all of the config files that are being
- * loaded and unset on already-loaded files. See
- * unload_loaded_includes() and load_includes().
- */
-#define INCLUDE_NOTLOADED  0x1
-#define INCLUDE_REMOTE     0x2
-#define INCLUDE_DLQUEUED   0x4
-/**
- * Marks that an include was loaded without error. This seems to
- * overlap with the INCLUDE_NOTLOADED meaning(?). --binki
- */
-#define INCLUDE_USED       0x8
+#define RESOURCE_REMOTE     0x1
+#define RESOURCE_DLQUEUED   0x2
+#define RESOURCE_INCLUDE    0x4
+
+typedef struct ConfigEntryWrapper ConfigEntryWrapper;
+struct ConfigEntryWrapper {
+	ConfigEntryWrapper *prev, *next;
+	ConfigEntry *ce;
+};
 	
-struct ConfigItem_include {
-	ConfigItem_include *prev, *next;
-	ConfigFlag_ban flag;
-	char *file;
-#ifdef USE_LIBCURL
-	char *url;
-	char *errorbuf;
-#endif
-	char *included_from;
-	int included_from_line;
+struct ConfigResource {
+	ConfigResource *prev, *next;
+	int type;
+	ConfigEntryWrapper *wce; /**< The place(s) where this resource is begin used */
+	char *file; /**< File to read: can be a conf/something file or a downloaded file */
+	char *url; /**< URL, if it is an URL */
+	char *cache_file; /**< Set to filename of local cached copy, if it is available */
 };
 
 struct ConfigItem_blacklist_module {
@@ -1855,7 +1825,7 @@ struct ConfigItem_help {
 
 struct ConfigItem_offchans {
 	ConfigItem_offchans *prev, *next;
-	char chname[CHANNELLEN+1];
+	char name[CHANNELLEN+1];
 	char *topic;
 };
 
@@ -1868,6 +1838,7 @@ struct SecurityGroup {
 	int reputation_score;
 	int webirc;
 	int tls;
+	ConfigItem_mask *include_mask;
 };
 
 #define HM_HOST 1
@@ -1885,14 +1856,6 @@ struct IRCStatistics {
 	unsigned int is_cl;	/* number of client connections */
 	unsigned int is_sv;	/* number of server connections */
 	unsigned int is_ni;	/* connection but no idea who it was */
-	unsigned short is_cbs;	/* bytes sent to clients */
-	unsigned short is_cbr;	/* bytes received to clients */
-	unsigned short is_sbs;	/* bytes sent to servers */
-	unsigned short is_sbr;	/* bytes received to servers */
-	unsigned long is_cks;	/* k-bytes sent to clients */
-	unsigned long is_ckr;	/* k-bytes received to clients */
-	unsigned long is_sks;	/* k-bytes sent to servers */
-	unsigned long is_skr;	/* k-bytes received to servers */
 	time_t is_cti;		/* time spent connected by clients */
 	time_t is_sti;		/* time spent connected by servers */
 	unsigned int is_ac;	/* connections accepted */
@@ -1910,11 +1873,6 @@ struct IRCStatistics {
 	unsigned int is_loc;	/* local connections made */
 };
 
-typedef struct MemoryInfo {
-	unsigned int classes;
-	unsigned long classesmem;
-} MemoryInfo;
-
 #define EXTCMODETABLESZ 32
 
 /* Number of maximum paramter modes to allow.
@@ -1928,12 +1886,29 @@ typedef struct MemoryInfo {
  * Otherwise, see the extended channel modes API, CmodeAdd(), etc.
  */
 struct Mode {
-	long mode;				/**< Core modes set on this channel (one of MODE_*) */
-	Cmode_t extmode;			/**< Other ("extended") channel modes set on this channel */
-	void *extmodeparams[MAXPARAMMODES+1];	/**< Parameters for extended channel modes */
-	int  limit;				/**< The +l limit in effect (eg: 40), if any - otherwise 0 */
-	char key[KEYLEN + 1];			/**< The +k key in effect (eg: secret), if any - otherwise NULL */
+	Cmode_t mode;			/**< Other ("extended") channel modes set on this channel */
+	void *mode_params[MAXPARAMMODES+1];	/**< Parameters for extended channel modes */
 };
+
+/* flags for Link if used to contain Watch --k4be */
+
+/* WATCH type */
+#define WATCH_FLAG_TYPE_WATCH	(1<<0) /* added via /WATCH command */
+#define WATCH_FLAG_TYPE_MONITOR	(1<<1) /* added via /MONITOR command */
+
+/* behaviour switches */
+#define WATCH_FLAG_AWAYNOTIFY	(1<<8) /* should send AWAY notifications */
+
+/* watch triggering events */
+#define WATCH_EVENT_ONLINE		0
+#define WATCH_EVENT_OFFLINE		1
+#define WATCH_EVENT_AWAY		2
+#define WATCH_EVENT_NOTAWAY		3
+#define WATCH_EVENT_REAWAY		4
+#define WATCH_EVENT_USERHOST	5
+#define WATCH_EVENT_REALNAME	6
+#define WATCH_EVENT_LOGGEDIN	7
+#define WATCH_EVENT_LOGGEDOUT	8
 
 /* Used for notify-hash buckets... -Donwulff */
 
@@ -1962,6 +1937,8 @@ struct Link {
 	} value;
 };
 
+#define IsInvalidChannelTS(x)	((x) <= 1000000) /**< Invalid channel creation time */
+
 /**
  * @addtogroup CommonStructs
  * @{
@@ -1979,13 +1956,12 @@ struct Channel {
 	time_t topic_time;			/**< Time at which the topic was last set */
 	int users;				/**< Number of users in the channel */
 	Member *members;			/**< List of channel members (users in the channel) */
-	Link *invites;				/**< List of outstanding /INVITE's from ops */
 	Ban *banlist;				/**< List of bans (+b) */
 	Ban *exlist;				/**< List of ban exceptions (+e) */
 	Ban *invexlist;				/**< List of invite exceptions (+I) */
 	char *mode_lock;			/**< Mode lock (MLOCK) applied to channel - usually by Services */
 	ModData moddata[MODDATA_MAX_CHANNEL];	/**< Channel attached module data, used by the ModData system */
-	char chname[1];				/**< Channel name */
+	char name[CHANNELLEN+1];		/**< Channel name */
 };
 
 /** user/channel member struct (channel->members).
@@ -1997,7 +1973,7 @@ struct Member
 {
 	struct Member *next;				/**< Next entry in list */
 	Client	      *client;				/**< The client */
-	int		flags;				/**< The access of the user on this channel (one or more of CHFL_*) */
+	char member_modes[MEMBERMODESLEN];		/**< The access of the user on this channel (eg "vhoqa") */
 	ModData moddata[MODDATA_MAX_MEMBER];		/** Member attached module data, used by the ModData system */
 };
 
@@ -2010,7 +1986,7 @@ struct Membership
 {
 	struct Membership 	*next;			/**< Next entry in list */
 	struct Channel		*channel;			/**< The channel */
-	int			flags;			/**< The access of the user on this channel (one or more of CHFL_*) */
+	char member_modes[MEMBERMODESLEN];		/**< The (new) access of the user on this channel (eg "vhoqa") */
 	ModData moddata[MODDATA_MAX_MEMBERSHIP];	/**< Membership attached module data, used by the ModData system */
 };
 
@@ -2024,97 +2000,18 @@ struct Ban {
 	time_t when;		/**< When the entry was added */
 };
 
-/*
-** Channel Related macros follow
-*/
-
-/* Channel related flags */
-#ifdef PREFIX_AQ
- #define CHFL_CHANOP_OR_HIGHER (CHFL_CHANOP|CHFL_CHANADMIN|CHFL_CHANOWNER)
- #define CHFL_HALFOP_OR_HIGHER (CHFL_CHANOWNER|CHFL_CHANADMIN|CHFL_CHANOP|CHFL_HALFOP)
-#else
- #define CHFL_CHANOP_OR_HIGHER (CHFL_CHANOP)
- #define CHFL_HALFOP_OR_HIGHER (CHFL_CHANOP|CHFL_HALFOP)
-#endif
-
-/** Channel flags (privileges) of users on a channel.
- * This is used by Member and Membership (m->flags) to indicate the access rights of a user in a channel.
- * Also used by SJOIN and MODE to set some flags while a JOIN or MODE is in process.
- * @defgroup ChannelFlags Channel access flags
- * @{
- */
-/** Is channel owner (+q) */
-#define is_chanowner(cptr,channel) (get_access(cptr,channel) & CHFL_CHANOWNER)
-/** Is channel admin (+a) */
-#define is_chanadmin(cptr,channel) (get_access(cptr,channel) & CHFL_CHANADMIN)
-/** Is channel operator or higher (+o/+a/+q) */
-#define is_chan_op(cptr,channel) (get_access(cptr,channel) & CHFL_CHANOP_OR_HIGHER)
-/** Is some kind of channel op (+h/+o/+a/+q) */
-#define is_skochanop(cptr,channel) (get_access(cptr,channel) & CHFL_HALFOP_OR_HIGHER)
-/** Is half-op (+h) */
-#define is_half_op(cptr,channel) (get_access(cptr,channel) & CHFL_HALFOP)
-/** Has voice (+v) */
-#define has_voice(cptr,channel) (get_access(cptr,channel) & CHFL_VOICE)
-/* Important:
- * Do not blindly change the values of CHFL_* as they must match the
- * ones in MODE_*. I already screwed this up twice. -- Syzop
- * Obviously these should be decoupled in a code cleanup.
- */
-#define	CHFL_CHANOP     0x0001	/**< Channel operator (+o) */
-#define	CHFL_VOICE      0x0002	/**< Voice (+v, can speak through bans and +m) */
-#define	CHFL_DEOPPED	0x0004	/**< De-oped by a server (temporary state) */
-#define CHFL_CHANOWNER	0x0040	/**< Channel owner (+q) */
-#define CHFL_CHANADMIN	0x0080	/**< Channel admin (+a) */
-#define CHFL_HALFOP	0x0100	/**< Channel halfop (+h) */
-#define	CHFL_BAN     	0x0200	/**< Channel ban (+b) - not a real flag, only used in sjoin.c */
-#define CHFL_EXCEPT	0x0400	/**< Channel except (+e) - not a real flag, only used in sjoin.c */
-#define CHFL_INVEX	0x0800  /**< Channel invite exception (+I) - not a real flag, only used in sjoin.c */
-/** @} */
-
-#define CHFL_REJOINING	0x8000  /* used internally by rejoin_* */
-
-#define	CHFL_OVERLAP    (CHFL_CHANOWNER|CHFL_CHANADMIN|CHFL_CHANOP|CHFL_VOICE|CHFL_HALFOP)
-
 /* Channel macros */
-/* Don't blindly change these MODE_* values, see comment 20 lines up! */
-#define	MODE_CHANOP		CHFL_CHANOP
-#define	MODE_VOICE		CHFL_VOICE
-#define	MODE_PRIVATE		0x0004
-#define	MODE_SECRET		0x0008
-#define	MODE_MODERATED  	0x0010
-#define	MODE_TOPICLIMIT 	0x0020
-#define MODE_CHANOWNER		0x0040
-#define MODE_CHANADMIN		0x0080
-#define	MODE_HALFOP		0x0100
 #define MODE_EXCEPT		0x0200
 #define	MODE_BAN		0x0400
-#define	MODE_INVITEONLY 	0x0800
-#define	MODE_NOPRIVMSGS 	0x1000
-#define	MODE_KEY		0x2000
-#define	MODE_LIMIT		0x4000
-#define MODE_RGSTR		0x8000
 #define MODE_INVEX		0x8000000
 
-/*
- * mode flags which take another parameter (With PARAmeterS)
- */
-#define	MODE_WPARAS (MODE_HALFOP|MODE_CHANOP|MODE_VOICE|MODE_CHANOWNER|MODE_CHANADMIN|MODE_BAN|MODE_KEY|MODE_LIMIT|MODE_EXCEPT|MODE_INVEX)
-/*
- * Undefined here, these are used in conjunction with the above modes in
- * the source.
-#define	MODE_DEL       0x200000000
-#define	MODE_ADD       0x400000000
- */
-
-#define	HoldChannel(x)		(!(x))
 /* name invisible */
-#define	SecretChannel(x)	((x) && ((x)->mode.mode & MODE_SECRET))
+#define	SecretChannel(x)	((x) && has_channel_mode((x), 's'))
 /* channel not shown but names are */
-#define	HiddenChannel(x)	((x) && ((x)->mode.mode & MODE_PRIVATE))
+#define	HiddenChannel(x)	((x) && has_channel_mode((x), 'p'))
 /* channel visible */
 #define	ShowChannel(v,c)	(PubChannel(c) || IsMember((v),(c)))
-#define	PubChannel(x)		((!x) || ((x)->mode.mode &\
-				 (MODE_PRIVATE | MODE_SECRET)) == 0)
+#define	PubChannel(x)		(!SecretChannel((x)) && !HiddenChannel((x)))
 
 #define	IsChannelName(name) ((name) && (*(name) == '#'))
 
@@ -2194,9 +2091,17 @@ struct ParseMode {
 	char modechar;
 	char *param;
 	Cmode *extm;
-	char *modebuf; /* curr pos */
-	char *parabuf; /* curr pos */
+	const char *modebuf; /* curr pos */
+	const char *parabuf; /* curr pos */
 	char buf[512]; /* internal parse buffer */
+};
+
+#define MAXMULTILINEMODES       3
+typedef struct MultiLineMode MultiLineMode;
+struct MultiLineMode {
+	char *modeline[MAXMULTILINEMODES+1];
+	char *paramline[MAXMULTILINEMODES+1];
+	int numlines;
 };
 
 typedef struct PendingServer PendingServer;
@@ -2230,15 +2135,13 @@ struct MaxTarget {
 #define MARK_AS_OFFICIAL_MODULE(modinf)	do { if (modinf && modinf->handle) ModuleSetOptions(modinfo->handle, MOD_OPT_OFFICIAL, 1);  } while(0)
 #define MARK_AS_GLOBAL_MODULE(modinf)	do { if (modinf && modinf->handle) ModuleSetOptions(modinfo->handle, MOD_OPT_GLOBAL, 1);  } while(0)
 
-/* old.. please don't use anymore */
-#define CHANOPPFX "@"
-
 /* used for is_banned type field: */
-#define BANCHK_JOIN		0	/* checking if a ban forbids the person from joining */
-#define BANCHK_MSG		1	/* checking if a ban forbids the person from sending messages */
-#define BANCHK_NICK		2	/* checking if a ban forbids the person from changing his/her nick */
-#define BANCHK_LEAVE_MSG	3	/* checking if a ban forbids the person from leaving a message in PART or QUIT */
-#define BANCHK_TKL		4	/* called from a server ban routine, or other match_user() usage */
+#define BANCHK_JOIN		0x0001	/* checking if a ban forbids the person from joining */
+#define BANCHK_MSG		0x0002	/* checking if a ban forbids the person from sending messages */
+#define BANCHK_NICK		0x0004	/* checking if a ban forbids the person from changing his/her nick */
+#define BANCHK_LEAVE_MSG	0x0008	/* checking if a ban forbids the person from leaving a message in PART or QUIT */
+#define BANCHK_TKL		0x0010	/* called from a server ban routine, or other match_user() usage */
+#define BANCHK_ALL		(BANCHK_JOIN|BANCHK_MSG|BANCHK_NICK|BANCHK_LEAVE_MSG)	/* all events except BANCHK_TKL which is special */
 
 #define TKLISTLEN		26
 #define TKLIPHASHLEN1		4
@@ -2255,8 +2158,6 @@ struct MaxTarget {
 
 #define MATCH_MASK_IS_UHOST         0x1000
 #define MATCH_MASK_IS_HOST          0x2000
-
-#define MATCH_USE_IDENT             0x0100
 
 typedef enum {
 	POLICY_ALLOW=1,
@@ -2302,6 +2203,19 @@ struct ConfigItem_badword {
 #define SEND_ALL	(SEND_LOCAL|SEND_REMOTE)
 #define SKIP_DEAF	0x4
 #define SKIP_CTCP	0x8
+
+typedef struct GeoIPResult GeoIPResult;
+struct GeoIPResult {
+	char *country_code;
+	char *country_name;
+};
+
+typedef enum WhoisConfigDetails {
+	WHOIS_CONFIG_DETAILS_DEFAULT	= 0,
+	WHOIS_CONFIG_DETAILS_NONE	= 1,
+	WHOIS_CONFIG_DETAILS_LIMITED	= 2,
+	WHOIS_CONFIG_DETAILS_FULL	= 3,
+} WhoisConfigDetails;
 
 #endif /* __struct_include__ */
 

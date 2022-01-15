@@ -104,14 +104,14 @@ Client *make_client(Client *from, Client *servr)
 
 	/* Note: all fields are already NULL/0, no need to set here */
 	client->direction = from ? from : client;	/* 'from' of local client is self! */
-	client->srvptr = servr;
+	client->uplink = servr;
 	client->status = CLIENT_STATUS_UNKNOWN;
 
 	INIT_LIST_HEAD(&client->client_node);
 	INIT_LIST_HEAD(&client->client_hash);
 	INIT_LIST_HEAD(&client->id_hash);
 
-	strcpy(client->ident, "unknown");
+	strlcpy(client->ident, "unknown", sizeof(client->ident));
 	if (!from)
 	{
 		/* Local client */
@@ -123,9 +123,9 @@ Client *make_client(Client *from, Client *servr)
 		INIT_LIST_HEAD(&client->lclient_node);
 		INIT_LIST_HEAD(&client->special_node);
 
-		client->local->since = client->local->lasttime =
-		client->lastnick = client->local->firsttime =
-		client->local->last = TStime();
+		client->local->fake_lag = client->local->last_msg_received =
+		client->lastnick = client->local->creationtime =
+		client->local->idle_since = TStime();
 		client->local->class = NULL;
 		client->local->passwd = NULL;
 		client->local->sockhost[0] = '\0';
@@ -197,7 +197,7 @@ User *make_user(Client *client)
 #ifdef	DEBUGMODE
 		users.inuse++;
 #endif
-		strlcpy(user->svid, "0", sizeof(user->svid));
+		strlcpy(user->account, "0", sizeof(user->account));
 		if (client->ip)
 		{
 			/* initially set client->user->realhost to IP */
@@ -213,7 +213,7 @@ User *make_user(Client *client)
 
 Server *make_server(Client *client)
 {
-	Server *serv = client->serv;
+	Server *serv = client->server;
 
 	if (!serv)
 	{
@@ -223,8 +223,7 @@ Server *make_server(Client *client)
 #endif
 		*serv->by = '\0';
 		serv->users = 0;
-		serv->up = NULL;
-		client->serv = serv;
+		client->server = serv;
 	}
 	if (strlen(client->id) > 3)
 	{
@@ -234,7 +233,7 @@ Server *make_server(Client *client)
 		del_from_id_hash_table(client->id, client);
 		*client->id = '\0';
 	}
-	return client->serv;
+	return client->server;
 }
 
 /*
@@ -260,6 +259,7 @@ void free_user(Client *client)
 	}
 	safe_free(client->user->virthost);
 	safe_free(client->user->operlogin);
+	safe_free(client->user->snomask);
 	mp_pool_release(client->user);
 #ifdef	DEBUGMODE
 	users.inuse--;
@@ -297,8 +297,8 @@ void remove_client_from_list(Client *client)
 			VERIFY_OPERCOUNT(client, "rmvlist");
 		}
 		irccounts.clients--;
-		if (client->srvptr && client->srvptr->serv)
-			client->srvptr->serv->users--;
+		if (client->uplink && client->uplink->server)
+			client->uplink->server->users--;
 	}
 	if (IsUnknown(client) || IsConnecting(client) || IsHandshake(client)
 		|| IsTLSHandshake(client)
@@ -313,16 +313,16 @@ void remove_client_from_list(Client *client)
 	
 	if (client->user)
 		free_user(client);
-	if (client->serv)
+	if (client->server)
 	{
-		safe_free(client->serv->features.usermodes);
-		safe_free(client->serv->features.chanmodes[0]);
-		safe_free(client->serv->features.chanmodes[1]);
-		safe_free(client->serv->features.chanmodes[2]);
-		safe_free(client->serv->features.chanmodes[3]);
-		safe_free(client->serv->features.software);
-		safe_free(client->serv->features.nickchars);
-		safe_free(client->serv);
+		safe_free(client->server->features.usermodes);
+		safe_free(client->server->features.chanmodes[0]);
+		safe_free(client->server->features.chanmodes[1]);
+		safe_free(client->server->features.chanmodes[2]);
+		safe_free(client->server->features.chanmodes[3]);
+		safe_free(client->server->features.software);
+		safe_free(client->server->features.nickchars);
+		safe_free(client->server);
 #ifdef	DEBUGMODE
 		servs.inuse--;
 #endif
@@ -381,6 +381,16 @@ void free_link(Link *lp)
 #ifdef	DEBUGMODE
 	links.inuse--;
 #endif
+}
+
+/** Returns the length (entry count) of a +beI list */
+int link_list_length(Link *lp)
+{
+	int  count = 0;
+
+	for (; lp; lp = lp->next)
+		count++;
+	return count;
 }
 
 Ban *make_ban(void)
@@ -491,7 +501,7 @@ void add_ListItemPrio(ListStructPrio *new, ListStructPrio **list, int priority)
 
 /* NameList functions */
 
-void _add_name_list(NameList **list, char *name)
+void _add_name_list(NameList **list, const char *name)
 {
 	NameList *e = safe_alloc(sizeof(NameList)+strlen(name));
 	strcpy(e->name, name); /* safe, allocated above */
@@ -509,7 +519,7 @@ void _free_entire_name_list(NameList *n)
 	}
 }
 
-void _del_name_list(NameList **list, char *name)
+void _del_name_list(NameList **list, const char *name)
 {
 	NameList *e = find_name_list(*list, name);
 	if (e)
@@ -523,7 +533,7 @@ void _del_name_list(NameList **list, char *name)
 /** Find an entry in a NameList - case insensitive comparisson.
  * @ingroup ListFunctions
  */
-NameList *find_name_list(NameList *list, char *name)
+NameList *find_name_list(NameList *list, const char *name)
 {
 	NameList *e;
 
@@ -540,7 +550,7 @@ NameList *find_name_list(NameList *list, char *name)
 /** Find an entry in a NameList by running match_simple() on it.
  * @ingroup ListFunctions
  */
-NameList *find_name_list_match(NameList *list, char *name)
+NameList *find_name_list_match(NameList *list, const char *name)
 {
 	NameList *e;
 
@@ -554,7 +564,7 @@ NameList *find_name_list_match(NameList *list, char *name)
 	return NULL;
 }
 
-void add_nvplist(NameValuePrioList **lst, int priority, char *name, char *value)
+void add_nvplist(NameValuePrioList **lst, int priority, const char *name, const char *value)
 {
 	va_list vl;
 	NameValuePrioList *e = safe_alloc(sizeof(NameValuePrioList));
@@ -564,7 +574,7 @@ void add_nvplist(NameValuePrioList **lst, int priority, char *name, char *value)
 	AddListItemPrio(e, *lst, priority);
 }
 
-NameValuePrioList *find_nvplist(NameValuePrioList *list, char *name)
+NameValuePrioList *find_nvplist(NameValuePrioList *list, const char *name)
 {
 	NameValuePrioList *e;
 
@@ -578,7 +588,7 @@ NameValuePrioList *find_nvplist(NameValuePrioList *list, char *name)
 	return NULL;
 }
 
-void add_fmt_nvplist(NameValuePrioList **lst, int priority, char *name, FORMAT_STRING(const char *format), ...)
+void add_fmt_nvplist(NameValuePrioList **lst, int priority, const char *name, FORMAT_STRING(const char *format), ...)
 {
 	char value[512];
 	va_list vl;
@@ -602,4 +612,38 @@ void free_nvplist(NameValuePrioList *lst)
 		safe_free(e->value);
 		safe_free(e);
 	}
+}
+
+#define nv_find_by_name(stru, name)	do_nv_find_by_name(stru, name, ARRAY_SIZEOF((stru)))
+
+long do_nv_find_by_name(NameValue *table, const char *cmd, int numelements)
+{
+	int start = 0;
+	int stop = numelements-1;
+	int mid;
+	while (start <= stop) {
+		mid = (start+stop)/2;
+
+		if (smycmp(cmd,table[mid].name) < 0) {
+			stop = mid-1;
+		}
+		else if (strcmp(cmd,table[mid].name) == 0) {
+			return table[mid].value;
+		}
+		else
+			start = mid+1;
+	}
+	return 0;
+}
+
+#define nv_find_by_value(stru, value)	do_nv_find_by_value(stru, value, ARRAY_SIZEOF((stru)))
+const char *do_nv_find_by_value(NameValue *table, long value, int numelements)
+{
+	int i;
+
+	for (i=0; i < numelements; i++)
+		if (table[i].value == value)
+			return table[i].name;
+
+	return NULL;
 }

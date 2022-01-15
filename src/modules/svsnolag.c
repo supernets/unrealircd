@@ -33,7 +33,7 @@ ModuleHeader MOD_HEADER
 	"5.0",
 	"commands /svsnolag and /svs2nolag", 
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
     };
 
 MOD_INIT()
@@ -54,7 +54,7 @@ MOD_UNLOAD()
 	return MOD_SUCCESS;
 }
 
-void do_svsnolag(Client *client, int parc, char *parv[], int show_change)
+void do_svsnolag(Client *client, int parc, const char *parv[], int show_change)
 {
 	Client *target;
 	char *cmd = show_change ? MSG_SVS2NOLAG : MSG_SVSNOLAG;
@@ -65,7 +65,7 @@ void do_svsnolag(Client *client, int parc, char *parv[], int show_change)
 	if (parc < 3)
 		return;
 
-	if (!(target = find_person(parv[2], NULL)))
+	if (!(target = find_user(parv[2], NULL)))
 		return;
 
 	if (!MyUser(target))

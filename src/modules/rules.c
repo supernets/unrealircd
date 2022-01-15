@@ -32,7 +32,7 @@ ModuleHeader MOD_HEADER
 	"5.0",
 	"command /rules", 
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
     };
 
 MOD_INIT()
@@ -63,14 +63,14 @@ CMD_FUNC(cmd_rules)
 
 	temp = NULL;
 
-	if (hunt_server(client, recv_mtags, ":%s RULES :%s", 1, parc, parv) != HUNTED_ISME)
+	if (hunt_server(client, recv_mtags, "RULES", 1, parc, parv) != HUNTED_ISME)
 		return;
 
 	ptr = find_tld(client);
 
 	if (ptr)
 		temp = ptr->rules.lines;
-	if(!temp)
+	if (!temp)
 		temp = rules.lines;
 
 	if (temp == NULL)

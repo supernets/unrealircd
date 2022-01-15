@@ -28,7 +28,7 @@ ModuleHeader MOD_HEADER
 	"5.0",
 	"command /dccdeny", 
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
     };
 
 /* Variables */
@@ -40,24 +40,26 @@ int dccdeny_configtest_deny_dcc(ConfigFile *cf, ConfigEntry *ce, int type, int *
 int dccdeny_configtest_allow_dcc(ConfigFile *cf, ConfigEntry *ce, int type, int *errs);
 int dccdeny_configrun_deny_dcc(ConfigFile *cf, ConfigEntry *ce, int type);
 int dccdeny_configrun_allow_dcc(ConfigFile *cf, ConfigEntry *ce, int type);
-int dccdeny_stats(Client *client, char *para);
+int dccdeny_stats(Client *client, const char *para);
+int dccdeny_dcc_denied(Client *client, const char *target, const char *realfile, const char *displayfile, ConfigItem_deny_dcc *dccdeny);
 CMD_FUNC(cmd_dccdeny);
 CMD_FUNC(cmd_undccdeny);
 CMD_FUNC(cmd_svsfline);
-int dccdeny_can_send_to_user(Client *client, Client *target, char **text, char **errmsg, SendType sendtype);
-int dccdeny_can_send_to_channel(Client *client, Channel *channel, Membership *lp, char **msg, char **errmsg, SendType sendtype);
+int dccdeny_can_send_to_user(Client *client, Client *target, const char **text, const char **errmsg, SendType sendtype);
+int dccdeny_can_send_to_channel(Client *client, Channel *channel, Membership *lp, const char **msg, const char **errmsg, SendType sendtype);
 int dccdeny_server_sync(Client *client);
-static ConfigItem_deny_dcc *dcc_isforbidden(Client *client, char *filename);
-static ConfigItem_deny_dcc *dcc_isdiscouraged(Client *client, char *filename);
-static void DCCdeny_add(char *filename, char *reason, int type, int type2);
+static ConfigItem_deny_dcc *dcc_isforbidden(Client *client, const char *filename);
+static ConfigItem_deny_dcc *dcc_isdiscouraged(Client *client, const char *filename);
+static void DCCdeny_add(const char *filename, const char *reason, int type, int type2);
 static void DCCdeny_del(ConfigItem_deny_dcc *deny);
 static void dcc_wipe_services(void);
-static char *get_dcc_filename(const char *text);
-static int can_dcc(Client *client, char *target, Client *targetcli, char *filename, char **errmsg);
-static int can_dcc_soft(Client *from, Client *to, char *filename, char **errmsg);
+static const char *get_dcc_filename(const char *text);
+static int can_dcc(Client *client, const char *target, Client *targetcli, const char *filename, const char **errmsg);
+static int can_dcc_soft(Client *from, Client *to, const char *filename, const char **errmsg);
 static void free_dcc_config_blocks(void);
 void dccdeny_unload_free_all_conf_deny_dcc(ModData *m);
 void dccdeny_unload_free_all_conf_allow_dcc(ModData *m);
+ConfigItem_deny_dcc *find_deny_dcc(const char *name);
 
 MOD_TEST()
 {
@@ -80,6 +82,7 @@ MOD_INIT()
 	HookAdd(modinfo->handle, HOOKTYPE_CAN_SEND_TO_USER, 0, dccdeny_can_send_to_user);
 	HookAdd(modinfo->handle, HOOKTYPE_CAN_SEND_TO_CHANNEL, 0, dccdeny_can_send_to_channel);
 	HookAdd(modinfo->handle, HOOKTYPE_SERVER_SYNC, 0, dccdeny_server_sync);
+	HookAdd(modinfo->handle, HOOKTYPE_DCC_DENIED, 0, dccdeny_dcc_denied);
 	return MOD_SUCCESS;
 }
 
@@ -104,62 +107,62 @@ int dccdeny_configtest_deny_dcc(ConfigFile *cf, ConfigEntry *ce, int type, int *
 	char has_filename = 0, has_reason = 0, has_soft = 0;
 
 	/* We are only interested in deny dcc { } */
-	if ((type != CONFIG_DENY) || strcmp(ce->ce_vardata, "dcc"))
+	if ((type != CONFIG_DENY) || strcmp(ce->value, "dcc"))
 		return 0;
 
-	for (cep = ce->ce_entries; cep; cep = cep->ce_next)
+	for (cep = ce->items; cep; cep = cep->next)
 	{
 		if (config_is_blankorempty(cep, "deny dcc"))
 		{
 			errors++;
 			continue;
 		}
-		if (!strcmp(cep->ce_varname, "filename"))
+		if (!strcmp(cep->name, "filename"))
 		{
 			if (has_filename)
 			{
-				config_warn_duplicate(cep->ce_fileptr->cf_filename,
-					cep->ce_varlinenum, "deny dcc::filename");
+				config_warn_duplicate(cep->file->filename,
+					cep->line_number, "deny dcc::filename");
 				continue;
 			}
 			has_filename = 1;
 		}
-		else if (!strcmp(cep->ce_varname, "reason"))
+		else if (!strcmp(cep->name, "reason"))
 		{
 			if (has_reason)
 			{
-				config_warn_duplicate(cep->ce_fileptr->cf_filename,
-					cep->ce_varlinenum, "deny dcc::reason");
+				config_warn_duplicate(cep->file->filename,
+					cep->line_number, "deny dcc::reason");
 				continue;
 			}
 			has_reason = 1;
 		}
-		else if (!strcmp(cep->ce_varname, "soft"))
+		else if (!strcmp(cep->name, "soft"))
 		{
 			if (has_soft)
 			{
-				config_warn_duplicate(cep->ce_fileptr->cf_filename,
-					cep->ce_varlinenum, "deny dcc::soft");
+				config_warn_duplicate(cep->file->filename,
+					cep->line_number, "deny dcc::soft");
 				continue;
 			}
 			has_soft = 1;
 		}
 		else
 		{
-			config_error_unknown(cep->ce_fileptr->cf_filename,
-				cep->ce_varlinenum, "deny dcc", cep->ce_varname);
+			config_error_unknown(cep->file->filename,
+				cep->line_number, "deny dcc", cep->name);
 			errors++;
 		}
 	}
 	if (!has_filename)
 	{
-		config_error_missing(ce->ce_fileptr->cf_filename, ce->ce_varlinenum,
+		config_error_missing(ce->file->filename, ce->line_number,
 			"deny dcc::filename");
 		errors++;
 	}
 	if (!has_reason)
 	{
-		config_error_missing(ce->ce_fileptr->cf_filename, ce->ce_varlinenum,
+		config_error_missing(ce->file->filename, ce->line_number,
 			"deny dcc::reason");
 		errors++;
 	}
@@ -174,46 +177,46 @@ int dccdeny_configtest_allow_dcc(ConfigFile *cf, ConfigEntry *ce, int type, int 
 	int errors = 0, has_filename = 0, has_soft = 0;
 
 	/* We are only interested in allow dcc { } */
-	if ((type != CONFIG_ALLOW) || strcmp(ce->ce_vardata, "dcc"))
+	if ((type != CONFIG_ALLOW) || strcmp(ce->value, "dcc"))
 		return 0;
 
-	for (cep = ce->ce_entries; cep; cep = cep->ce_next)
+	for (cep = ce->items; cep; cep = cep->next)
 	{
 		if (config_is_blankorempty(cep, "allow dcc"))
 		{
 			errors++;
 			continue;
 		}
-		if (!strcmp(cep->ce_varname, "filename"))
+		if (!strcmp(cep->name, "filename"))
 		{
 			if (has_filename)
 			{
-				config_warn_duplicate(cep->ce_fileptr->cf_filename,
-					cep->ce_varlinenum, "allow dcc::filename");
+				config_warn_duplicate(cep->file->filename,
+					cep->line_number, "allow dcc::filename");
 				continue;
 			}
 			has_filename = 1;
 		}
-		else if (!strcmp(cep->ce_varname, "soft"))
+		else if (!strcmp(cep->name, "soft"))
 		{
 			if (has_soft)
 			{
-				config_warn_duplicate(cep->ce_fileptr->cf_filename,
-					cep->ce_varlinenum, "allow dcc::soft");
+				config_warn_duplicate(cep->file->filename,
+					cep->line_number, "allow dcc::soft");
 				continue;
 			}
 			has_soft = 1;
 		}
 		else
 		{
-			config_error_unknown(cep->ce_fileptr->cf_filename, cep->ce_varlinenum,
-				"allow dcc", cep->ce_varname);
+			config_error_unknown(cep->file->filename, cep->line_number,
+				"allow dcc", cep->name);
 			errors++;
 		}
 	}
 	if (!has_filename)
 	{
-		config_error_missing(ce->ce_fileptr->cf_filename, ce->ce_varlinenum,
+		config_error_missing(ce->file->filename, ce->line_number,
 			"allow dcc::filename");
 		errors++;
 	}
@@ -228,23 +231,23 @@ int dccdeny_configrun_deny_dcc(ConfigFile *cf, ConfigEntry *ce, int type)
 	ConfigEntry 	    	*cep;
 
 	/* We are only interested in deny dcc { } */
-	if ((type != CONFIG_DENY) || strcmp(ce->ce_vardata, "dcc"))
+	if ((type != CONFIG_DENY) || strcmp(ce->value, "dcc"))
 		return 0;
 
 	deny = safe_alloc(sizeof(ConfigItem_deny_dcc));
-	for (cep = ce->ce_entries; cep; cep = cep->ce_next)
+	for (cep = ce->items; cep; cep = cep->next)
 	{
-		if (!strcmp(cep->ce_varname, "filename"))
+		if (!strcmp(cep->name, "filename"))
 		{
-			safe_strdup(deny->filename, cep->ce_vardata);
+			safe_strdup(deny->filename, cep->value);
 		}
-		else if (!strcmp(cep->ce_varname, "reason"))
+		else if (!strcmp(cep->name, "reason"))
 		{
-			safe_strdup(deny->reason, cep->ce_vardata);
+			safe_strdup(deny->reason, cep->value);
 		}
-		else if (!strcmp(cep->ce_varname, "soft"))
+		else if (!strcmp(cep->name, "soft"))
 		{
-			int x = config_checkval(cep->ce_vardata,CFG_YESNO);
+			int x = config_checkval(cep->value,CFG_YESNO);
 			if (x == 1)
 				deny->flag.type = DCCDENY_SOFT;
 		}
@@ -266,18 +269,18 @@ int dccdeny_configrun_allow_dcc(ConfigFile *cf, ConfigEntry *ce, int type)
 	ConfigEntry *cep;
 
 	/* We are only interested in allow dcc { } */
-	if ((type != CONFIG_ALLOW) || strcmp(ce->ce_vardata, "dcc"))
+	if ((type != CONFIG_ALLOW) || strcmp(ce->value, "dcc"))
 		return 0;
 
 	allow = safe_alloc(sizeof(ConfigItem_allow_dcc));
 
-	for (cep = ce->ce_entries; cep; cep = cep->ce_next)
+	for (cep = ce->items; cep; cep = cep->next)
 	{
-		if (!strcmp(cep->ce_varname, "filename"))
-			safe_strdup(allow->filename, cep->ce_vardata);
-		else if (!strcmp(cep->ce_varname, "soft"))
+		if (!strcmp(cep->name, "filename"))
+			safe_strdup(allow->filename, cep->value);
+		else if (!strcmp(cep->name, "soft"))
 		{
-			int x = config_checkval(cep->ce_vardata,CFG_YESNO);
+			int x = config_checkval(cep->value,CFG_YESNO);
 			if (x)
 				allow->flag.type = DCCDENY_SOFT;
 		}
@@ -371,8 +374,10 @@ CMD_FUNC(cmd_dccdeny)
 
 	if (!find_deny_dcc(parv[1]))
 	{
-		sendto_ops("%s added a temp dccdeny for %s (%s)", client->name,
-		    parv[1], parv[2]);
+		unreal_log(ULOG_INFO, "dccdeny", "DCCDENY_ADD", client,
+		           "[dccdeny] $client added a temporary DCCDENY for $file ($reason)",
+		           log_data_string("file", parv[1]),
+		           log_data_string("reason", parv[2]));
 		DCCdeny_add(parv[1], parv[2], DCCDENY_HARD, CONF_BAN_TYPE_TEMPORARY);
 		return;
 	} else
@@ -405,7 +410,10 @@ CMD_FUNC(cmd_undccdeny)
 
 	if ((d = find_deny_dcc(parv[1])) && d->flag.type2 == CONF_BAN_TYPE_TEMPORARY)
 	{
-		sendto_ops("%s removed a temp dccdeny for %s", client->name, parv[1]);
+		unreal_log(ULOG_INFO, "dccdeny", "DCCDENY_DEL", client,
+		           "[dccdeny] $client removed a temporary DCCDENY for $file ($reason)",
+		           log_data_string("file", d->filename),
+		           log_data_string("reason", d->reason));
 		DCCdeny_del(d);
 		return;
 	} else
@@ -489,11 +497,11 @@ int dccdeny_server_sync(Client *client)
 }
 
 /** Check if a DCC should be blocked (user-to-user) */
-int dccdeny_can_send_to_user(Client *client, Client *target, char **text, char **errmsg, SendType sendtype)
+int dccdeny_can_send_to_user(Client *client, Client *target, const char **text, const char **errmsg, SendType sendtype)
 {
 	if (**text == '\001')
 	{
-		char *filename = get_dcc_filename(*text);
+		const char *filename = get_dcc_filename(*text);
 		if (filename)
 		{
 			if (MyUser(client) && !can_dcc(client, target->name, target, filename, errmsg))
@@ -507,15 +515,15 @@ int dccdeny_can_send_to_user(Client *client, Client *target, char **text, char *
 }
 
 /** Check if a DCC should be blocked (user-to-channel, unusual) */
-int dccdeny_can_send_to_channel(Client *client, Channel *channel, Membership *lp, char **msg, char **errmsg, SendType sendtype)
+int dccdeny_can_send_to_channel(Client *client, Channel *channel, Membership *lp, const char **msg, const char **errmsg, SendType sendtype)
 {
 	static char errbuf[512];
 
 	if (MyUser(client) && (**msg == '\001'))
 	{
-		char *err = NULL;
-		char *filename = get_dcc_filename(*msg);
-		if (filename && !can_dcc(client, channel->chname, NULL, filename, &err))
+		const char *err = NULL;
+		const char *filename = get_dcc_filename(*msg);
+		if (filename && !can_dcc(client, channel->name, NULL, filename, &err))
 		{
 			if (!IsDead(client) && (sendtype != SEND_TYPE_NOTICE))
 			{
@@ -541,10 +549,11 @@ int dccdeny_can_send_to_channel(Client *client, Channel *channel, Membership *lp
  * This is to protect a bit against tricks like 'flood-it-off-the-buffer'
  * and color 1,1 etc...
  */
-static char *dcc_displayfile(char *f)
+static const char *dcc_displayfile(const char *f)
 {
 	static char buf[512];
-	char *i, *o = buf;
+	const char *i;
+	char *o = buf;
 	size_t n = strlen(f);
 
 	if (n < 300)
@@ -575,7 +584,7 @@ static char *dcc_displayfile(char *f)
 	return buf;
 }
 
-static char *get_dcc_filename(const char *text)
+static const char *get_dcc_filename(const char *text)
 {
 	static char filename[BUFSIZE+1];
 	char *end;
@@ -617,7 +626,7 @@ static char *get_dcc_filename(const char *text)
  * @param text        The entire message
  * @returns 1 if DCC SEND allowed, 0 if rejected
  */
-static int can_dcc(Client *client, char *target, Client *targetcli, char *filename, char **errmsg)
+static int can_dcc(Client *client, const char *target, Client *targetcli, const char *filename, const char **errmsg)
 {
 	ConfigItem_deny_dcc *fl;
 	static char errbuf[256];
@@ -644,9 +653,9 @@ static int can_dcc(Client *client, char *target, Client *targetcli, char *filena
 
 	if ((fl = dcc_isforbidden(client, filename)))
 	{
-		char *displayfile = dcc_displayfile(filename);
+		const char *displayfile = dcc_displayfile(filename);
 
-		RunHook5(HOOKTYPE_DCC_DENIED, client, target, filename, displayfile, fl);
+		RunHook(HOOKTYPE_DCC_DENIED, client, target, filename, displayfile, fl);
 
 		ircsnprintf(errbuf, sizeof(errbuf), "Cannot DCC SEND file: %s", fl->reason);
 		*errmsg = errbuf;
@@ -675,10 +684,10 @@ static int can_dcc(Client *client, char *target, Client *targetcli, char *filena
  * 1:			allowed
  * 0:			block
  */
-static int can_dcc_soft(Client *from, Client *to, char *filename, char **errmsg)
+static int can_dcc_soft(Client *from, Client *to, const char *filename, const char **errmsg)
 {
 	ConfigItem_deny_dcc *fl;
-	char *displayfile;
+	const char *displayfile;
 	static char errbuf[256];
 
 	/* User (IRCOp) may bypass send restrictions */
@@ -718,7 +727,7 @@ static int can_dcc_soft(Client *from, Client *to, char *filename, char **errmsg)
 }
 
 /** Checks if the dcc is blacklisted. */
-static ConfigItem_deny_dcc *dcc_isforbidden(Client *client, char *filename)
+static ConfigItem_deny_dcc *dcc_isforbidden(Client *client, const char *filename)
 {
 	ConfigItem_deny_dcc *d;
 	ConfigItem_allow_dcc *a;
@@ -743,7 +752,7 @@ static ConfigItem_deny_dcc *dcc_isforbidden(Client *client, char *filename)
 }
 
 /** checks if the dcc is discouraged ('soft bans'). */
-static ConfigItem_deny_dcc *dcc_isdiscouraged(Client *client, char *filename)
+static ConfigItem_deny_dcc *dcc_isdiscouraged(Client *client, const char *filename)
 {
 	ConfigItem_deny_dcc *d;
 	ConfigItem_allow_dcc *a;
@@ -767,7 +776,7 @@ static ConfigItem_deny_dcc *dcc_isdiscouraged(Client *client, char *filename)
 	return NULL;
 }
 
-static void DCCdeny_add(char *filename, char *reason, int type, int type2)
+static void DCCdeny_add(const char *filename, const char *reason, int type, int type2)
 {
 	ConfigItem_deny_dcc *deny = NULL;
 
@@ -787,7 +796,7 @@ static void DCCdeny_del(ConfigItem_deny_dcc *deny)
 	safe_free(deny);
 }
 
-ConfigItem_deny_dcc *find_deny_dcc(char *name)
+ConfigItem_deny_dcc *find_deny_dcc(const char *name)
 {
 	ConfigItem_deny_dcc	*e;
 
@@ -820,7 +829,7 @@ static void dcc_wipe_services(void)
 
 }
 
-int dccdeny_stats(Client *client, char *para)
+int dccdeny_stats(Client *client, const char *para)
 {
 	ConfigItem_deny_dcc *denytmp;
 	ConfigItem_allow_dcc *allowtmp;
@@ -859,4 +868,14 @@ int dccdeny_stats(Client *client, char *para)
 			a, filemask);
 	}
 	return 1;
+}
+
+int dccdeny_dcc_denied(Client *client, const char *target, const char *realfile, const char *displayfile, ConfigItem_deny_dcc *dccdeny)
+{
+	unreal_log(ULOG_INFO, "dcc", "DCC_REJECTED", client,
+	           "$client.details tried to send forbidden file $filename ($ban_reason) to $target (is blocked now)",
+	           log_data_string("filename", displayfile),
+	           log_data_string("ban_reason", dccdeny->reason),
+	           log_data_string("target", target));
+	return 0;
 }

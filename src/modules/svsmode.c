@@ -39,8 +39,10 @@ ModuleHeader MOD_HEADER
 	"5.0",
 	"command /svsmode and svs2mode", 
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
     };
+
+char modebuf[BUFSIZE], parabuf[BUFSIZE];
 
 MOD_INIT()
 {
@@ -63,8 +65,10 @@ MOD_UNLOAD()
 void unban_user(Client *client, Channel *channel, Client *acptr, char chmode)
 {
 	Extban *extban;
+	const char *nextbanstr;
 	Ban *ban, *bnext;
 	Ban **banlist;
+	BanContext *b;
 	char uhost[NICKLEN+USERLEN+HOSTLEN+6], vhost[NICKLEN+USERLEN+HOSTLEN+6];
 	char ihost[NICKLEN+USERLEN+HOSTLEN+6], chost[NICKLEN+USERLEN+HOSTLEN+6];
 
@@ -114,6 +118,11 @@ void unban_user(Client *client, Channel *channel, Client *acptr, char chmode)
 
 	/* DO THE ACTUAL WORK */
 
+	b = safe_alloc(sizeof(BanContext));
+	b->client = acptr;
+	b->channel = channel;
+	b->ban_check_types = BANCHK_JOIN;
+
 	for (ban = *banlist; ban; ban = bnext)
 	{
 		bnext = ban->next;
@@ -122,15 +131,15 @@ void unban_user(Client *client, Channel *channel, Client *acptr, char chmode)
 		    (*ihost && match_simple(ban->banstr, ihost)) ||
 		    (*chost && match_simple(ban->banstr, chost)))
 		{
-			add_send_mode_param(channel, client, '-',  chmode, 
-				ban->banstr);
+			add_send_mode_param(channel, client, '-',  chmode, ban->banstr);
 			del_listmode(banlist, channel, ban->banstr);
 		}
-		else if (chmode != 'I' && *ban->banstr == '~' && (extban = findmod_by_bantype(ban->banstr[1])))
+		else if (chmode != 'I' && *ban->banstr == '~' && (extban = findmod_by_bantype(ban->banstr, &nextbanstr)))
 		{
-			if (extban->options & EXTBOPT_CHSVSMODE) 
+			if ((extban->options & EXTBOPT_CHSVSMODE) && (extban->is_banned_events & b->ban_check_types))
 			{
-				if (extban->is_banned(acptr, channel, ban->banstr, BANCHK_JOIN, NULL, NULL))
+				b->banstr = nextbanstr;
+				if (extban->is_banned(b))
 				{
 					add_send_mode_param(channel, acptr, '-', chmode, ban->banstr);
 					del_listmode(banlist, channel, ban->banstr);
@@ -138,6 +147,7 @@ void unban_user(Client *client, Channel *channel, Client *acptr, char chmode)
 			}
 		}
 	}
+	safe_free(b);
 }
 
 void clear_bans(Client *client, Channel *channel, char chmode)
@@ -164,7 +174,7 @@ void clear_bans(Client *client, Channel *channel, char chmode)
 	for (ban = *banlist; ban; ban = bnext)
 	{
 		bnext = ban->next;
-		if (chmode != 'I' && (*ban->banstr == '~') && (extban = findmod_by_bantype(ban->banstr[1])))
+		if (chmode != 'I' && (*ban->banstr == '~') && (extban = findmod_by_bantype(ban->banstr, NULL)))
 		{
 			if (!(extban->options & EXTBOPT_CHSVSMODE))							
 				continue;
@@ -195,14 +205,14 @@ void clear_bans(Client *client, Channel *channel, char chmode)
  *
  * OLD syntax had a 'ts' parameter. No services are known to use this.
  */
-void channel_svsmode(Client *client, int parc, char *parv[]) 
+void channel_svsmode(Client *client, int parc, const char *parv[]) 
 {
 	Channel *channel;
 	Client *target;
-	char *m;
+	const char *m;
 	int what = MODE_ADD;
 	int i = 4; // wtf is this
-	Member *cm;
+	Member *member;
 	int channel_flags;
 
 	*parabuf = *modebuf = '\0';
@@ -210,67 +220,70 @@ void channel_svsmode(Client *client, int parc, char *parv[])
 	if ((parc < 3) || BadPtr(parv[2]))
 		return;
 
-	if (!(channel = find_channel(parv[1], NULL)))
+	if (!(channel = find_channel(parv[1])))
 		return;
 
-	for(m = parv[2]; *m; m++)
+	for (m = parv[2]; *m; m++)
 	{
-		switch (*m)
+		if (*m == '+') 
 		{
-			case '+':
-				what = MODE_ADD;
-				break;
-			case '-':
-				what = MODE_DEL;
-				break;
-			case 'v':
-			case 'h':
-			case 'o':
-			case 'a':
-			case 'q':
-				if (what != MODE_DEL)
+			what = MODE_ADD;
+		} else
+		if (*m == '-')
+		{
+			what = MODE_DEL;
+		} else
+		if ((*m == 'b') || (*m == 'e') || (*m == 'I'))
+		{
+			if (parc >= i)
+			{
+				if (!(target = find_user(parv[i-1], NULL)))
 				{
-					sendto_realops("Warning! Received SVS(2)MODE with +%c for %s from %s, which is invalid!!",
-						*m, channel->chname, client->name);
-					continue;
-				}
-				channel_flags = char_to_channelflag(*m);
-				for (cm = channel->members; cm; cm = cm->next)
-				{
-					if (cm->flags & channel_flags)
-					{
-						Membership *mb;
-						mb = find_membership_link(cm->client->user->channel, channel);
-						add_send_mode_param(channel, client, '-', *m, cm->client->name);
-						cm->flags &= ~channel_flags;
-						if (mb)
-							mb->flags = cm->flags;
-					}
-				}
-				break;
-			case 'b':
-			case 'e':
-			case 'I':
-				if (parc >= i)
-				{
-					if (!(target = find_person(parv[i-1], NULL)))
-					{
-						i++;
-						break;
-					}
 					i++;
+					break;
+				}
+				i++;
 
-					unban_user(client, channel, target, *m);
+				unban_user(client, channel, target, *m);
+			}
+			else {
+				clear_bans(client, channel, *m);
+			}
+		} else
+		{
+			/* Find member mode handler (vhoaq) */
+			Cmode *cm = find_channel_mode_handler(*m);
+			if (!cm || (cm->type != CMODE_MEMBER))
+			{
+				unreal_log(ULOG_WARNING, "svsmode", "INVALID_SVSMODE", client,
+				           "Invalid SVSMODE for mode '$mode_character' in channel $channel from $client.",
+				           log_data_char("mode_character", *m),
+				           log_data_channel("channel", channel));
+				continue;
+			}
+			if (what != MODE_DEL)
+			{
+				unreal_log(ULOG_WARNING, "svsmode", "INVALID_SVSMODE", client,
+				           "Invalid SVSMODE from $client trying to add '$mode_character' in $channel.",
+				           log_data_char("mode_character", *m),
+				           log_data_channel("channel", channel));
+				continue;
+			}
+			for (member = channel->members; member; member = member->next)
+			{
+				if (check_channel_access_letter(member->member_modes, *m))
+				{
+					Membership *mb = find_membership_link(member->client->user->channel, channel);
+					if (!mb)
+						continue; /* bug */
+					
+					/* Send the -x out */
+					add_send_mode_param(channel, client, '-', *m, member->client->name);
+					
+					/* And remove from memory */
+					del_member_mode_fast(member, mb, *m);
 				}
-				else {
-					clear_bans(client, channel, *m);
-				}
-				break;
-			default:
-				sendto_realops("Warning! Invalid mode `%c' used with 'SVSMODE %s %s %s' (from %s %s)",
-					       *m, channel->chname, parv[2], parv[3] ? parv[3] : "",
-					       client->direction->name, client->name);
-				break;
+			}
 		}
 	}
 
@@ -278,16 +291,17 @@ void channel_svsmode(Client *client, int parc, char *parv[])
 	if (*parabuf)
 	{
 		MessageTag *mtags = NULL;
+		int destroy_channel = 0;
 		/* NOTE: cannot use 'recv_mtag' here because MODE could be rewrapped. Not ideal :( */
 		new_message(client, NULL, &mtags);
 
 		sendto_channel(channel, client, client, 0, 0, SEND_LOCAL, mtags,
 		               ":%s MODE %s %s %s",
-		               client->name, channel->chname,  modebuf, parabuf);
-		sendto_server(NULL, 0, 0, mtags, ":%s MODE %s %s %s", client->id, channel->chname, modebuf, parabuf);
+		               client->name, channel->name,  modebuf, parabuf);
+		sendto_server(NULL, 0, 0, mtags, ":%s MODE %s %s %s", client->id, channel->name, modebuf, parabuf);
 
 		/* Activate this hook just like cmd_mode.c */
-		RunHook7(HOOKTYPE_REMOTE_CHANMODE, client, channel, mtags, modebuf, parabuf, 0, 0);
+		RunHook(HOOKTYPE_REMOTE_CHANMODE, client, channel, mtags, modebuf, parabuf, 0, 0, &destroy_channel);
 
 		free_message_tags(mtags);
 
@@ -300,17 +314,17 @@ void channel_svsmode(Client *client, int parc, char *parv[])
  * This is used by both SVSMODE and SVS2MODE, when dealing with users (not channels).
  * parv[1] - nick to change mode for
  * parv[2] - modes to change
- * parv[3] - Service Stamp (if mode == d)
+ * parv[3] - account name (if mode contains 'd')
  *
  * show_change can be 0 (for svsmode) or 1 (for svs2mode).
  */
-void do_svsmode(Client *client, MessageTag *recv_mtags, int parc, char *parv[], int show_change)
+void do_svsmode(Client *client, MessageTag *recv_mtags, int parc, const char *parv[], int show_change)
 {
-	int i;
-	char *m;
+	Umode *um;
+	const char *m;
 	Client *target;
 	int  what;
-	long setflags = 0;
+	long oldumodes = 0;
 
 	if (!IsULine(client))
 		return;
@@ -326,15 +340,12 @@ void do_svsmode(Client *client, MessageTag *recv_mtags, int parc, char *parv[], 
 		return;
 	}
 
-	if (!(target = find_person(parv[1], NULL)))
+	if (!(target = find_user(parv[1], NULL)))
 		return;
 
 	userhost_save_current(target);
 
-	/* initialize setflag to be the user's pre-SVSMODE flags */
-	for (i = 0; i <= Usermode_highest; i++)
-		if (Usermode_Table[i].flag && (target->umodes & Usermode_Table[i].mode))
-			setflags |= Usermode_Table[i].mode;
+	oldumodes = target->umodes;
 
 	/* parse mode change string(s) */
 	for (m = parv[2]; *m; m++)
@@ -383,6 +394,8 @@ void do_svsmode(Client *client, MessageTag *recv_mtags, int parc, char *parv[], 
 					/* User is no longer oper (after the goto below, anyway)...
 					 * so remove all oper-only modes and snomasks.
 					 */
+					if (MyUser(client))
+						RunHook(HOOKTYPE_LOCAL_OPER, client, 0, NULL);
 					remove_oper_privileges(target, 0);
 				}
 				goto setmodex;
@@ -392,10 +405,15 @@ void do_svsmode(Client *client, MessageTag *recv_mtags, int parc, char *parv[], 
 					if (!IsOper(target) && !strchr(parv[2], 'o')) /* (ofcoz this strchr() is flawed) */
 					{
 						/* isn't an oper, and would not become one either.. abort! */
-						sendto_realops(
-							"[BUG] server %s tried to set +H while user not an oper, para=%s/%s, "
-							"umodes=%ld, please fix your services or if you think it's our fault, "
-							"report at https://bugs.unrealircd.org/", client->name, parv[1], parv[2], target->umodes);
+						unreal_log(ULOG_WARNING, "svsmode", "SVSMODE_INVALID", client,
+						           "[BUG] Server $client tried to set user mode +H (hidden ircop) "
+						           "on a user that is not +o (not ircop)! "
+						           "Please fix your services, or if you think it is our fault, then "
+						           "report at https://bugs.unrealircd.org/. "
+						           "Parameters: $para1 $para2. Target: $target.",
+						           log_data_string("para1", parv[1]),
+						           log_data_string("para2", parv[2]),
+						           log_data_client("target", target));
 						break; /* abort! */
 					}
 					irccounts.operators--;
@@ -406,8 +424,18 @@ void do_svsmode(Client *client, MessageTag *recv_mtags, int parc, char *parv[], 
 			case 'd':
 				if (parv[3])
 				{
-					strlcpy(target->user->svid, parv[3], sizeof(target->user->svid));
-					user_account_login(recv_mtags, target);
+					int was_logged_in = IsLoggedIn(target) ? 1 : 0;
+					strlcpy(target->user->account, parv[3], sizeof(target->user->account));
+					if (!was_logged_in && !IsLoggedIn(target))
+					{
+						/* We don't care about users going from not logged in
+						 * to not logged in, which is something that can happen
+						 * from 0 to 123456, eg from no account to unconfirmed account.
+						 */
+					} else {
+						/* LOGIN or LOGOUT (or account change) */
+						user_account_login(recv_mtags, target);
+					}
 					if (MyConnect(target) && IsDead(target))
 						return; /* was killed due to *LINE on ~a probably */
 				}
@@ -477,16 +505,14 @@ void do_svsmode(Client *client, MessageTag *recv_mtags, int parc, char *parv[], 
 				break;
 			default:
 				setmodex:
-				for (i = 0; i <= Usermode_highest; i++)
+				for (um = usermodes; um; um = um->next)
 				{
-					if (!Usermode_Table[i].flag)
-						continue;
-					if (*m == Usermode_Table[i].flag)
+					if (um->letter == *m)
 					{
 						if (what == MODE_ADD)
-							target->umodes |= Usermode_Table[i].mode;
+							target->umodes |= um->mode;
 						else
-							target->umodes &= ~Usermode_Table[i].mode;
+							target->umodes &= ~um->mode;
 						break;
 					}
 				}
@@ -503,15 +529,15 @@ void do_svsmode(Client *client, MessageTag *recv_mtags, int parc, char *parv[], 
 		    parv[1], parv[2]);
 
 	/* Here we trigger the same hooks that cmd_mode does and, likewise,
-	   only if the old flags (setflags) are different than the newly-
+	   only if the old flags (oldumodes) are different than the newly-
 	   set ones */
-	if (setflags != target->umodes)
-		RunHook3(HOOKTYPE_UMODE_CHANGE, target, setflags, target->umodes);
+	if (oldumodes != target->umodes)
+		RunHook(HOOKTYPE_UMODE_CHANGE, target, oldumodes, target->umodes);
 
 	if (show_change)
 	{
 		char buf[BUFSIZE];
-		build_umode_string(target, setflags, ALL_UMODES, buf);
+		build_umode_string(target, oldumodes, ALL_UMODES, buf);
 		if (MyUser(target) && *buf)
 			sendto_one(target, NULL, ":%s MODE %s :%s", client->name, target->name, buf);
 	}
@@ -525,7 +551,7 @@ void do_svsmode(Client *client, MessageTag *recv_mtags, int parc, char *parv[], 
  * cmd_svsmode() added by taz
  * parv[1] - username to change mode for
  * parv[2] - modes to change
- * parv[3] - Service Stamp (if mode == d)
+ * parv[3] - account name (if mode contains 'd')
  */
 CMD_FUNC(cmd_svsmode)
 {
@@ -536,7 +562,7 @@ CMD_FUNC(cmd_svsmode)
  * cmd_svs2mode() added by Potvin
  * parv[1] - username to change mode for
  * parv[2] - modes to change
- * parv[3] - Service Stamp (if mode == d)
+ * parv[3] - account name (if mode contains 'd')
  */
 CMD_FUNC(cmd_svs2mode)
 {
@@ -588,8 +614,8 @@ void add_send_mode_param(Channel *channel, Client *from, char what, char mode, c
 		new_message(from, NULL, &mtags);
 		sendto_channel(channel, from, from, 0, 0, SEND_LOCAL, mtags,
 		               ":%s MODE %s %s %s",
-		               from->name, channel->chname, modebuf, parabuf);
-		sendto_server(NULL, 0, 0, mtags, ":%s MODE %s %s %s", from->id, channel->chname, modebuf, parabuf);
+		               from->name, channel->name, modebuf, parabuf);
+		sendto_server(NULL, 0, 0, mtags, ":%s MODE %s %s %s", from->id, channel->name, modebuf, parabuf);
 		free_message_tags(mtags);
 		send = 0;
 		*parabuf = 0;

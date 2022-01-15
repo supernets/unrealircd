@@ -26,16 +26,16 @@ ModuleHeader MOD_HEADER
 	"4.2",
 	"Channel Mode +M",
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
     };
 
 Cmode_t EXTCMODE_REGONLYSPEAK;
 static char errMsg[2048];
 
-#define IsRegOnlySpeak(channel)    (channel->mode.extmode & EXTCMODE_REGONLYSPEAK)
+#define IsRegOnlySpeak(channel)    (channel->mode.mode & EXTCMODE_REGONLYSPEAK)
 
-int regonlyspeak_can_send_to_channel(Client *client, Channel *channel, Membership *lp, char **msg, char **errmsg, SendType sendtype);
-char *regonlyspeak_part_message (Client *client, Channel *channel, char *comment);
+int regonlyspeak_can_send_to_channel(Client *client, Channel *channel, Membership *lp, const char **msg, const char **errmsg, SendType sendtype);
+const char *regonlyspeak_part_message (Client *client, Channel *channel, const char *comment);
 
 MOD_TEST()
 {
@@ -48,12 +48,12 @@ MOD_INIT()
 
 	memset(&req, 0, sizeof(req));
 	req.paracount = 0;
-	req.flag = 'M';
+	req.letter = 'M';
 	req.is_ok = extcmode_default_requirehalfop;
 	CmodeAdd(modinfo->handle, req, &EXTCMODE_REGONLYSPEAK);
 	
 	HookAdd(modinfo->handle, HOOKTYPE_CAN_SEND_TO_CHANNEL, 0, regonlyspeak_can_send_to_channel);
-	HookAddPChar(modinfo->handle, HOOKTYPE_PRE_LOCAL_PART, 0, regonlyspeak_part_message);
+	HookAddConstString(modinfo->handle, HOOKTYPE_PRE_LOCAL_PART, 0, regonlyspeak_part_message);
 
 	
 	MARK_AS_OFFICIAL_MODULE(modinfo);
@@ -70,7 +70,7 @@ MOD_UNLOAD()
 	return MOD_SUCCESS;
 }
 
-char *regonlyspeak_part_message (Client *client, Channel *channel, char *comment)
+const char *regonlyspeak_part_message (Client *client, Channel *channel, const char *comment)
 {
 	if (!comment)
 		return NULL;
@@ -81,15 +81,15 @@ char *regonlyspeak_part_message (Client *client, Channel *channel, char *comment
 	return comment;
 }
 
-int regonlyspeak_can_send_to_channel(Client *client, Channel *channel, Membership *lp, char **msg, char **errmsg, SendType sendtype)
+int regonlyspeak_can_send_to_channel(Client *client, Channel *channel, Membership *lp, const char **msg, const char **errmsg, SendType sendtype)
 {
 	Hook *h;
 	int i;
 
-	if (IsRegOnlySpeak(channel) && !op_can_override("channel:override:message:regonlyspeak",client,channel,NULL) && !IsLoggedIn(client) &&
-		    (!lp
-		    || !(lp->flags & (CHFL_CHANOP | CHFL_VOICE | CHFL_CHANOWNER |
-		    CHFL_HALFOP | CHFL_CHANADMIN))))
+	if (IsRegOnlySpeak(channel) &&
+	    !op_can_override("channel:override:message:regonlyspeak",client,channel,NULL) &&
+	    !IsLoggedIn(client) &&
+	    !check_channel_access_membership(lp, "vhoaq"))
 	{
 		for (h = Hooks[HOOKTYPE_CAN_BYPASS_CHANNEL_MESSAGE_RESTRICTION]; h; h = h->next)
 		{

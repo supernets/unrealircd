@@ -11,7 +11,7 @@ ModuleHeader MOD_HEADER
 	"5.0",
 	"Target flood protection (set::anti-flood::target-flood)",
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
     };
 
 #define TFP_PRIVMSG	0
@@ -35,8 +35,8 @@ struct TargetFloodConfig {
 int targetfloodprot_config_test(ConfigFile *cf, ConfigEntry *ce, int type, int *errs);
 int targetfloodprot_config_run(ConfigFile *cf, ConfigEntry *ce, int type);
 void targetfloodprot_mdata_free(ModData *m);
-int targetfloodprot_can_send_to_channel(Client *client, Channel *channel, Membership *lp, char **msg, char **errmsg, SendType sendtype);
-int targetfloodprot_can_send_to_user(Client *client, Client *target, char **text, char **errmsg, SendType sendtype);
+int targetfloodprot_can_send_to_channel(Client *client, Channel *channel, Membership *lp, const char **msg, const char **errmsg, SendType sendtype);
+int targetfloodprot_can_send_to_user(Client *client, Client *target, const char **text, const char **errmsg, SendType sendtype);
 
 /* Global variables */
 ModDataInfo *targetfloodprot_client_md = NULL;
@@ -117,12 +117,10 @@ MOD_LOAD()
 
 MOD_UNLOAD()
 {
+	safe_free(channelcfg);
+	safe_free(privatecfg);
 	return MOD_SUCCESS;
 }
-
-#ifndef CheckNull
- #define CheckNull(x) if ((!(x)->ce_vardata) || (!(*((x)->ce_vardata)))) { config_error("%s:%i: missing parameter", (x)->ce_fileptr->cf_filename, (x)->ce_varlinenum); errors++; continue; }
-#endif
 
 int targetfloodprot_config_test(ConfigFile *cf, ConfigEntry *ce, int type, int *errs)
 {
@@ -133,36 +131,36 @@ int targetfloodprot_config_test(ConfigFile *cf, ConfigEntry *ce, int type, int *
 		return 0;
 
 	/* We are only interrested in set::anti-flood::target-flood.. */
-	if (!ce || !ce->ce_varname || strcmp(ce->ce_varname, "target-flood"))
+	if (!ce || !ce->name || strcmp(ce->name, "target-flood"))
 		return 0;
 
-	for (cep = ce->ce_entries; cep; cep = cep->ce_next)
+	for (cep = ce->items; cep; cep = cep->next)
 	{
 		CheckNull(cep);
 
-		if (!strcmp(cep->ce_varname, "channel-privmsg") ||
-		    !strcmp(cep->ce_varname, "channel-notice") ||
-		    !strcmp(cep->ce_varname, "channel-tagmsg") ||
-		    !strcmp(cep->ce_varname, "private-privmsg") ||
-		    !strcmp(cep->ce_varname, "private-notice") ||
-		    !strcmp(cep->ce_varname, "private-tagmsg"))
+		if (!strcmp(cep->name, "channel-privmsg") ||
+		    !strcmp(cep->name, "channel-notice") ||
+		    !strcmp(cep->name, "channel-tagmsg") ||
+		    !strcmp(cep->name, "private-privmsg") ||
+		    !strcmp(cep->name, "private-notice") ||
+		    !strcmp(cep->name, "private-tagmsg"))
 		{
 			int cnt = 0, period = 0;
 
-			if (!config_parse_flood(cep->ce_vardata, &cnt, &period) ||
+			if (!config_parse_flood(cep->value, &cnt, &period) ||
 			    (cnt < 1) || (cnt > 10000) || (period < 1) || (period > 120))
 			{
 				config_error("%s:%i: set::anti-flood::target-flood::%s error. "
 				             "Syntax is '<count>:<period>' (eg 5:60). "
 				             "Count must be 1-10000 and period must be 1-120.",
-				             cep->ce_fileptr->cf_filename, cep->ce_varlinenum,
-				             cep->ce_varname);
+				             cep->file->filename, cep->line_number,
+				             cep->name);
 				errors++;
 			}
 		} else
 		{
 			config_error("%s:%i: unknown directive set::anti-flood::target-flood:%s",
-				cep->ce_fileptr->cf_filename, cep->ce_varlinenum, cep->ce_varname);
+				cep->file->filename, cep->line_number, cep->name);
 			errors++;
 			continue;
 		}
@@ -180,23 +178,23 @@ int targetfloodprot_config_run(ConfigFile *cf, ConfigEntry *ce, int type)
 		return 0;
 
 	/* We are only interrested in set::anti-flood::target-flood.. */
-	if (!ce || !ce->ce_varname || strcmp(ce->ce_varname, "target-flood"))
+	if (!ce || !ce->name || strcmp(ce->name, "target-flood"))
 		return 0;
 
-	for (cep = ce->ce_entries; cep; cep = cep->ce_next)
+	for (cep = ce->items; cep; cep = cep->next)
 	{
-		if (!strcmp(cep->ce_varname, "channel-privmsg"))
-			config_parse_flood(cep->ce_vardata, &channelcfg->cnt[TFP_PRIVMSG], &channelcfg->t[TFP_PRIVMSG]);
-		else if (!strcmp(cep->ce_varname, "channel-notice"))
-			config_parse_flood(cep->ce_vardata, &channelcfg->cnt[TFP_NOTICE], &channelcfg->t[TFP_NOTICE]);
-		else if (!strcmp(cep->ce_varname, "channel-tagmsg"))
-			config_parse_flood(cep->ce_vardata, &channelcfg->cnt[TFP_TAGMSG], &channelcfg->t[TFP_TAGMSG]);
-		else if (!strcmp(cep->ce_varname, "private-privmsg"))
-			config_parse_flood(cep->ce_vardata, &privatecfg->cnt[TFP_PRIVMSG], &privatecfg->t[TFP_PRIVMSG]);
-		else if (!strcmp(cep->ce_varname, "private-notice"))
-			config_parse_flood(cep->ce_vardata, &privatecfg->cnt[TFP_NOTICE], &privatecfg->t[TFP_NOTICE]);
-		else if (!strcmp(cep->ce_varname, "private-tagmsg"))
-			config_parse_flood(cep->ce_vardata, &privatecfg->cnt[TFP_TAGMSG], &privatecfg->t[TFP_TAGMSG]);
+		if (!strcmp(cep->name, "channel-privmsg"))
+			config_parse_flood(cep->value, &channelcfg->cnt[TFP_PRIVMSG], &channelcfg->t[TFP_PRIVMSG]);
+		else if (!strcmp(cep->name, "channel-notice"))
+			config_parse_flood(cep->value, &channelcfg->cnt[TFP_NOTICE], &channelcfg->t[TFP_NOTICE]);
+		else if (!strcmp(cep->name, "channel-tagmsg"))
+			config_parse_flood(cep->value, &channelcfg->cnt[TFP_TAGMSG], &channelcfg->t[TFP_TAGMSG]);
+		else if (!strcmp(cep->name, "private-privmsg"))
+			config_parse_flood(cep->value, &privatecfg->cnt[TFP_PRIVMSG], &privatecfg->t[TFP_PRIVMSG]);
+		else if (!strcmp(cep->name, "private-notice"))
+			config_parse_flood(cep->value, &privatecfg->cnt[TFP_NOTICE], &privatecfg->t[TFP_NOTICE]);
+		else if (!strcmp(cep->name, "private-tagmsg"))
+			config_parse_flood(cep->value, &privatecfg->cnt[TFP_TAGMSG], &privatecfg->t[TFP_TAGMSG]);
 	}
 
 	return 1;
@@ -218,13 +216,15 @@ int sendtypetowhat(SendType sendtype)
 	if (sendtype == SEND_TYPE_TAGMSG)
 		return 2;
 #ifdef DEBUGMODE
-	ircd_log(LOG_ERROR, "sendtypetowhat() for unknown value %d", (int)sendtype);
+	unreal_log(ULOG_ERROR, "flood", "BUG_SENDTYPETOWHAT_UNKNOWN_VALUE", NULL,
+	           "[BUG] sendtypetowhat() called for unknown sendtype $send_type",
+	           log_data_integer("send_type", sendtype));
 	abort();
 #endif
 	return 0; /* otherwise, default to privmsg i guess */
 }
 
-int targetfloodprot_can_send_to_channel(Client *client, Channel *channel, Membership *lp, char **msg, char **errmsg, SendType sendtype)
+int targetfloodprot_can_send_to_channel(Client *client, Channel *channel, Membership *lp, const char **msg, const char **errmsg, SendType sendtype)
 {
 	TargetFlood *flood;
 	static char errbuf[256];
@@ -269,7 +269,7 @@ int targetfloodprot_can_send_to_channel(Client *client, Channel *channel, Member
 	return HOOK_CONTINUE;
 }
 
-int targetfloodprot_can_send_to_user(Client *client, Client *target, char **text, char **errmsg, SendType sendtype)
+int targetfloodprot_can_send_to_user(Client *client, Client *target, const char **text, const char **errmsg, SendType sendtype)
 {
 	TargetFlood *flood;
 	static char errbuf[256];

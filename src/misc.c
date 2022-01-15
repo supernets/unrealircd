@@ -32,15 +32,24 @@
 
 static void exit_one_client(Client *, MessageTag *mtags_i, const char *);
 
-static char *months[] = {
+static const char *months[] = {
 	"January", "February", "March", "April",
 	"May", "June", "July", "August",
 	"September", "October", "November", "December"
 };
 
-static char *weekdays[] = {
+static const char *weekdays[] = {
 	"Sunday", "Monday", "Tuesday", "Wednesday",
 	"Thursday", "Friday", "Saturday"
+};
+
+static const char *short_months[12] = {
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+};
+
+static const char *short_weekdays[7] = {
+    "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat",
 };
 
 typedef struct {
@@ -98,167 +107,8 @@ SpamfilterTargetTable spamfiltertargettable[] = {
 /** IRC Statistics (quite useless?) */
 struct IRCStatistics ircstats;
 
-/** Main IRCd logging function.
- * @param flags		One of LOG_* (eg: LOG_ERROR)
- * @param format	Format string
- * @param ...		Arguments
- * @note This function is safe to call at all times. It provides
- *       protection against recursion.
- */
-void ircd_log(int flags, FORMAT_STRING(const char *format), ...)
-{
-	static int last_log_file_warning = 0;
-	static char recursion_trap=0;
-
-	va_list ap;
-	ConfigItem_log *logs;
-	char buf[2048], timebuf[128];
-	struct stat fstats;
-	int written = 0;
-	int n;
-
-	/* Trap infinite recursions to avoid crash if log file is unavailable,
-	 * this will also avoid calling ircd_log from anything else called
-	 */
-	if (recursion_trap == 1)
-		return;
-
-	recursion_trap = 1;
-
-	/* NOTE: past this point you CANNOT just 'return'.
-	 * You must set 'recursion_trap = 0;' before 'return'!
-	 */
-
-	va_start(ap, format);
-	ircvsnprintf(buf, sizeof(buf), format, ap);
-	va_end(ap);
-	snprintf(timebuf, sizeof(timebuf), "[%s] - ", myctime(TStime()));
-
-	RunHook3(HOOKTYPE_LOG, flags, timebuf, buf);
-	strlcat(buf, "\n", sizeof(buf));
-
-	if (!loop.ircd_forked && (flags & LOG_ERROR))
-	{
-#ifdef _WIN32
-		win_log("* %s", buf);
-#else
-		fprintf(stderr, "%s", buf);
-#endif
-	}
-
-	/* In case of './unrealircd configtest': don't write to log file, only to stderr */
-	if (loop.config_test)
-	{
-		recursion_trap = 0;
-		return;
-	}
-
-	for (logs = conf_log; logs; logs = logs->next)
-	{
-		if (!(logs->flags & flags))
-			continue;
-
-#ifdef HAVE_SYSLOG
-		if (logs->file && !strcasecmp(logs->file, "syslog"))
-		{
-			syslog(LOG_INFO, "%s", buf);
-			written++;
-			continue;
-		}
-#endif
-
-		/* This deals with dynamic log file names, such as ircd.%Y-%m-%d.log */
-		if (logs->filefmt)
-		{
-			char *fname = unreal_strftime(logs->filefmt);
-			if (logs->file && (logs->logfd != -1) && strcmp(logs->file, fname))
-			{
-				/* We are logging already and need to switch over */
-				fd_close(logs->logfd);
-				logs->logfd = -1;
-			}
-			safe_strdup(logs->file, fname);
-		}
-
-		/* log::maxsize code */
-		if (logs->maxsize && (stat(logs->file, &fstats) != -1) && fstats.st_size >= logs->maxsize)
-		{
-			char oldlog[512];
-			if (logs->logfd == -1)
-			{
-				/* Try to open, so we can write the 'Max file size reached' message. */
-				logs->logfd = fd_fileopen(logs->file, O_CREAT|O_APPEND|O_WRONLY);
-			}
-			if (logs->logfd != -1)
-			{
-				if (write(logs->logfd, "Max file size reached, starting new log file\n", 45) < 0)
-				{
-					/* We already handle the unable to write to log file case for normal data.
-					 * I think we can get away with not handling this one.
-					 */
-					;
-				}
-				fd_close(logs->logfd);
-			}
-			logs->logfd = -1;
-
-			/* Rename log file to xxxxxx.old */
-			snprintf(oldlog, sizeof(oldlog), "%s.old", logs->file);
-			unlink(oldlog); /* windows rename cannot overwrite, so unlink here.. ;) */
-			rename(logs->file, oldlog);
-		}
-
-		/* generic code for opening log if not open yet.. */
-		if (logs->logfd == -1)
-		{
-			logs->logfd = fd_fileopen(logs->file, O_CREAT|O_APPEND|O_WRONLY);
-			if (logs->logfd == -1)
-			{
-				if (!loop.ircd_booted)
-				{
-					config_status("WARNING: Unable to write to '%s': %s", logs->file, strerror(ERRNO));
-				} else {
-					if (last_log_file_warning + 300 < TStime())
-					{
-						config_status("WARNING: Unable to write to '%s': %s. This warning will not re-appear for at least 5 minutes.", logs->file, strerror(ERRNO));
-						last_log_file_warning = TStime();
-					}
-				}
-				continue;
-			}
-		}
-
-		/* Now actually WRITE to the log... */
-		if (write(logs->logfd, timebuf, strlen(timebuf)) < 0)
-		{
-			/* Let's ignore any write errors for this one. Next write() will catch it... */
-			;
-		}
-		n = write(logs->logfd, buf, strlen(buf));
-		if (n == strlen(buf))
-		{
-			written++;
-		}
-		else
-		{
-			if (!loop.ircd_booted)
-			{
-				config_status("WARNING: Unable to write to '%s': %s", logs->file, strerror(ERRNO));
-			} else {
-				if (last_log_file_warning + 300 < TStime())
-				{
-					config_status("WARNING: Unable to write to '%s': %s. This warning will not re-appear for at least 5 minutes.", logs->file, strerror(ERRNO));
-					last_log_file_warning = TStime();
-				}
-			}
-		}
-	}
-
-	recursion_trap = 0;
-}
-
 /** Returns the date in rather long string */
-char *long_date(time_t clock)
+const char *long_date(time_t clock)
 {
 	static char buf[80], plus;
 	struct tm *lt, *gm;
@@ -300,10 +150,9 @@ char *long_date(time_t clock)
  * @param buf  The buffer to store the string (minimum size: 128 bytes),
  *             or NULL to use temporary static storage.
  */
-char *short_date(time_t ts, char *buf)
+const char *short_date(time_t ts, char *buf)
 {
 	struct tm *t = gmtime(&ts);
-	char *timestr;
 	static char retbuf[128];
 
 	if (!buf)
@@ -313,17 +162,14 @@ char *short_date(time_t ts, char *buf)
 	if (!t)
 		return NULL;
 
-	timestr = asctime(t);
-	if (!timestr)
+	if (!strftime(buf, 128, "%a %b %d %H:%M:%S %Y", t))
 		return NULL;
 
-	strlcpy(buf, timestr, 128);
-	stripcrlf(buf);
 	return buf;
 }
 
 /** Return a string with the "pretty date" - yeah, another variant */
-char *pretty_date(time_t t)
+const char *pretty_date(time_t t)
 {
 	static char buf[128];
 	struct tm *tm;
@@ -347,62 +193,53 @@ char *pretty_date(time_t t)
  * string marker (`\-`).  returns the 'fixed' string or "*" if the string
  * was NULL length or a NULL pointer.
  */
-char *check_string(char *s)
+const char *check_string(const char *s)
 {
+	static char buf[512];
 	static char star[2] = "*";
-	char *str = s;
+	const char *str = s;
 
 	if (BadPtr(s))
 		return star;
 
 	for (; *s; s++)
+	{
 		if (isspace(*s))
 		{
-			*s = '\0';
+			/* Because this is an unlikely scenario, we have
+			 * delayed the copy until here:
+			 */
+			strlncpy(buf, s, sizeof(buf), s - str);
+			str = buf;
 			break;
 		}
+	}
 
 	return (BadPtr(str)) ? star : str;
 }
 
 /** Create a user@host based on the provided name and host */
-char *make_user_host(char *name, char *host)
+char *make_user_host(const char *name, const char *host)
 {
 	static char namebuf[USERLEN + HOSTLEN + 6];
-	char *s = namebuf;
 
-	memset(namebuf, 0, sizeof(namebuf));
-	name = check_string(name);
-	strlcpy(s, name, USERLEN + 1);
-	s += strlen(s);
-	*s++ = '@';
-	host = check_string(host);
-	strlcpy(s, host, HOSTLEN + 1);
-	s += strlen(s);
-	*s = '\0';
-	return (namebuf);
+	strlncpy(namebuf, check_string(name), sizeof(namebuf), USERLEN+1);
+	strlcat(namebuf, "@", sizeof(namebuf));
+	strlncat(namebuf, check_string(host), sizeof(namebuf), HOSTLEN+1);
+	return namebuf;
 }
 
 /** Create a nick!user@host string based on the provided variables.
  * If any of the variables are NULL, it becomes * (asterisk)
  * This is the reentrant safe version.
  */
-char *make_nick_user_host_r(char *namebuf, char *nick, char *name, char *host)
+char *make_nick_user_host_r(char *namebuf, size_t namebuflen, const char *nick, const char *name, const char *host)
 {
-	char *s = namebuf;
-
-	nick = check_string(nick);
-	strlcpy(namebuf, nick, NICKLEN + 1);
-	s += strlen(s);
-	*s++ = '!';
-	name = check_string(name);
-	strlcpy(s, name, USERLEN + 1);
-	s += strlen(s);
-	*s++ = '@';
-	host = check_string(host);
-	strlcpy(s, host, HOSTLEN + 1);
-	s += strlen(s);
-	*s = '\0';
+	strlncpy(namebuf, check_string(nick), namebuflen, NICKLEN+1);
+	strlcat(namebuf, "!", namebuflen);
+	strlncat(namebuf, check_string(name), namebuflen, USERLEN+1);
+	strlcat(namebuf, "@", namebuflen);
+	strlncat(namebuf, check_string(host), namebuflen, HOSTLEN+1);
 	return namebuf;
 }
 
@@ -410,18 +247,18 @@ char *make_nick_user_host_r(char *namebuf, char *nick, char *name, char *host)
  * If any of the variables are NULL, it becomes * (asterisk)
  * This version uses static storage.
  */
-char *make_nick_user_host(char *nick, char *name, char *host)
+char *make_nick_user_host(const char *nick, const char *name, const char *host)
 {
 	static char namebuf[NICKLEN + USERLEN + HOSTLEN + 24];
 
-	return make_nick_user_host_r(namebuf, nick, name, host);
+	return make_nick_user_host_r(namebuf, sizeof(namebuf), nick, name, host);
 }
 
 
 /** Similar to ctime() but without a potential newline and
  * also takes a time_t value rather than a pointer.
  */
-char *myctime(time_t value)
+const char *myctime(time_t value)
 {
 	static char buf[28];
 	char *p;
@@ -457,7 +294,7 @@ char *myctime(time_t value)
 **	to internal buffer (nbuf). *NEVER* use the returned pointer
 **	to modify what it points!!!
 */
-char *get_client_name(Client *client, int showip)
+const char *get_client_name(Client *client, int showip)
 {
 	static char nbuf[HOSTLEN * 2 + USERLEN + 5];
 
@@ -482,7 +319,7 @@ char *get_client_name(Client *client, int showip)
 	return client->name;
 }
 
-char *get_client_host(Client *client)
+const char *get_client_host(Client *client)
 {
 	static char nbuf[HOSTLEN * 2 + USERLEN + 5];
 
@@ -500,9 +337,9 @@ char *get_client_host(Client *client)
 /*
  * Set sockhost to 'host'. Skip the user@ part of 'host' if necessary.
  */
-void set_sockhost(Client *client, char *host)
+void set_sockhost(Client *client, const char *host)
 {
-	char *s;
+	const char *s;
 	if ((s = strchr(host, '@')))
 		s++;
 	else
@@ -516,7 +353,7 @@ int on_dccallow_list(Client *to, Client *from)
 	Link *lp;
 
 	for(lp = to->user->dccallow; lp; lp = lp->next)
-		if(lp->flags == DCC_LINK_ME && lp->value.client == from)
+		if (lp->flags == DCC_LINK_ME && lp->value.client == from)
 			return 1;
 	return 0;
 }
@@ -538,11 +375,11 @@ void remove_dcc_references(Client *client)
 		acptr = lp->value.client;
 		for(found = 0, lpp = &(acptr->user->dccallow); *lpp; lpp=&((*lpp)->next))
 		{
-			if(lp->flags == (*lpp)->flags)
+			if (lp->flags == (*lpp)->flags)
 				continue; /* match only opposite types for sanity */
-			if((*lpp)->value.client == client)
+			if ((*lpp)->value.client == client)
 			{
-				if((*lpp)->flags == DCC_LINK_ME)
+				if ((*lpp)->flags == DCC_LINK_ME)
 				{
 					sendto_one(acptr, NULL, ":%s %d %s :%s has been removed from "
 						"your DCC allow list for signing off",
@@ -556,36 +393,17 @@ void remove_dcc_references(Client *client)
 			}
 		}
 
-		if(!found)
-			sendto_realops("[BUG] remove_dcc_references:  %s was in dccallowme "
-				"list[%d] of %s but not in dccallowrem list!",
-				acptr->name, lp->flags, client->name);
+		if (!found)
+		{
+			unreal_log(ULOG_WARNING, "main", "BUG_REMOVE_DCC_REFERENCES", acptr,
+			           "[BUG] remove_dcc_references: $client was in dccallowme "
+			           "list of $existing_client but not in dccallowrem list!",
+			           log_data_client("existing_client", client));
+		}
 
 		free_link(lp);
 		lp = nextlp;
 	}
-}
-
-/*
- * Recursively send QUITs and SQUITs for cptr and all of it's dependent
- * clients.  A server needs the client QUITs if it does not support NOQUIT.
- *    - kaniini
- */
-static void recurse_send_quits(Client *cptr, Client *client, Client *from, Client *to,
-                               MessageTag *mtags, const char *comment, const char *splitstr)
-{
-	Client *acptr, *next;
-
-	list_for_each_entry_safe(acptr, next, &global_server_list, client_node)
-	{
-		if (acptr->srvptr != client)
-			continue;
-
-		recurse_send_quits(cptr, acptr, from, to, mtags, comment, splitstr);
-	}
-
-	if (cptr == client && to != from && !(to->direction && (to->direction == from)))
-		sendto_one(to, mtags, "SQUIT %s :%s", client->name, comment);
 }
 
 /*
@@ -600,7 +418,7 @@ static void recurse_remove_clients(Client *client, MessageTag *mtags, const char
 
 	list_for_each_entry_safe(acptr, next, &client_list, client_node)
 	{
-		if (acptr->srvptr != client)
+		if (acptr->uplink != client)
 			continue;
 
 		exit_one_client(acptr, mtags, comment);
@@ -608,7 +426,7 @@ static void recurse_remove_clients(Client *client, MessageTag *mtags, const char
 
 	list_for_each_entry_safe(acptr, next, &global_server_list, client_node)
 	{
-		if (acptr->srvptr != client)
+		if (acptr->uplink != client)
 			continue;
 
 		recurse_remove_clients(acptr, mtags, comment);
@@ -626,7 +444,10 @@ static void remove_dependents(Client *client, Client *from, MessageTag *mtags, c
 	Client *acptr;
 
 	list_for_each_entry(acptr, &global_server_list, client_node)
-		recurse_send_quits(client, client, from, acptr, mtags, comment, splitstr);
+	{
+		if (acptr != from && !(acptr->direction && (acptr->direction == from)))
+			sendto_one(acptr, mtags, "SQUIT %s :%s", client->name, comment);
+	}
 
 	recurse_remove_clients(client, mtags, splitstr);
 }
@@ -647,18 +468,14 @@ static void exit_one_client(Client *client, MessageTag *mtags_i, const char *com
 		MessageTag *mtags_o = NULL;
 
 		if (!MyUser(client))
-			RunHook3(HOOKTYPE_REMOTE_QUIT, client, mtags_i, comment);
+			RunHook(HOOKTYPE_REMOTE_QUIT, client, mtags_i, comment);
 
 		new_message_special(client, mtags_i, &mtags_o, ":%s QUIT", client->name);
 		sendto_local_common_channels(client, NULL, 0, mtags_o, ":%s QUIT :%s", client->name, comment);
 		free_message_tags(mtags_o);
 
 		while ((mp = client->user->channel))
-			remove_user_from_channel(client, mp->channel);
-
-		/* Clean up invitefield */
-		while ((lp = client->user->invited))
-			del_invite(client, lp->value.channel);
+			remove_user_from_channel(client, mp->channel, 1);
 		/* again, this is all that is needed */
 
 		/* Clean up dccallow list and (if needed) notify other clients
@@ -687,8 +504,6 @@ static void exit_one_client(Client *client, MessageTag *mtags_i, const char *com
 	}
 	if (*client->name)
 		del_from_client_hash_table(client->name, client);
-	if (IsUser(client))
-		hash_check_watch(client, RPL_LOGOFF);
 	if (remote_rehash_client == client)
 		remote_rehash_client = NULL; /* client did a /REHASH and QUIT before rehash was complete */
 	remove_client_from_list(client);
@@ -699,7 +514,7 @@ static void exit_one_client(Client *client, MessageTag *mtags_i, const char *com
  * @param recv_mtags  Message tags to use as a base (if any).
  * @param comment     The (s)quit message
  */
-void exit_client(Client *client, MessageTag *recv_mtags, char *comment)
+void exit_client(Client *client, MessageTag *recv_mtags, const char *comment)
 {
 	exit_client_ex(client, client->direction, recv_mtags, comment);
 }
@@ -709,7 +524,24 @@ void exit_client(Client *client, MessageTag *recv_mtags, char *comment)
  * @param recv_mtags  Message tags to use as a base (if any).
  * @param comment     The (s)quit message
  */
-void exit_client_ex(Client *client, Client *origin, MessageTag *recv_mtags, char *comment)
+void exit_client_fmt(Client *client, MessageTag *recv_mtags, FORMAT_STRING(const char *pattern), ...)
+{
+	char comment[512];
+
+	va_list vl;
+	va_start(vl, pattern);
+	vsnprintf(comment, sizeof(comment), pattern, vl);
+	va_end(vl);
+
+	exit_client_ex(client, client->direction, recv_mtags, comment);
+}
+
+/** Exit this IRC client, and all the dependents (users, servers) if this is a server.
+ * @param client        The client to exit.
+ * @param recv_mtags  Message tags to use as a base (if any).
+ * @param comment     The (s)quit message
+ */
+void exit_client_ex(Client *client, Client *origin, MessageTag *recv_mtags, const char *comment)
 {
 	long long on_for;
 	ConfigItem_listen *listen_conf;
@@ -741,23 +573,25 @@ void exit_client_ex(Client *client, Client *origin, MessageTag *recv_mtags, char
 		}
 		if (IsUser(client))
 			irccounts.me_clients--;
-		if (client->serv && client->serv->conf)
+		if (client->server && client->server->conf)
 		{
-			client->serv->conf->refcount--;
-			Debug((DEBUG_ERROR, "reference count for %s (%s) is now %d",
-				client->name, client->serv->conf->servername, client->serv->conf->refcount));
-			if (!client->serv->conf->refcount
-			  && client->serv->conf->flag.temporary)
+			client->server->conf->refcount--;
+			if (!client->server->conf->refcount
+			  && client->server->conf->flag.temporary)
 			{
-				Debug((DEBUG_ERROR, "deleting temporary block %s", client->serv->conf->servername));
-				delete_linkblock(client->serv->conf);
-				client->serv->conf = NULL;
+				delete_linkblock(client->server->conf);
+				client->server->conf = NULL;
 			}
 		}
 		if (IsServer(client))
 		{
 			irccounts.me_servers--;
-			ircd_log(LOG_SERVER, "SQUIT %s (%s)", client->name, comment);
+			if (!IsServerDisconnectLogged(client))
+			{
+				unreal_log(ULOG_ERROR, "link", "LINK_DISCONNECTED", client,
+					   "Lost server link to $client [$client.ip]: $reason",
+					   log_data_string("reason", comment));
+			}
 		}
 		free_pending_net(client);
 		if (client->local->listener)
@@ -774,24 +608,17 @@ void exit_client_ex(Client *client, Client *origin, MessageTag *recv_mtags, char
 		SetClosing(client);
 		if (IsUser(client))
 		{
-			RunHook3(HOOKTYPE_LOCAL_QUIT, client, recv_mtags, comment);
-			sendto_connectnotice(client, 1, comment);
-			/* Clean out list and watch structures -Donwulff */
-			hash_del_watch_list(client);
-			on_for = TStime() - client->local->firsttime;
-			if (IsHidden(client))
-				ircd_log(LOG_CLIENT, "Disconnect - (%lld:%lld:%lld) %s!%s@%s [%s] [vhost: %s] (%s)",
-					on_for / 3600, (on_for % 3600) / 60, on_for % 60,
-					client->name, client->user->username,
-					client->user->realhost, GetIP(client), client->user->virthost, comment);
-			else
-				ircd_log(LOG_CLIENT, "Disconnect - (%lld:%lld:%lld) %s!%s@%s [%s] (%s)",
-					on_for / 3600, (on_for % 3600) / 60, on_for % 60,
-					client->name, client->user->username, client->user->realhost, GetIP(client), comment);
+			long connected_time = TStime() - client->local->creationtime;
+			RunHook(HOOKTYPE_LOCAL_QUIT, client, recv_mtags, comment);
+			unreal_log(ULOG_INFO, "connect", "LOCAL_CLIENT_DISCONNECT", client,
+				   "Client exiting: $client ($client.user.username@$client.hostname) [$client.ip] ($reason)",
+				   log_data_string("extended_client_info", get_connect_extinfo(client)),
+				   log_data_string("reason", comment),
+				   log_data_integer("connected_time", connected_time));
 		} else
 		if (IsUnknown(client))
 		{
-			RunHook3(HOOKTYPE_UNKUSER_QUIT, client, recv_mtags, comment);
+			RunHook(HOOKTYPE_UNKUSER_QUIT, client, recv_mtags, comment);
 		}
 
 		if (client->local->fd >= 0 && !IsConnecting(client))
@@ -803,8 +630,14 @@ void exit_client_ex(Client *client, Client *origin, MessageTag *recv_mtags, char
 	}
 	else if (IsUser(client) && !IsULine(client))
 	{
-		if (client->srvptr != &me)
-			sendto_fconnectnotice(client, 1, comment);
+		if (client->uplink != &me)
+		{
+			unreal_log(ULOG_INFO, "connect", "REMOTE_CLIENT_DISCONNECT", client,
+				   "Client exiting: $client ($client.user.username@$client.hostname) [$client.ip] ($reason)",
+				   log_data_string("extended_client_info", get_connect_extinfo(client)),
+				   log_data_string("reason", comment),
+				   log_data_string("from_server_name", client->user->server));
+		}
 	}
 
 	/*
@@ -816,16 +649,16 @@ void exit_client_ex(Client *client, Client *origin, MessageTag *recv_mtags, char
 	{
 		char splitstr[HOSTLEN + HOSTLEN + 2];
 
-		assert(client->serv != NULL && client->srvptr != NULL);
+		assert(client->server != NULL && client->uplink != NULL);
 
 		if (FLAT_MAP)
 			strlcpy(splitstr, "*.net *.split", sizeof splitstr);
 		else
-			ircsnprintf(splitstr, sizeof splitstr, "%s %s", client->srvptr->name, client->name);
+			ircsnprintf(splitstr, sizeof splitstr, "%s %s", client->uplink->name, client->name);
 
 		remove_dependents(client, origin, recv_mtags, comment, splitstr);
 
-		RunHook2(HOOKTYPE_SERVER_QUIT, client, recv_mtags);
+		RunHook(HOOKTYPE_SERVER_QUIT, client, recv_mtags);
 	}
 	else if (IsUser(client) && !IsKilled(client))
 	{
@@ -845,7 +678,7 @@ void initstats(void)
 }
 
 /** Verify operator count, to catch bugs introduced by flawed services */
-void verify_opercount(Client *orig, char *tag)
+void verify_opercount(Client *orig, const char *tag)
 {
 	int counted = 0;
 	Client *client;
@@ -858,31 +691,44 @@ void verify_opercount(Client *orig, char *tag)
 	}
 	if (counted == irccounts.operators)
 		return;
-	snprintf(text, sizeof(text), "[BUG] operator count bug! value in /lusers is '%d', we counted '%d', "
-	               "user='%s', userserver='%s', tag=%s. Corrected. ",
-	               irccounts.operators, counted, orig->name,
-	               orig->srvptr ? orig->srvptr->name : "<null>", tag ? tag : "<null>");
-#ifdef DEBUGMODE
-	sendto_realops("%s", text);
-#endif
-	ircd_log(LOG_ERROR, "%s", text);
+	unreal_log(ULOG_WARNING, "main", "BUG_LUSERS_OPERS", orig,
+	           "[BUG] Operator count bug at $where! Value in /LUSERS is $opers, "
+	           "we counted $counted_opers, "
+	           "triggered by $client.details on $client.user.servername",
+	           log_data_integer("opers", irccounts.operators),
+	           log_data_integer("counted_opers", counted),
+	           log_data_string("where", tag));
 	irccounts.operators = counted;
 }
 
 /** Check if the specified hostname does not contain forbidden characters.
- * RETURNS:
- * 1 if ok, 0 if rejected.
+ * @param host		The host name to check
+ * @param strict	If set to 1 then we also check if the hostname
+ *                      resembles an IP address (eg contains ':') and
+ *                      some other stuff that we don't consider valid
+ *                      in actual DNS names (eg '/').
+ * @returns 1 if valid, 0 if not.
  */
-int valid_host(char *host)
+int valid_host(const char *host, int strict)
 {
-	char *p;
+	const char *p;
+
+	if (!*host)
+		return 0; /* must at least contain something */
 
 	if (strlen(host) > HOSTLEN)
 		return 0; /* too long hosts are invalid too */
 
-	for (p=host; *p; p++)
-		if (!isalnum(*p) && (*p != '_') && (*p != '-') && (*p != '.') && (*p != ':') && (*p != '/'))
-			return 0;
+	if (strict)
+	{
+		for (p=host; *p; p++)
+			if (!isalnum(*p) && !strchr("_-.", *p))
+				return 0;
+	} else {
+		for (p=host; *p; p++)
+			if (!isalnum(*p) && !strchr("_-.:/", *p))
+				return 0;
+	}
 
 	return 1;
 }
@@ -890,7 +736,7 @@ int valid_host(char *host)
 /*|| BAN ACTION ROUTINES FOLLOW ||*/
 
 /** Converts a banaction string (eg: "kill") to an integer value (eg: BAN_ACT_KILL) */
-BanAction banact_stringtoval(char *s)
+BanAction banact_stringtoval(const char *s)
 {
 	BanActTable *b;
 
@@ -923,7 +769,7 @@ char banact_valtochar(BanAction val)
 }
 
 /** Converts a banaction value (eg: BAN_ACT_KLINE) to a string (eg: "kline") */
-char *banact_valtostring(BanAction val)
+const char *banact_valtostring(BanAction val)
 {
 	BanActTable *b;
 
@@ -936,7 +782,7 @@ char *banact_valtostring(BanAction val)
 /*|| BAN TARGET ROUTINES FOLLOW ||*/
 
 /** Extract target flags from string 's'. */
-int spamfilter_gettargets(char *s, Client *client)
+int spamfilter_gettargets(const char *s, Client *client)
 {
 SpamfilterTargetTable *e;
 int flags = 0;
@@ -959,7 +805,7 @@ int flags = 0;
 }
 
 /** Convert a string with a targetname to an integer value */
-int spamfilter_getconftargets(char *s)
+int spamfilter_getconftargets(const char *s)
 {
 SpamfilterTargetTable *e;
 
@@ -972,9 +818,9 @@ SpamfilterTargetTable *e;
 /** Create a string with (multiple) targets from an integer mask */
 char *spamfilter_target_inttostring(int v)
 {
-static char buf[128];
-SpamfilterTargetTable *e;
-char *p = buf;
+	static char buf[128];
+	SpamfilterTargetTable *e;
+	char *p = buf;
 
 	for (e = &spamfiltertargettable[0]; e->value; e++)
 		if (v & e->value)
@@ -1033,7 +879,7 @@ char *unreal_encodespace(char *s)
 }
 
 /** This is basically only used internally by match_spamfilter()... */
-char *cmdname_by_spamftarget(int target)
+const char *cmdname_by_spamftarget(int target)
 {
 	SpamfilterTargetTable *e;
 
@@ -1044,7 +890,7 @@ char *cmdname_by_spamftarget(int target)
 }
 
 /** Returns 1 if this is a channel from set::auto-join or set::oper-auto-join */
-int is_autojoin_chan(char *chname)
+int is_autojoin_chan(const char *chname)
 {
 	char buf[512];
 	char *p, *name;
@@ -1070,40 +916,6 @@ int is_autojoin_chan(char *chname)
 	return 0;
 }
 
-/** Convert a character like 'o' to the corresponding channel flag
- *  like CHFL_CHANOP.
- * @param c   The mode character. The only valid values are: vhoaq
- * @returns One of CHFL_* or 0 if an invalid mode character is specified.
- */
-int char_to_channelflag(char c)
-{
-	if (c == 'v')
-		return CHFL_VOICE;
-	else if (c == 'h')
-		return CHFL_HALFOP;
-	else if (c == 'o')
-		return CHFL_CHANOP;
-	else if (c == 'a')
-		return CHFL_CHANADMIN;
-	else if (c == 'q')
-		return CHFL_CHANOWNER;
-	return 0;
-}
-
-// FIXME: should detect <U5 ;)
-int mixed_network(void)
-{
-	Client *client;
-
-	list_for_each_entry(client, &server_list, special_node)
-	{
-		if (!IsServer(client) || IsULine(client))
-			continue; /* skip u-lined servers (=non-unreal, unless you configure your ulines badly, that is) */
-		// uh.. right.. bit hard to detect u4 this way now :D
-	}
-	return 0;
-}
-
 /** Free all masks in the mask list */
 void unreal_delete_masks(ConfigItem_mask *m)
 {
@@ -1125,10 +937,10 @@ static void unreal_add_mask(ConfigItem_mask **head, ConfigEntry *ce)
 	ConfigItem_mask *m = safe_alloc(sizeof(ConfigItem_mask));
 
 	/* Since we allow both mask "xyz"; and mask { abc; def; };... */
-	if (ce->ce_vardata)
-		safe_strdup(m->mask, ce->ce_vardata);
+	if (ce->value)
+		safe_strdup(m->mask, ce->value);
 	else
-		safe_strdup(m->mask, ce->ce_varname);
+		safe_strdup(m->mask, ce->name);
 
 	add_ListItem((ListStruct *)m, (ListStruct **)head);
 }
@@ -1136,10 +948,10 @@ static void unreal_add_mask(ConfigItem_mask **head, ConfigEntry *ce)
 /** Add mask entries from config */
 void unreal_add_masks(ConfigItem_mask **head, ConfigEntry *ce)
 {
-	if (ce->ce_entries)
+	if (ce->items)
 	{
 		ConfigEntry *cep;
-		for (cep = ce->ce_entries; cep; cep = cep->ce_next)
+		for (cep = ce->items; cep; cep = cep->next)
 			unreal_add_mask(head, cep);
 	} else
 	{
@@ -1147,29 +959,108 @@ void unreal_add_masks(ConfigItem_mask **head, ConfigEntry *ce)
 	}
 }
 
-/** Check if a client matches any of the masks in the mask list */
-int unreal_mask_match(Client *client, ConfigItem_mask *m)
+/** Check if a client matches any of the masks in the mask list.
+ * The following rules apply:
+ * - If you have only negating entries, like '!abc' and '!def', then
+ *   we assume an implicit * rule first, since that is clearly what
+ *   the user wants.
+ * - If you have a mix, like '*.com', '!irc1*', '!irc2*' then the
+ *   implicit * is dropped and we assume you only want to match *.com,
+ *   with the exception of irc1*.com and irc2*.com.
+ * - If you only have normal entries without ! then things are
+ *   as they always are.
+ * @param client	The client to run the mask match against
+ * @param mask		The mask entry from the config file
+ * @returns 1 on match, 0 on non-match.
+ */
+int unreal_mask_match(Client *client, ConfigItem_mask *mask)
 {
-	for (; m; m = m->next)
+	int retval = 1;
+	ConfigItem_mask *m;
+
+	if (!mask)
+		return 0; /* Empty mask block is no match */
+
+	/* First check normal matches (without ! prefix) */
+	for (m = mask; m; m = m->next)
 	{
-		/* With special support for '!' prefix (negative matching like "!192.168.*") */
-		if (m->mask[0] == '!')
+		if (m->mask[0] != '!')
 		{
-			if (!match_user(m->mask+1, client, MATCH_CHECK_REAL))
-				return 1;
-		} else {
-			if (match_user(m->mask, client, MATCH_CHECK_REAL))
-				return 1;
+			retval = 0; /* no implicit * */
+			if (match_user(m->mask, client, MATCH_CHECK_REAL|MATCH_CHECK_EXTENDED))
+			{
+				retval = 1;
+				break;
+			}
 		}
 	}
 
-	return 0;
+	if (retval)
+	{
+		/* We matched. Check for exceptions (with ! prefix) */
+		for (m = mask; m; m = m->next)
+		{
+			if ((m->mask[0] == '!') && match_user(m->mask+1, client, MATCH_CHECK_REAL|MATCH_CHECK_EXTENDED))
+				return 0;
+		}
+	}
+
+	return retval;
+}
+
+/** Check if a string matches any of the masks in the mask list.
+ * The following rules apply:
+ * - If you have only negating entries, like '!abc' and '!def', then
+ *   we assume an implicit * rule first, since that is clearly what
+ *   the user wants.
+ * - If you have a mix, like '*.com', '!irc1*', '!irc2*' then the
+ *   implicit * is dropped and we assume you only want to match *.com,
+ *   with the exception of irc1*.com and irc2*.com.
+ * - If you only have normal entries without ! then things are
+ *   as they always are.
+ * @param name	The name to run the mask matching on
+ * @param mask	The mask entry from the config file
+ * @returns 1 on match, 0 on non-match.
+ */
+int unreal_mask_match_string(const char *name, ConfigItem_mask *mask)
+{
+	int retval = 1;
+	ConfigItem_mask *m;
+
+	if (!mask)
+		return 0; /* Empty mask block is no match */
+
+	/* First check normal matches (without ! prefix) */
+	for (m = mask; m; m = m->next)
+	{
+		if (m->mask[0] != '!')
+		{
+			retval = 0; /* no implicit * */
+			if (match_simple(m->mask, name))
+			{
+				retval = 1;
+				break;
+			}
+		}
+	}
+
+	if (retval)
+	{
+		/* We matched. Check for exceptions (with ! prefix) */
+		for (m = mask; m; m = m->next)
+		{
+			if ((m->mask[0] == '!') && match_simple(m->mask+1, name))
+				return 0;
+		}
+	}
+
+	return retval;
 }
 
 /** Our own strcasestr implementation because strcasestr is
  * often not available or is not working correctly.
  */
-char *our_strcasestr(char *haystack, char *needle)
+char *our_strcasestr(const char *haystack, const char *needle)
 {
 	int i;
 	int nlength = strlen(needle);
@@ -1182,12 +1073,12 @@ char *our_strcasestr(char *haystack, char *needle)
 		return NULL;
 
 	if (nlength <= 0)
-		return haystack;
+		return (char *)haystack;
 
 	for (i = 0; i <= (hlength - nlength); i++)
 	{
 		if (strncasecmp (haystack + i, needle, nlength) == 0)
-			return haystack + i;
+			return (char *)(haystack + i);
 	}
 
 	return NULL; /* not found */
@@ -1203,7 +1094,7 @@ char *our_strcasestr(char *haystack, char *needle)
  * @param from		Who added this entry
  * @param skip		Which server(-side) to skip broadcasting this entry to.
  */
-int swhois_add(Client *client, char *tag, int priority, char *swhois, Client *from, Client *skip)
+int swhois_add(Client *client, const char *tag, int priority, const char *swhois, Client *from, Client *skip)
 {
 	SWhois *s;
 
@@ -1237,7 +1128,7 @@ int swhois_add(Client *client, char *tag, int priority, char *swhois, Client *fr
  * @param skip		Which server(-side) to skip broadcasting this entry to.
  * @note If you use swhois "*" then it will remove all swhois titles for that tag
  */
-int swhois_delete(Client *client, char *tag, char *swhois, Client *from, Client *skip)
+int swhois_delete(Client *client, const char *tag, const char *swhois, Client *from, Client *skip)
 {
 	SWhois *s, *s_next;
 	int ret = -1; /* default to 'not found' */
@@ -1277,8 +1168,6 @@ int IsWebsocket(Client *client)
 	return (MyConnect(client) && moddata_client(client, md).ptr) ? 1 : 0;
 }
 
-extern void send_raw_direct(Client *user, FORMAT_STRING(const char *pattern), ...);
-
 /** Generic function to inform the user he/she has been banned.
  * @param client   The affected client.
  * @param bantype  The ban type, such as: "K-Lined", "G-Lined" or "realname".
@@ -1290,7 +1179,7 @@ extern void send_raw_direct(Client *user, FORMAT_STRING(const char *pattern), ..
  *
  * @note This function will call exit_client() appropriately.
  */
-void banned_client(Client *client, char *bantype, char *reason, int global, int noexit)
+void banned_client(Client *client, const char *bantype, const char *reason, int global, int noexit)
 {
 	char buf[512];
 	char *fmt = global ? iConf.reject_message_gline : iConf.reject_message_kline;
@@ -1369,7 +1258,7 @@ char *mystpcpy(char *dst, const char *src)
  *         so similar to what strlen() would have returned.
  * @note Caller must ensure that the buffer 'buf' is of sufficient size.
  */
-size_t add_sjsby(char *buf, char *setby, time_t seton)
+size_t add_sjsby(char *buf, const char *setby, time_t seton)
 {
 	char tbuf[32];
 	char *p = buf;
@@ -1399,14 +1288,14 @@ size_t add_sjsby(char *buf, char *setby, time_t seton)
  * sendto_server(client, 0, 0, recv_mtags, ":%s SOMECOMMAND %s", client->name, buf);
  * @endcode
  */
-void concat_params(char *buf, int len, int parc, char *parv[])
+void concat_params(char *buf, int len, int parc, const char *parv[])
 {
 	int i;
 
 	*buf = '\0';
 	for (i = 1; i < parc; i++)
 	{
-		char *param = parv[i];
+		const char *param = parv[i];
 
 		if (!param)
 			break;
@@ -1476,7 +1365,6 @@ void new_message(Client *sender, MessageTag *recv_mtags, MessageTag **mtag_list)
  * This function calls modules so they can add tags, such as:
  * msgid, time and account.
  * This special version deals in a special way with msgid in particular.
- * TODO: document
  * The pattern and vararg create a 'signature', this is normally
  * identical to the message that is sent to clients (end-users).
  * For example ":xyz JOIN #chan".
@@ -1509,7 +1397,7 @@ void parse_message_tags_default_handler(Client *client, char **str, MessageTag *
  * This is only used if the 'mtags' module is NOT loaded,
  * which would be quite unusual, but possible.
  */
-char *mtags_to_string_default_handler(MessageTag *m, Client *client)
+const char *mtags_to_string_default_handler(MessageTag *m, Client *client)
 {
 	return NULL;
 }
@@ -1568,6 +1456,11 @@ void labeled_response_force_end_default_handler(void)
 {
 }
 
+/** Ad default handler for if the slog module is not loaded */
+void do_unreal_log_remote_deliver_default_handler(LogLevel loglevel, const char *subsystem, const char *event_id, MultiLine *msg, const char *json_serialized)
+{
+}
+
 /** my_timegm: mktime()-like function which will use GMT/UTC.
  * Strangely enough there is no standard function for this.
  * On some *NIX OS's timegm() may be available, sometimes only
@@ -1612,16 +1505,10 @@ time_t server_time_to_unix_time(const char *tbuf)
 	time_t ret;
 
 	if (!tbuf)
-	{
-		ircd_log(LOG_ERROR, "[BUG] server_time_to_unix_time() failed for NULL item. Incorrect S2S traffic?");
 		return 0;
-	}
 
 	if (strlen(tbuf) < 20)
-	{
-		ircd_log(LOG_ERROR, "[BUG] server_time_to_unix_time() failed for short item '%s'", tbuf);
 		return 0;
-	}
 
 	memset(&tm, 0, sizeof(tm));
 	ret = sscanf(tbuf, "%d-%d-%dT%d:%d:%d.%dZ",
@@ -1634,16 +1521,75 @@ time_t server_time_to_unix_time(const char *tbuf)
 		&dontcare);
 
 	if (ret != 7)
-	{
-		ircd_log(LOG_ERROR, "[BUG] server_time_to_unix_time() failed for '%s'", tbuf);
 		return 0;
-	}
 
 	tm.tm_year -= 1900;
 	tm.tm_mon -= 1;
 
 	ret = my_timegm(&tm);
 	return ret;
+}
+
+/** Convert an RFC 2616 timestamp (used in HTTP headers) to UNIX time */
+time_t rfc2616_time_to_unix_time(const char *tbuf)
+{
+	struct tm tm;
+	int dontcare = 0;
+	time_t ret;
+	char month[8];
+	int i;
+
+	if (!tbuf)
+		return 0;
+
+	if (strlen(tbuf) < 20)
+		return 0;
+
+	memset(&tm, 0, sizeof(tm));
+	*month = '\0';
+	ret = sscanf(tbuf, "%*[a-zA-Z,] %d %3s %d %d:%d:%d",
+	             &tm.tm_mday, month, &tm.tm_year,
+	             &tm.tm_hour, &tm.tm_min, &tm.tm_sec);
+
+	if (ret < 6)
+		return 0;
+
+	for (i=0; i < 12; i++)
+	{
+		if (!strcmp(short_months[i], month))
+		{
+			tm.tm_mon = i;
+			break;
+		}
+	}
+	if (i == 12)
+		return 0; /* Month not found */
+	if (tm.tm_year < 1900)
+		return 0;
+
+	tm.tm_year -= 1900;
+	ret = my_timegm(&tm);
+	return ret; /* can still be 0 */
+}
+
+/** Returns an RFC 2616 timestamp (used in HTTP headers) */
+const char *rfc2616_time(time_t clock)
+{
+	static char buf[80], plus;
+	struct tm *lt, *gm;
+	struct tm gmbuf;
+	int  minswest;
+
+	if (!clock)
+		time(&clock);
+	gm = gmtime(&clock);
+
+	snprintf(buf, sizeof(buf),
+	         "%s, %02d %.3s %4d %02d:%02d:%02d GMT",
+	         short_weekdays[gm->tm_wday], gm->tm_mday, short_months[gm->tm_mon],
+	         gm->tm_year + 1900, gm->tm_hour, gm->tm_min, gm->tm_sec);
+
+	return buf;
 }
 
 /** Write a 64 bit integer to a file.
@@ -1735,7 +1681,7 @@ int write_data(FILE *fd, const void *buf, size_t len)
  *        Note that 'x' can safely be NULL.
  * @returns 1 on success, 0 on failure.
  */
-int write_str(FILE *fd, char *x)
+int write_str(FILE *fd, const char *x)
 {
 	uint16_t len;
 
@@ -1814,19 +1760,31 @@ void binarytohex(void *data, size_t len, char *str)
 	str[n] = '\0';
 }
 
-/** Generates an MD5 checksum.
+/** Generates an MD5 checksum - binary version.
  * @param mdout[out] Buffer to store result in, the result will be 16 bytes in binary
  *                   (not ascii printable!).
  * @param src[in]    The input data used to generate the checksum.
  * @param n[in]      Length of data.
+ * @deprecated       The MD5 algorithm is deprecated and insecure,
+ *                   so only use this if absolutely needed.
  */
 void DoMD5(char *mdout, const char *src, unsigned long n)
 {
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+	unsigned int md_len;
+	EVP_MD_CTX *mdctx = EVP_MD_CTX_new();
+	if (EVP_DigestInit_ex(mdctx, md5_function, NULL) != 1)
+		abort();
+	EVP_DigestUpdate(mdctx, src, n);
+	EVP_DigestFinal_ex(mdctx, mdout, &md_len);
+	EVP_MD_CTX_free(mdctx);
+#else
 	MD5_CTX hash;
 
 	MD5_Init(&hash);
 	MD5_Update(&hash, src, n);
 	MD5_Final(mdout, &hash);
+#endif
 }
 
 /** Generates an MD5 checksum - ASCII printable string (0011223344..etc..).
@@ -1834,6 +1792,8 @@ void DoMD5(char *mdout, const char *src, unsigned long n)
  *                  32 characters + nul terminator, so needs to be at least 33 characters.
  * @param src[in]   The input data used to generate the checksum.
  * @param n[in]     Length of data.
+ * @deprecated      The MD5 algorithm is deprecated and insecure,
+ *                  so only use this if absolutely needed.
  */
 char *md5hash(char *dst, const char *src, unsigned long n)
 {
@@ -1844,6 +1804,32 @@ char *md5hash(char *dst, const char *src, unsigned long n)
 	return dst;
 }
 
+/** Generates a SHA256 checksum - binary version.
+ * Most people will want to use sha256hash() instead which outputs hex.
+ * @param dst[out]  Buffer to store result in, which needs to be 32 bytes in length
+ *                  (SHA256_DIGEST_LENGTH).
+ * @param src[in]   The input data used to generate the checksum.
+ * @param n[in]     Length of data.
+ */
+void sha256hash_binary(char *dst, const char *src, unsigned long n)
+{
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+	unsigned int md_len;
+	EVP_MD_CTX *mdctx = EVP_MD_CTX_new();
+	if (EVP_DigestInit_ex(mdctx, sha256_function, NULL) != 1)
+		abort();
+	EVP_DigestUpdate(mdctx, src, n);
+	EVP_DigestFinal_ex(mdctx, dst, &md_len);
+	EVP_MD_CTX_free(mdctx);
+#else
+	SHA256_CTX hash;
+
+	SHA256_Init(&hash);
+	SHA256_Update(&hash, src, n);
+	SHA256_Final(dst, &hash);
+#endif
+}
+
 /** Generates a SHA256 checksum - ASCII printable string (0011223344..etc..).
  * @param dst[out]  Buffer to store result in, which needs to be 65 bytes minimum.
  * @param src[in]   The input data used to generate the checksum.
@@ -1851,18 +1837,15 @@ char *md5hash(char *dst, const char *src, unsigned long n)
  */
 char *sha256hash(char *dst, const char *src, unsigned long n)
 {
-	SHA256_CTX hash;
 	char binaryhash[SHA256_DIGEST_LENGTH];
 
-	SHA256_Init(&hash);
-	SHA256_Update(&hash, src, n);
-	SHA256_Final(binaryhash, &hash);
+	sha256hash_binary(binaryhash, src, n);
 	binarytohex(binaryhash, sizeof(binaryhash), dst);
 	return dst;
 }
 
 /** Calculate the SHA256 checksum of a file */
-char *sha256sum_file(const char *fname)
+const char *sha256sum_file(const char *fname)
 {
 	FILE *fd;
 	char buf[2048];
@@ -1870,20 +1853,66 @@ char *sha256sum_file(const char *fname)
 	char binaryhash[SHA256_DIGEST_LENGTH];
 	static char hexhash[SHA256_DIGEST_LENGTH*2+1];
 	int n;
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+	unsigned int md_len;
+	EVP_MD_CTX *mdctx;
+
+	mdctx = EVP_MD_CTX_new();
+	if (EVP_DigestInit_ex(mdctx, sha256_function, NULL) != 1)
+		abort();
+#else
+	SHA256_Init(&hash);
+#endif
 
 	fd = fopen(fname, "rb");
 	if (!fd)
 		return NULL;
 
-	SHA256_Init(&hash);
 	while ((n = fread(buf, 1, sizeof(buf), fd)) > 0)
 	{
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+		EVP_DigestUpdate(mdctx, buf, n);
+#else
 		SHA256_Update(&hash, buf, n);
+#endif
 	}
 	fclose(fd);
+
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+	EVP_DigestFinal_ex(mdctx, binaryhash, &md_len);
+	EVP_MD_CTX_free(mdctx);
+#else
 	SHA256_Final(binaryhash, &hash);
+#endif
 	binarytohex(binaryhash, sizeof(binaryhash), hexhash);
 	return hexhash;
+}
+
+/** Generates a SHA1 checksum - binary version.
+ * @param dst[out]  Buffer to store result in, which needs to be 32 bytes in length
+ *                  (SHA1_DIGEST_LENGTH).
+ * @param src[in]   The input data used to generate the checksum.
+ * @param n[in]     Length of data.
+ * @deprecated      The SHA1 algorithm is deprecated and insecure,
+ *                  so only use this if absolutely needed.
+ */
+void sha1hash_binary(char *dst, const char *src, unsigned long n)
+{
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+	unsigned int md_len;
+	EVP_MD_CTX *mdctx = EVP_MD_CTX_new();
+	if (EVP_DigestInit_ex(mdctx, sha1_function, NULL) != 1)
+		abort();
+	EVP_DigestUpdate(mdctx, src, n);
+	EVP_DigestFinal_ex(mdctx, dst, &md_len);
+	EVP_MD_CTX_free(mdctx);
+#else
+	SHA_CTX hash;
+
+	SHA1_Init(&hash);
+	SHA1_Update(&hash, src, n);
+	SHA1_Final(dst, &hash);
+#endif
 }
 
 /** Remove a suffix from a filename, eg ".c" (if it is present) */
@@ -1932,21 +1961,20 @@ int filename_has_suffix(const char *fname, const char *suffix)
 	return 0;
 }
 
-/** Check if the specified file exists */
-int file_exists(char *file)
+/** Check if the specified file or directory exists */
+int file_exists(const char *file)
 {
-	FILE *fd;
-
-	fd = fopen(file, "r");
-	if (!fd)
-		return 0;
-
-	fclose(fd);
-	return 1;
+#ifdef _WIN32
+	if (_access(file, 0) == 0)
+#else
+	if (access(file, 0) == 0)
+#endif
+		return 1;
+	return 0;
 }
 
 /** Get the file creation time */
-time_t get_file_time(char *fname)
+time_t get_file_time(const char *fname)
 {
 	struct stat st;
 
@@ -1957,7 +1985,7 @@ time_t get_file_time(char *fname)
 }
 
 /** Get the size of a file */
-long get_file_size(char *fname)
+long get_file_size(const char *fname)
 {
 	struct stat st;
 
@@ -1968,7 +1996,7 @@ long get_file_size(char *fname)
 }
 
 /** Add a line to a MultiLine list */
-void addmultiline(MultiLine **l, char *line)
+void addmultiline(MultiLine **l, const char *line)
 {
 	MultiLine *m = safe_alloc(sizeof(MultiLine));
 	safe_strdup(m->line, line);
@@ -1987,8 +2015,27 @@ void freemultiline(MultiLine *l)
 	}
 }
 
+/** Convert a line regular string containing \n's to a MultiLine linked list */
+MultiLine *line2multiline(const char *str)
+{
+	static char buf[8192];
+	char *p, *p2;
+	MultiLine *ml = NULL;
+
+	strlcpy(buf, str, sizeof(buf));
+	p = buf;
+	do {
+		p2 = strchr(p, '\n');
+		if (p2)
+			*p2++ = '\0';
+		addmultiline(&ml, p);
+		p = p2;
+	} while(p2 && *p2);
+	return ml;
+}
+
 /** Convert a sendtype to a command string */
-char *sendtype_to_cmd(SendType sendtype)
+const char *sendtype_to_cmd(SendType sendtype)
 {
 	if (sendtype == SEND_TYPE_PRIVMSG)
 		return "PRIVMSG";
@@ -2005,11 +2052,11 @@ char *sendtype_to_cmd(SendType sendtype)
  * @param strict	Whether to require UPPER+lower+digits
  * @returns 1 if good, 0 if not.
  */
-int check_password_strength(char *pass, int min_length, int strict, char **err)
+int check_password_strength(const char *pass, int min_length, int strict, char **err)
 {
-	char has_lowercase=0, has_uppercase=0, has_digit=0;
-	char *p;
 	static char buf[256];
+	char has_lowercase=0, has_uppercase=0, has_digit=0;
+	const char *p;
 
 	if (err)
 		*err = NULL;
@@ -2059,7 +2106,7 @@ int check_password_strength(char *pass, int min_length, int strict, char **err)
 	return 1;
 }
 
-int valid_secret_password(char *pass, char **err)
+int valid_secret_password(const char *pass, char **err)
 {
 	return check_password_strength(pass, 10, 1, err);
 }
@@ -2082,6 +2129,34 @@ int running_interactively(void)
 #endif
 }
 
+int terminal_supports_color(void)
+{
+#ifndef _WIN32
+	char *s;
+
+	/* Yeah we check all of stdin, stdout, stderr, because
+	 * or more may be redirected (bin/unrealircd >log 2>&1),
+	 * and then we want to say no to color support.
+	 */
+	if (!isatty(0) || !isatty(1) || !isatty(2))
+		return 0;
+
+	s = getenv("TERM");
+	/* Yeah this is a lazy way to detect color-capable terminals
+	 * but it is good enough for me.
+	 */
+	if (s)
+	{
+		if (strstr(s, "color") || strstr(s, "ansi"))
+			return 1;
+	}
+
+	return 0;
+#else
+	return 0;
+#endif
+}
+
 /** Skip whitespace (if any) */
 void skip_whitespace(char **p)
 {
@@ -2095,4 +2170,202 @@ void skip_whitespace(char **p)
 void read_until(char **p, char *stopchars)
 {
 	for (; **p && !strchr(stopchars, **p); *p = *p + 1);
+}
+
+void write_pidfile_failed(void)
+{
+	char *errstr = strerror(errno);
+	unreal_log(ULOG_WARNING, "config", "WRITE_PID_FILE_FAILED", NULL,
+		   "Unable to write to pid file '$filename': $system_error",
+		   log_data_string("filename", conf_files->pid_file),
+		   log_data_string("system_error", errstr));
+}
+
+/** Write PID file */
+void write_pidfile(void)
+{
+#ifdef IRCD_PIDFILE
+	int fd;
+	char buff[20];
+	if ((fd = open(conf_files->pid_file, O_CREAT | O_WRONLY, 0600)) < 0)
+	{
+		write_pidfile_failed();
+		return;
+	}
+	ircsnprintf(buff, sizeof(buff), "%5d\n", (int)getpid());
+	if (write(fd, buff, strlen(buff)) < 0)
+		write_pidfile_failed();
+	if (close(fd) < 0)
+		write_pidfile_failed();
+#endif
+}
+
+/*
+ * Determines if the given string is a valid URL. Since libcurl
+ * supports telnet, ldap, and dict such strings are treated as
+ * invalid URLs here since we don't want them supported in
+ * unreal.
+ */
+int url_is_valid(const char *string)
+{
+	if (strstr(string, " ") || strstr(string, "\t"))
+		return 0;
+
+	if (strstr(string, "telnet://") == string ||
+	    strstr(string, "ldap://") == string ||
+	    strstr(string, "dict://") == string)
+	{
+		return 0;
+	}
+	return (strstr(string, "://") != NULL);
+}
+
+/** A displayable URL for in error messages and such.
+ * This leaves out any authentication information (user:pass)
+ * the URL may contain.
+ */
+const char *displayurl(const char *url)
+{
+	static char buf[512];
+	char *proto, *rest;
+
+	/* protocol://user:pass@host/etc.. */
+	rest = strchr(url, '@');
+
+	if (!rest)
+		return url; /* contains no auth information */
+
+	rest++; /* now points to the rest (remainder) of the URL */
+
+	proto = strstr(url, "://");
+	if (!proto || (proto > rest) || (proto == url))
+		return url; /* incorrectly formatted, just show entire URL. */
+
+	strlncpy(buf, url, sizeof(buf), proto - url);
+	strlcat(buf, "://***:***@", sizeof(buf));
+	strlcat(buf, rest, sizeof(buf));
+
+	return buf;
+}
+
+/*
+ * Returns the filename portion of the URL. The returned string
+ * is malloc()'ed and must be freed by the caller. If the specified
+ * URL does not contain a filename, a '-' is allocated and returned.
+ */
+char *url_getfilename(const char *url)
+{
+	const char *c, *start;
+
+	if ((c = strstr(url, "://")))
+		c += 3;
+	else
+		c = url;
+
+	while (*c && *c != '/')
+		c++;
+
+	if (*c == '/')
+	{
+		c++;
+		if (!*c || *c == '?')
+			return raw_strdup("-");
+		start = c;
+		while (*c && *c != '?')
+			c++;
+		if (!*c)
+			return raw_strdup(start);
+		else
+			return raw_strldup(start, c-start+1);
+
+	}
+	return raw_strdup("-");
+}
+
+#ifdef _WIN32
+ // https://docs.microsoft.com/en-us/cpp/c-runtime-library/reference/access-waccess
+ // mode value   Checks file for
+ // 04 	         Read-only
+ #define R_OK 04
+#endif
+
+/*
+ * Checks whether a file can be opened for reading.
+ */
+int is_file_readable(const char *file, const char *dir)
+{
+	char *filename = strdup(file);
+	convert_to_absolute_path(&filename, dir);
+	if (access(filename, R_OK)){
+		safe_free(filename);
+		return 0;
+	}
+	safe_free(filename);
+	return 1;
+}
+
+void delletterfromstring(char *s, char letter)
+{
+	if (s == NULL)
+		return;
+	for (; *s; s++)
+	{
+		if (*s == letter)
+		{
+			for (; *s; s++)
+				*s = s[1];
+			break;
+		}
+	}
+}
+
+int sort_character_lowercase_before_uppercase(char x, char y)
+{
+	/* Lower before upper */
+	if (islower(x) && isupper(y))
+		return 1;
+	if (isupper(x) && islower(y))
+		return 0;
+	/* Other than that, easy */
+	return x < y ? 1 : 0;
+}
+
+/* Helper function, mainly used by snomask code */
+void addlettertodynamicstringsorted(char **str, char letter)
+{
+	char *i, *o;
+	char *newbuf;
+	size_t newbuflen;
+
+	/* NULL string? Easy! */
+	if (*str == NULL)
+	{
+		*str = safe_alloc(2);
+		**str = letter;
+		return;
+	}
+
+	/* Exists? Then nothing to do */
+	if (strchr(*str, letter))
+		return;
+
+	/* Ok, we really need to add it */
+	newbuflen = strlen(*str) + 2;
+	newbuf = safe_alloc(newbuflen);
+	for (i = *str, o = newbuf; *i; i++)
+	{
+		/* Insert before a higher letter */
+		if (letter && sort_character_lowercase_before_uppercase(letter, *i))
+		{
+			*o++ = letter;
+			letter = '\0';
+		}
+		*o++ = *i;
+	}
+	/* Or maybe we should be at the final spot? */
+	if (letter)
+		*o++ = letter;
+	*o = '\0';
+	safe_free_raw(*str);
+	*str = newbuf;
 }

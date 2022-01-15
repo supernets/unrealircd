@@ -40,15 +40,15 @@
  * and I/O speeds of the underlying hardware.
  */
 
-/* In UnrealIRCd 5.2.0 we don't write the v1 header yet for unencrypted
- * database files, this so users using unencrypted can easily downgrade
- * to 5.0.9 and lower should there be any need to do so.
+/* In UnrealIRCd 5.2.x we didn't write the v1 header yet for unencrypted
+ * database files, this so users using unencrypted could easily downgrade
+ * to version 5.0.9 and older.
  * We DO support READING encypted, unencrypted v1, and unencrypted raw (v0)
- * in 5.2.0, though.
- * Presumably in 2022 or so we will stop writing v0 by default and change
- * this #undef to a #define to write v1.
+ * in 5.2.0 onwards, though.
+ * Starting with UnrealIRCd 6 we now write the header, so people can only
+ * downgrade from UnrealIRCd 6 to 5.2.0 and later (not 5.0.9).
  */
-#undef UNREALDB_WRITE_V1
+#define UNREALDB_WRITE_V1
 
 /* If a key is specified, it must be this size */
 #define UNREALDB_KEY_LEN	crypto_secretstream_xchacha20poly1305_KEYBYTES
@@ -68,6 +68,7 @@
 /* Forward declarations - only used for internal (static) functions, of course */
 static SecretCache *find_secret_cache(Secret *secr, UnrealDBConfig *cfg);
 static void unrealdb_add_to_secret_cache(Secret *secr, UnrealDBConfig *cfg);
+static void unrealdb_set_error(UnrealDB *c, UnrealDBError errcode, FORMAT_STRING(const char *pattern), ...) __attribute__((format(printf,3,4)));
 
 UnrealDBError unrealdb_last_error_code;
 static char *unrealdb_last_error_string = NULL;
@@ -136,7 +137,7 @@ static int unrealdb_kdf(UnrealDB *c, Secret *secr)
  *       For programmatically checking of error conditions
  *       use unrealdb_get_error_code() instead.
  */
-char *unrealdb_get_error_string(void)
+const char *unrealdb_get_error_string(void)
 {
 	return unrealdb_last_error_string;
 }
@@ -321,12 +322,16 @@ UnrealDB *unrealdb_open(const char *filename, UnrealDBMode mode, char *secret_bl
 		if (cached)
 		{
 #ifdef DEBUGMODE
-			ircd_log(LOG_ERROR, "[UnrealDB] unrealdb_open(): Cache hit for '%s' while writing", secr->name);
+			unreal_log(ULOG_DEBUG, "unrealdb", "DEBUG_UNREALDB_CACHE_HIT", NULL,
+			           "Cache hit for '$secret_block' while writing",
+			           log_data_string("secret_block", secr->name));
 #endif
 		} else
 		{
 #ifdef DEBUGMODE
-			ircd_log(LOG_ERROR, "[UnrealDB] unrealdb_open(): Need to run argon2 '%s' while writing", secr->name);
+			unreal_log(ULOG_DEBUG, "unrealdb", "DEBUG_UNREALDB_CACHE_MISS", NULL,
+			           "Cache miss for '$secret_block' while writing, need to run argon2",
+			           log_data_string("secret_block", secr->name));
 #endif
 			if (!unrealdb_kdf(c, secr))
 			{
@@ -414,11 +419,15 @@ UnrealDB *unrealdb_open(const char *filename, UnrealDBMode mode, char *secret_bl
 			/* Use cached key, no need to run expensive argon2.. */
 			memcpy(c->config->key, dbcache->config->key, c->config->keylen);
 #ifdef DEBUGMODE
-			ircd_log(LOG_ERROR, "[UnrealDB] unrealdb_open(): Cache hit for '%s' while reading", secr->name);
+			unreal_log(ULOG_DEBUG, "unrealdb", "DEBUG_UNREALDB_CACHE_HIT", NULL,
+			           "Cache hit for '$secret_block' while reading",
+			           log_data_string("secret_block", secr->name));
 #endif
 		} else {
 #ifdef DEBUGMODE
-			ircd_log(LOG_ERROR, "[UnrealDB] unrealdb_open(): Need to run argon2 for '%s' while reading", secr->name);
+			unreal_log(ULOG_DEBUG, "unrealdb", "DEBUG_UNREALDB_CACHE_MISS", NULL,
+			           "Cache miss for '$secret_block' while reading, need to run argon2",
+			           log_data_string("secret_block", secr->name));
 #endif
 			if (!unrealdb_kdf(c, secr))
 			{
@@ -563,11 +572,11 @@ char *unrealdb_test_db(const char *filename, char *secret_block)
  *       unrealdb_write_int64(), unrealdb_write_int32(), unrealdb_write_int16(),
  *       unrealdb_write_char(), unrealdb_write_str().
  */
-static int unrealdb_write(UnrealDB *c, void *wbuf, int len)
+static int unrealdb_write(UnrealDB *c, const void *wbuf, int len)
 {
 	char buf_out[UNREALDB_CRYPT_FILE_CHUNK_SIZE + crypto_secretstream_xchacha20poly1305_ABYTES];
 	unsigned long long out_len;
-	char *buf = wbuf;
+	const char *buf = wbuf;
 
 	if (c->error_code)
 		return 0;
@@ -643,7 +652,7 @@ static int unrealdb_write(UnrealDB *c, void *wbuf, int len)
  *        Note that 'x' can safely be NULL.
  * @returns 1 on success, 0 on failure.
  */
-int unrealdb_write_str(UnrealDB *c, char *x)
+int unrealdb_write_str(UnrealDB *c, const char *x)
 {
 	uint16_t len;
 
@@ -934,6 +943,7 @@ int unrealdb_read_char(UnrealDB *c, char *t)
 
 /** @} */
 
+#if 0
 void fatal_error(FORMAT_STRING(const char *pattern), ...)
 {
 	va_list vl;
@@ -1045,10 +1055,11 @@ void unrealdb_test(void)
 	fprintf(stderr, "**** TESTING UNENCRYPTED ****\n");
 	unrealdb_test_speed(NULL);
 }
+#endif
 
 /** TODO: document and implement
  */
-char *unrealdb_test_secret(char *name)
+const char *unrealdb_test_secret(const char *name)
 {
 	// FIXME: check if exists, if not then return an error, with a nice FAQ reference etc.
 	return NULL; /* no error */

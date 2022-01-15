@@ -1,6 +1,6 @@
 /*
- * SSL/TLS Anti DoS module
- * This protects against SSL renegotiation attacks while still allowing us
+ * TLS Anti DoS module
+ * This protects against TLS renegotiation attacks while still allowing us
  * to leave renegotiation on with all it's security benefits.
  *
  * (C) Copyright 2015- Bram Matthys and the UnrealIRCd team.
@@ -16,7 +16,7 @@ ModuleHeader MOD_HEADER
 	"5.0",
 	"TLS Renegotiation DoS protection",
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
     };
 
 #define HANDSHAKE_LIMIT_COUNT 3
@@ -81,8 +81,7 @@ void ssl_info_callback(const SSL *ssl, int where, int ret)
 			e->n++;
 			if (e->n >= HANDSHAKE_LIMIT_COUNT)
 			{
-				ircd_log(LOG_ERROR, "TLS Handshake flood detected from %s -- killed", get_client_name(client, TRUE));
-				sendto_realops("TLS Handshake flood detected from %s -- killed", get_client_name(client, TRUE));
+				unreal_log(ULOG_INFO, "flood", "TLS_HANDSHAKE_FLOOD", client, "TLS Handshake flood detected from $client -- killed");
 				dead_socket(client, "TLS Handshake flood detected");
 			}
 		}
@@ -105,7 +104,7 @@ int tls_antidos_handshake(Client *client)
 	return 0;
 }
 
-/** Called by OpenSSL when the SSL structure is freed (so we can free up our custom struct too) */
+/** Called by OpenSSL when the SSL * structure is freed (so we can free up our custom struct too) */
 void tls_antidos_free(void *parent, void *ptr, CRYPTO_EX_DATA *ad, int idx, long argl, void *argp)
 {
 	safe_free(ptr);

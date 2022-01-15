@@ -32,7 +32,7 @@ ModuleHeader MOD_HEADER
 	"5.0",
 	"command /topic", 
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
     };
 
 MOD_INIT()
@@ -52,17 +52,13 @@ MOD_UNLOAD()
 	return MOD_SUCCESS;
 }
 
-void topicoverride(Client *client, Channel *channel, char *topic)
+void topic_operoverride_msg(Client *client, Channel *channel, const char *topic)
 {
-	sendto_snomask(SNO_EYES,
-	    "*** OperOverride -- %s (%s@%s) TOPIC %s \'%s\'",
-	    client->name, client->user->username, client->user->realhost,
-	    channel->chname, topic);
-
-	/* Logging implementation added by XeRXeS */
-	ircd_log(LOG_OVERRIDE, "OVERRIDE: %s (%s@%s) TOPIC %s \'%s\'",
-		client->name, client->user->username, client->user->realhost,
-		channel->chname, topic);
+	unreal_log(ULOG_INFO, "operoverride", "OPEROVERRIDE_TOPIC", client,
+		   "OperOverride: $client.details changed the topic of $channel to '$topic'",
+		   log_data_string("override_type", "topic"),
+		   log_data_string("topic", topic),
+		   log_data_channel("channel", channel));
 }
 
 /** Query or change the channel topic.
@@ -80,13 +76,12 @@ void topicoverride(Client *client, Channel *channel, char *topic)
 CMD_FUNC(cmd_topic)
 {
 	Channel *channel = NULL;
-	char *topic = NULL, *name, *tnick = client->name;
-	char *errmsg = NULL;
+	const char *topic = NULL;
+	const char *name, *tnick = client->name;
+	const char *errmsg = NULL;
 	time_t ttime = 0;
 	int i = 0;
 	Hook *h;
-	int ismember; /* cache: IsMember() */
-	long flags = 0; /* cache: membership flags */
 	MessageTag *mtags = NULL;
 
 	if ((parc < 2) || BadPtr(parv[1]))
@@ -97,20 +92,16 @@ CMD_FUNC(cmd_topic)
 
 	name = parv[1];
 
-	channel = find_channel(parv[1], NULL);
+	channel = find_channel(parv[1]);
 	if (!channel)
 	{
 		sendnumeric(client, ERR_NOSUCHCHANNEL, name);
 		return;
 	}
 
-	ismember = IsMember(client, channel); /* CACHE */
-	if (ismember)
-		flags = get_access(client, channel); /* CACHE */
-
 	if (parc > 2 || SecretChannel(channel))
 	{
-		if (!ismember && !IsServer(client)
+		if (!IsMember(client, channel) && !IsServer(client)
 		    && !ValidatePermissionsForPath("channel:see:list:secret",client,NULL,channel,NULL) && !IsULine(client))
 		{
 			sendnumeric(client, ERR_NOTONCHANNEL, name);
@@ -140,7 +131,7 @@ CMD_FUNC(cmd_topic)
 		}
 
 		/* If you're not a member, and you can't view outside channel, deny */
-		if ((!ismember && i == HOOK_DENY) ||
+		if ((!IsMember(client, channel) && i == HOOK_DENY) ||
 		    (is_banned(client,channel,BANCHK_JOIN,NULL,NULL) &&
 		     !ValidatePermissionsForPath("channel:see:topic",client,NULL,channel,NULL)))
 		{
@@ -149,13 +140,12 @@ CMD_FUNC(cmd_topic)
 		}
 
 		if (!channel->topic)
-			sendnumeric(client, RPL_NOTOPIC, channel->chname);
+			sendnumeric(client, RPL_NOTOPIC, channel->name);
 		else
 		{
-			sendnumeric(client, RPL_TOPIC,
-			    channel->chname, channel->topic);
-			sendnumeric(client, RPL_TOPICWHOTIME, channel->chname,
-			    channel->topic_nick, channel->topic_time);
+			sendnumeric(client, RPL_TOPIC, channel->name, channel->topic);
+			sendnumeric(client, RPL_TOPICWHOTIME, channel->name,
+			            channel->topic_nick, (long long)channel->topic_time);
 		}
 		return;
 	}
@@ -173,13 +163,13 @@ CMD_FUNC(cmd_topic)
 			channel->topic_time = ttime;
 
 			new_message(client, recv_mtags, &mtags);
-			RunHook4(HOOKTYPE_TOPIC, client, channel, mtags, topic);
+			RunHook(HOOKTYPE_TOPIC, client, channel, mtags, topic);
 			sendto_server(client, 0, 0, mtags, ":%s TOPIC %s %s %lld :%s",
-			    client->id, channel->chname, channel->topic_nick,
+			    client->id, channel->name, channel->topic_nick,
 			    (long long)channel->topic_time, channel->topic);
 			sendto_channel(channel, client, NULL, 0, 0, SEND_LOCAL, mtags,
 				       ":%s TOPIC %s :%s",
-				       client->name, channel->chname, channel->topic);
+				       client->name, channel->name, channel->topic);
 			free_message_tags(mtags);
 		}
 		return;
@@ -188,53 +178,67 @@ CMD_FUNC(cmd_topic)
 	/* Topic change. Either locally (check permissions!) or remote, check permissions: */
 	if (IsUser(client))
 	{
-		char *newtopic = NULL;
+		const char *newtopic = NULL;
+		const char *errmsg = NULL;
+		int ret = EX_ALLOW;
+		int operoverride = 0;
 
-		/* +t and not +hoaq ? */
-		if ((channel->mode.mode & MODE_TOPICLIMIT) &&
-		    !is_skochanop(client, channel) && !IsULine(client) && !IsServer(client))
+		for (h = Hooks[HOOKTYPE_CAN_SET_TOPIC]; h; h = h->next)
+		{
+			int n = (*(h->func.intfunc))(client, channel, topic, &errmsg);
+
+			if (n == EX_DENY)
+			{
+				ret = n;
+			} else
+			if (n == EX_ALWAYS_DENY)
+			{
+				ret = n;
+				break;
+			}
+		}
+
+		if (ret == EX_ALWAYS_DENY)
+		{
+			if (MyUser(client) && errmsg)
+				sendto_one(client, NULL, "%s", errmsg); /* send error, if any */
+
+			if (MyUser(client))
+				return; /* reject the topic set (note: we never block remote sets) */
+		}
+
+		if (ret == EX_DENY)
 		{
 			if (MyUser(client) && !ValidatePermissionsForPath("channel:override:topic", client, NULL, channel, NULL))
 			{
-				sendnumeric(client, ERR_CHANOPRIVSNEEDED, channel->chname);
-				return;
+				if (errmsg)
+					sendto_one(client, NULL, "%s", errmsg);
+				return; /* reject */
+			} else {
+				operoverride = 1; /* allow */
 			}
-			topicoverride(client, channel, topic);
 		}
 
-		/* -t and banned? */
+		/* banned? */
 		newtopic = topic;
-		if (!(channel->mode.mode & MODE_TOPICLIMIT) &&
-		    !is_skochanop(client, channel) && is_banned(client, channel, BANCHK_MSG, &newtopic, &errmsg))
+		if (!check_channel_access(client, channel, "hoaq") && is_banned(client, channel, BANCHK_MSG, &newtopic, &errmsg))
 		{
 			char buf[512];
 
 			if (MyUser(client) && !ValidatePermissionsForPath("channel:override:topic", client, NULL, channel, NULL))
 			{
-				ircsnprintf(buf, sizeof(buf), "You cannot change the topic on %s while being banned", channel->chname);
+				ircsnprintf(buf, sizeof(buf), "You cannot change the topic on %s while being banned", channel->name);
 				sendnumeric(client, ERR_CANNOTDOCOMMAND, "TOPIC",  buf);
 				return;
 			}
-			topicoverride(client, channel, topic);
+			operoverride = 1;
 		}
+
 		if (MyUser(client) && newtopic)
 			topic = newtopic; /* process is_banned() changes of topic (eg: text replacement), but only for local clients */
 
-		/* -t, +m, and not +vhoaq */
-		if (((flags&CHFL_OVERLAP) == 0) && (channel->mode.mode & MODE_MODERATED))
-		{
-			char buf[512];
-
-			if (MyUser(client) && ValidatePermissionsForPath("channel:override:topic", client, NULL, channel, NULL))
-			{
-				topicoverride(client, channel, topic);
-			} else {
-				/* With +m and -t, only voice and higher may change the topic */
-				ircsnprintf(buf, sizeof(buf), "Voice (+v) or higher is required in order to change the topic on %s (channel is +m)", channel->chname);
-				sendnumeric(client, ERR_CANNOTDOCOMMAND, "TOPIC",  buf);
-				return;
-			}
-		}
+		if (operoverride)
+			topic_operoverride_msg(client, channel, topic);
 
 		/* For local users, run spamfilters and hooks.. */
 		if (MyUser(client))
@@ -242,11 +246,11 @@ CMD_FUNC(cmd_topic)
 			Hook *tmphook;
 			int n;
 
-			if (match_spamfilter(client, topic, SPAMF_TOPIC, "TOPIC", channel->chname, 0, NULL))
+			if (match_spamfilter(client, topic, SPAMF_TOPIC, "TOPIC", channel->name, 0, NULL))
 				return;
 
 			for (tmphook = Hooks[HOOKTYPE_PRE_LOCAL_TOPIC]; tmphook; tmphook = tmphook->next) {
-				topic = (*(tmphook->func.pcharfunc))(client, channel, topic);
+				topic = (*(tmphook->func.stringfunc))(client, channel, topic);
 				if (!topic)
 					return;
 			}
@@ -270,12 +274,12 @@ CMD_FUNC(cmd_topic)
 		channel->topic_time = TStime();
 
 	new_message(client, recv_mtags, &mtags);
-	RunHook4(HOOKTYPE_TOPIC, client, channel, mtags, topic);
+	RunHook(HOOKTYPE_TOPIC, client, channel, mtags, topic);
 	sendto_server(client, 0, 0, mtags, ":%s TOPIC %s %s %lld :%s",
-	    client->id, channel->chname, channel->topic_nick,
+	    client->id, channel->name, channel->topic_nick,
 	    (long long)channel->topic_time, channel->topic);
 	sendto_channel(channel, client, NULL, 0, 0, SEND_LOCAL, mtags,
 		       ":%s TOPIC %s :%s",
-		       client->name, channel->chname, channel->topic);
+		       client->name, channel->name, channel->topic);
 	free_message_tags(mtags);
 }

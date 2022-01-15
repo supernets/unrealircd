@@ -28,14 +28,14 @@ ModuleHeader MOD_HEADER
 	"5.0",
 	"msgid CAP",
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
 	};
 
 /* Variables */
 long CAP_ACCOUNT_TAG = 0L;
 
-int msgid_mtag_is_ok(Client *client, char *name, char *value);
-void mtag_add_or_inherit_msgid(Client *sender, MessageTag *recv_mtags, MessageTag **mtag_list, char *signature);
+int msgid_mtag_is_ok(Client *client, const char *name, const char *value);
+void mtag_add_or_inherit_msgid(Client *sender, MessageTag *recv_mtags, MessageTag **mtag_list, const char *signature);
 
 MOD_INIT()
 {
@@ -69,7 +69,7 @@ MOD_UNLOAD()
  * syntax.
  * We simply allow msgid ONLY from servers and with any syntax.
  */
-int msgid_mtag_is_ok(Client *client, char *name, char *value)
+int msgid_mtag_is_ok(Client *client, const char *name, const char *value)
 {
 	if (IsServer(client) && !BadPtr(value))
 		return 1;
@@ -103,7 +103,7 @@ MessageTag *mtag_generate_msgid(void)
 }
 
 
-void mtag_add_or_inherit_msgid(Client *sender, MessageTag *recv_mtags, MessageTag **mtag_list, char *signature)
+void mtag_add_or_inherit_msgid(Client *sender, MessageTag *recv_mtags, MessageTag **mtag_list, const char *signature)
 {
 	MessageTag *m = find_mtag(recv_mtags, "msgid");
 	if (m)
@@ -146,9 +146,7 @@ void mtag_add_or_inherit_msgid(Client *sender, MessageTag *recv_mtags, MessageTa
 		char newbuf[256];
 		memset(&binaryhash, 0, sizeof(binaryhash));
 		memset(&b64hash, 0, sizeof(b64hash));
-		SHA256_Init(&hash);
-		SHA256_Update(&hash, signature, strlen(signature));
-		SHA256_Final(binaryhash, &hash);
+		sha256hash_binary(binaryhash, signature, strlen(signature));
 		b64_encode(binaryhash, sizeof(binaryhash)/2, b64hash, sizeof(b64hash));
 		b64hash[22] = '\0'; /* cut off at '=' */
 		snprintf(newbuf, sizeof(newbuf), "%s-%s", prefix, b64hash);

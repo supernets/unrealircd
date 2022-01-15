@@ -32,7 +32,7 @@ ModuleHeader MOD_HEADER
 	"5.0", /* Version */
 	"command /sendumode", /* Short description of module */
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
     };
 
 /* This is called on module init, before Server Ready */
@@ -66,8 +66,8 @@ CMD_FUNC(cmd_sendumode)
 {
 	MessageTag *mtags = NULL;
 	Client *acptr;
-	char *message;
-	char *p;
+	const char *message;
+	const char *p;
 	int i;
 	long umode_s = 0;
 
@@ -83,19 +83,7 @@ CMD_FUNC(cmd_sendumode)
 
 	sendto_server(client, 0, 0, mtags, ":%s SENDUMODE %s :%s", client->id, parv[1], message);
 
-	for (p = parv[1]; *p; p++)
-	{
-		for(i = 0; i <= Usermode_highest; i++)
-		{
-			if (!Usermode_Table[i].flag)
-				continue;
-			if (Usermode_Table[i].flag == *p)
-			{
-				umode_s |= Usermode_Table[i].mode;
-				break;
-			}
-		}
-	}
+	umode_s = set_usermode(parv[1]);
 
 	list_for_each_entry(acptr, &oper_list, special_node)
 	{

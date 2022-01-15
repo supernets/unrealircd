@@ -29,11 +29,11 @@ char backupbuf[8192];
 static char *para[MAXPARA + 2];
 
 /* Forward declarations of functions that are local (static) */
-static int do_numeric(int, Client *, MessageTag *, int, char **);
+static int do_numeric(int, Client *, MessageTag *, int, const char **);
 static void cancel_clients(Client *, Client *, char *);
 static void remove_unknown(Client *, char *);
-static void parse2(Client *client, Client **fromptr, MessageTag *mtags, char *ch);
-static void parse_addlag(Client *client, int cmdbytes);
+static void parse2(Client *client, Client **fromptr, MessageTag *mtags, int mtags_bytes, char *ch);
+static void parse_addlag(Client *client, int command_bytes, int mtags_bytes);
 static int client_lagged_up(Client *client);
 static void ban_handshake_data_flooder(Client *client);
 
@@ -63,7 +63,8 @@ int process_packet(Client *client, char *readbuf, int length, int killsafely)
 	/* flood from unknown connection */
 	if (IsUnknown(client) && (DBufLength(&client->local->recvQ) > iConf.handshake_data_flood_amount))
 	{
-		sendto_snomask(SNO_FLOOD, "Handshake data flood from %s detected", client->local->sockhost);
+		unreal_log(ULOG_INFO, "flood", "HANDSHAKE_DATA_FLOOD", client,
+		           "Handshake data flood detected from $client.details [$client.ip]");
 		if (!killsafely)
 			ban_handshake_data_flooder(client);
 		else
@@ -74,12 +75,10 @@ int process_packet(Client *client, char *readbuf, int length, int killsafely)
 	/* excess flood check */
 	if (IsUser(client) && DBufLength(&client->local->recvQ) > get_recvq(client))
 	{
-		sendto_snomask(SNO_FLOOD,
-			"*** Flood -- %s!%s@%s (%d) exceeds %d recvQ",
-			client->name[0] ? client->name : "*",
-			client->user ? client->user->username : "*",
-			client->user ? client->user->realhost : "*",
-			DBufLength(&client->local->recvQ), get_recvq(client));
+		unreal_log(ULOG_INFO, "flood", "RECVQ_EXCEEDED", client,
+		           "Flood from $client.details [$client.ip] exceeds class::recvq ($recvq > $class_recvq) (Client sending too much data)",
+		           log_data_integer("recvq", DBufLength(&client->local->recvQ)),
+		           log_data_integer("class_recvq", get_recvq(client)));
 		if (!killsafely)
 			exit_client(client, NULL, "Excess Flood");
 		else
@@ -105,7 +104,7 @@ void parse_client_queued(Client *client)
 		return; /* we delay processing of data until identd has replied */
 
 	if (!IsUser(client) && !IsServer(client) && (iConf.handshake_delay > 0) &&
-	    !IsNoHandshakeDelay(client) && (TStime() - client->local->firsttime < iConf.handshake_delay))
+	    !IsNoHandshakeDelay(client) && (TStime() - client->local->creationtime < iConf.handshake_delay))
 	{
 		return; /* we delay processing of data until set::handshake-delay is reached */
 	}
@@ -140,21 +139,11 @@ void parse_client_queued(Client *client)
 */
 void dopacket(Client *client, char *buffer, int length)
 {
-	me.local->receiveB += length;	/* Update bytes received */
-	client->local->receiveB += length;
-	if (client->local->receiveB > 1023)
-	{
-		client->local->receiveK += (client->local->receiveB >> 10);
-		client->local->receiveB &= 0x03ff;	/* 2^10 = 1024, 3ff = 1023 */
-	}
-	if (me.local->receiveB > 1023)
-	{
-		me.local->receiveK += (me.local->receiveB >> 10);
-		me.local->receiveB &= 0x03ff;
-	}
+	client->local->traffic.bytes_received += length;
+	me.local->traffic.bytes_received += length;
 
-	me.local->receiveM += 1;	/* Update messages received */
-	client->local->receiveM += 1;
+	client->local->traffic.messages_received++;
+	me.local->traffic.messages_received++;
 
 	parse(client, buffer, length);
 }
@@ -175,6 +164,7 @@ void parse(Client *cptr, char *buffer, int length)
 	char *ch;
 	int i, ret;
 	MessageTag *mtags = NULL;
+	int mtags_bytes = 0;
 
 	/* Take extreme care in this function, as messages can be up to READBUFSIZE
 	 * in size, which is 8192 at the time of writing.
@@ -184,18 +174,17 @@ void parse(Client *cptr, char *buffer, int length)
 	for (h = Hooks[HOOKTYPE_PACKET]; h; h = h->next)
 	{
 		(*(h->func.intfunc))(from, &me, NULL, &buffer, &length);
-		if(!buffer)
+		if (!buffer)
 			return;
 	}
-
-	Debug((DEBUG_ERROR, "Parsing: %s (from %s)", buffer, (*cptr->name ? cptr->name : "*")));
 
 	if (IsDeadSocket(cptr))
 		return;
 
-	if ((cptr->local->receiveK >= iConf.handshake_data_flood_amount/1024) && IsUnknown(cptr))
+	if ((cptr->local->traffic.bytes_received >= iConf.handshake_data_flood_amount) && IsUnknown(cptr))
 	{
-		sendto_snomask(SNO_FLOOD, "Handshake data flood from %s detected", cptr->local->sockhost);
+		unreal_log(ULOG_INFO, "flood", "HANDSHAKE_DATA_FLOOD", cptr,
+		           "Handshake data flood detected from $client.details [$client.ip]");
 		ban_handshake_data_flooder(cptr);
 		return;
 	}
@@ -203,8 +192,10 @@ void parse(Client *cptr, char *buffer, int length)
 	/* This stores the last executed command in 'backupbuf', useful for debugging crashes */
 	strlcpy(backupbuf, buffer, sizeof(backupbuf));
 
-#if defined(DEBUGMODE) && defined(RAWCMDLOGGING)
-	ircd_log(LOG_ERROR, "<- %s: %s", cptr->name, backupbuf);
+#if defined(RAWCMDLOGGING)
+	unreal_log(ULOG_INFO, "rawtraffic", "TRAFFIC_IN", cptr,
+		   "<- $client: $data",
+		   log_data_string("data", backupbuf));
 #endif
 
 	/* This poisons unused para elements that code should never access */
@@ -218,31 +209,35 @@ void parse(Client *cptr, char *buffer, int length)
 	/* Now, parse message tags, if any */
 	if (*ch == '@')
 	{
+		char *start = ch;
 		parse_message_tags(cptr, &ch, &mtags);
+		if (ch - start > 0)
+			mtags_bytes = ch - start;
 		/* Skip whitespace again */
 		for (; *ch == ' '; ch++)
 			;
 	}
 
-	parse2(cptr, &from, mtags, ch);
+	parse2(cptr, &from, mtags, mtags_bytes, ch);
 
 	if (IsDead(cptr))
-		RunHook3(HOOKTYPE_POST_COMMAND, NULL, mtags, ch);
+		RunHook(HOOKTYPE_POST_COMMAND, NULL, mtags, ch);
 	else
-		RunHook3(HOOKTYPE_POST_COMMAND, from, mtags, ch);
+		RunHook(HOOKTYPE_POST_COMMAND, from, mtags, ch);
 
 	free_message_tags(mtags);
 	return;
 }
 
 /** Parse the remaining line - helper function for parse().
- * @param cptr   The client from which the message was received
- * @param from   The sender, this may be changed by parse2() when
- *               the message has a sender, eg :xyz PRIVMSG ..
- * @param mtags  Message tags received for this message.
- * @param ch     The incoming line received (buffer), excluding message tags.
+ * @param cptr   	The client from which the message was received
+ * @param from   	The sender, this may be changed by parse2() when
+ *               	the message has a sender, eg :xyz PRIVMSG ..
+ * @param mtags  	Message tags received for this message.
+ * @param mtags_bytes	The length of all message tags.
+ * @param ch		The incoming line received (buffer), excluding message tags.
  */
-static void parse2(Client *cptr, Client **fromptr, MessageTag *mtags, char *ch)
+static void parse2(Client *cptr, Client **fromptr, MessageTag *mtags, int mtags_bytes, char *ch)
 {
 	Client *from = cptr;
 	char *s;
@@ -328,12 +323,12 @@ static void parse2(Client *cptr, Client **fromptr, MessageTag *mtags, char *ch)
 			ch++;
 	}
 
-	RunHook3(HOOKTYPE_PRE_COMMAND, from, mtags, ch);
+	RunHook(HOOKTYPE_PRE_COMMAND, from, mtags, ch);
 
 	if (*ch == '\0')
 	{
 		if (!IsServer(cptr))
-			cptr->local->since++; /* 1s fake lag */
+			cptr->local->fake_lag++; /* 1s fake lag */
 		return;
 	}
 
@@ -351,7 +346,7 @@ static void parse2(Client *cptr, Client **fromptr, MessageTag *mtags, char *ch)
 		numeric = (*ch - '0') * 100 + (*(ch + 1) - '0') * 10 + (*(ch + 2) - '0');
 		paramcount = MAXPARA;
 		ircstats.is_num++;
-		parse_addlag(cptr, bytes);
+		parse_addlag(cptr, bytes, mtags_bytes);
 	}
 	else
 	{
@@ -377,7 +372,7 @@ static void parse2(Client *cptr, Client **fromptr, MessageTag *mtags, char *ch)
 		if (!cmptr || !(cmptr->flags & CMD_NOLAG))
 		{
 			/* Add fake lag (doing this early in the code, so we don't forget) */
-			parse_addlag(cptr, bytes);
+			parse_addlag(cptr, bytes, mtags_bytes);
 		}
 		if (!cmptr)
 		{
@@ -402,8 +397,6 @@ static void parse2(Client *cptr, Client **fromptr, MessageTag *mtags, char *ch)
 					sendto_one(from, NULL, ":%s %d %s %s :Unknown command",
 					                       me.name, ERR_UNKNOWNCOMMAND,
 					                       from->name, ch);
-					Debug((DEBUG_ERROR, "Unknown (%s) from %s",
-					    ch, get_client_name(cptr, TRUE)));
 				}
 			}
 			ircstats.is_unco++;
@@ -492,34 +485,34 @@ static void parse2(Client *cptr, Client **fromptr, MessageTag *mtags, char *ch)
 
 	if (cmptr == NULL)
 	{
-		do_numeric(numeric, from, mtags, i, para);
+		do_numeric(numeric, from, mtags, i, (const char **)para);
 		return;
 	}
 	cmptr->count++;
 	if (IsUser(cptr) && (cmptr->flags & CMD_RESETIDLE))
-		cptr->local->last = TStime();
+		cptr->local->idle_since = TStime();
 
 	/* Now ready to execute the command */
 #ifndef DEBUGMODE
 	if (cmptr->flags & CMD_ALIAS)
 	{
-		(*cmptr->aliasfunc) (from, mtags, i, para, cmptr->cmd);
+		(*cmptr->aliasfunc) (from, mtags, i, (const char **)para, cmptr->cmd);
 	} else {
 		if (!cmptr->overriders)
-			(*cmptr->func) (from, mtags, i, para);
+			(*cmptr->func) (from, mtags, i, (const char **)para);
 		else
-			(*cmptr->overriders->func) (cmptr->overriders, from, mtags, i, para);
+			(*cmptr->overriders->func) (cmptr->overriders, from, mtags, i, (const char **)para);
 	}
 #else
 	then = clock();
 	if (cmptr->flags & CMD_ALIAS)
 	{
-		(*cmptr->aliasfunc) (from, mtags, i, para, cmptr->cmd);
+		(*cmptr->aliasfunc) (from, mtags, i, (const char **)para, cmptr->cmd);
 	} else {
 		if (!cmptr->overriders)
-			(*cmptr->func) (from, mtags, i, para);
+			(*cmptr->func) (from, mtags, i, (const char **)para);
 		else
-			(*cmptr->overriders->func) (cmptr->overriders, from, mtags, i, para);
+			(*cmptr->overriders->func) (cmptr->overriders, from, mtags, i, (const char **)para);
 	}
 	if (!IsDead(cptr))
 	{
@@ -528,7 +521,6 @@ static void parse2(Client *cptr, Client **fromptr, MessageTag *mtags, char *ch)
 			cmptr->rticks += ticks;
 		else
 			cmptr->lticks += ticks;
-		cptr->local->cputime += ticks;
 	}
 #endif
 }
@@ -568,19 +560,43 @@ static void ban_handshake_data_flooder(Client *client)
  * be able to flood at full speed causing potentially many Mbits or even
  * GBits of data to be sent out to other clients.
  *
- * @param client    The client.
- * @param cmdbytes  Number of bytes in the command.
+ * @param client	The client.
+ * @param command_bytes	Command length in bytes (excluding message tagss)
+ * @param mtags_bytes	Length of message tags in bytes
  */
-void parse_addlag(Client *client, int cmdbytes)
+void parse_addlag(Client *client, int command_bytes, int mtags_bytes)
 {
+	FloodSettings *settings = get_floodsettings_for_user(client, FLD_LAG_PENALTY);
+
 	if (!IsServer(client) && !IsNoFakeLag(client) &&
 #ifdef FAKELAG_CONFIGURABLE
 	    !(client->local->class && (client->local->class->options & CLASS_OPT_NOFAKELAG)) &&
 #endif
 	    !ValidatePermissionsForPath("immune:lag",client,NULL,NULL,NULL))
 	{
-		client->local->since += (1 + cmdbytes/90);
+		int lag_penalty = settings->period[FLD_LAG_PENALTY];
+		int lag_penalty_bytes = settings->limit[FLD_LAG_PENALTY];
+
+		client->local->fake_lag_msec += (1 + (command_bytes/lag_penalty_bytes) + (mtags_bytes/lag_penalty_bytes)) * lag_penalty;
+
+		/* This code takes into account not only the msecs we just calculated
+		 * but also any leftover msec from previous lagging up.
+		 */
+		client->local->fake_lag += (client->local->fake_lag_msec / 1000);
+		client->local->fake_lag_msec = client->local->fake_lag_msec % 1000;
 	}
+}
+
+/* Add extra fake lag to client, such as after a failed oper attempt.
+ */
+void add_fake_lag(Client *client, long msec)
+{
+	if (!MyConnect(client))
+		return;
+
+	client->local->fake_lag_msec += msec;
+	client->local->fake_lag += (client->local->fake_lag_msec / 1000);
+	client->local->fake_lag_msec = client->local->fake_lag_msec % 1000;
 }
 
 /** Returns 1 if the client is lagged up and data should NOT be parsed.
@@ -596,7 +612,7 @@ static int client_lagged_up(Client *client)
 		return 0;
 	if (ValidatePermissionsForPath("immune:lag",client,NULL,NULL,NULL))
 		return 0;
-	if (client->local->since - TStime() < 10)
+	if (client->local->fake_lag - TStime() < 10)
 		return 0;
 	return 1;
 }
@@ -611,18 +627,19 @@ static int client_lagged_up(Client *client)
  * @note  In general you should NOT send anything back if you receive
  *        a numeric, this to prevent creating loops.
  */
-static int do_numeric(int numeric, Client *client, MessageTag *recv_mtags, int parc, char *parv[])
+static int do_numeric(int numeric, Client *client, MessageTag *recv_mtags, int parc, const char *parv[])
 {
 	Client *acptr;
 	Channel *channel;
 	char *nick, *p;
 	int i;
 	char buffer[BUFSIZE];
+	char targets[BUFSIZE];
 
 	if ((numeric < 0) || (numeric > 999))
 		return -1;
 
-	if (MyConnect(client) && !IsServer(client) && !IsUser(client) && IsHandshake(client) && client->serv && !IsServerSent(client))
+	if (MyConnect(client) && !IsServer(client) && !IsUser(client) && IsHandshake(client) && client->server && !IsServerSent(client))
 	{
 		/* This is an outgoing server connect that is currently not yet IsServer() but in 'unknown' state.
 		 * We need to handle a few responses here.
@@ -631,7 +648,7 @@ static int do_numeric(int numeric, Client *client, MessageTag *recv_mtags, int p
 		/* STARTTLS: unknown command */
 		if ((numeric == 451) && (parc > 2) && strstr(parv[1], "STARTTLS"))
 		{
-			if (client->serv->conf && (client->serv->conf->outgoing.options & CONNECT_INSECURE))
+			if (client->server->conf && (client->server->conf->outgoing.options & CONNECT_INSECURE))
 				start_server_handshake(client);
 			else
 				reject_insecure_server(client);
@@ -641,7 +658,9 @@ static int do_numeric(int numeric, Client *client, MessageTag *recv_mtags, int p
 		/* STARTTLS failed */
 		if (numeric == 691)
 		{
-			sendto_umode(UMODE_OPER, "STARTTLS failed for link %s. Please check the other side of the link.", client->name);
+			unreal_log(ULOG_WARNING, "link", "STARTTLS_FAILED", client,
+			           "Switching from plaintext to TLS via STARTTLS failed for server $client, this is unusual. "
+			           "Please check the other side of the link for errors.");
 			reject_insecure_server(client);
 			return 0;
 		}
@@ -652,7 +671,8 @@ static int do_numeric(int numeric, Client *client, MessageTag *recv_mtags, int p
 			int ret = client_starttls(client);
 			if (ret < 0)
 			{
-				sendto_umode(UMODE_OPER, "STARTTLS handshake failed for link %s. Strange.", client->name);
+				unreal_log(ULOG_WARNING, "link", "STARTTLS_FAILED", client,
+					   "Switching from plaintext to TLS via STARTTLS failed for server $client, this is unusual.");
 				reject_insecure_server(client);
 				return ret;
 			}
@@ -680,7 +700,8 @@ static int do_numeric(int numeric, Client *client, MessageTag *recv_mtags, int p
 	concat_params(buffer, sizeof(buffer), parc, parv);
 
 	/* Now actually process the numeric, IOTW: send it on */
-	for (; (nick = strtoken(&p, parv[1], ",")); parv[1] = NULL)
+	strlcpy(targets, parv[1], sizeof(targets));
+	for (nick = strtoken(&p, targets, ","); nick; nick = strtoken(&p, NULL, ","))
 	{
 		if ((acptr = find_client(nick, NULL)))
 		{
@@ -710,7 +731,7 @@ static int do_numeric(int numeric, Client *client, MessageTag *recv_mtags, int p
 				sendto_prefix_one(acptr, client, recv_mtags, ":%s %d %s",
 				    client->name, numeric, buffer);
 		}
-		else if ((channel = find_channel(nick, NULL)))
+		else if ((channel = find_channel(nick)))
 		{
 			sendto_channel(channel, client, client->direction,
 			               0, 0, SEND_ALL, recv_mtags,
@@ -739,10 +760,6 @@ static void remove_unknown(Client *client, char *sender)
 	if (!IsServer(client))
 		return;
 
-#ifdef DEVELOP
-	sendto_ops("Killing %s (%s)", sender, backupbuf);
-	return;
-#endif
 	/*
 	 * Do kill if it came from a server because it means there is a ghost
 	 * user on the other server which needs to be removed. -avalon

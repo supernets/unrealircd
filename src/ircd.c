@@ -34,7 +34,6 @@ time_t timeofday = 0;
 struct timeval timeofday_tv;
 int  tainted = 0;
 LoopStruct loop;
-MODVAR MemoryInfo StatsZ;
 #ifndef _WIN32
 uid_t irc_uid = 0;
 gid_t irc_gid = 0;
@@ -51,12 +50,8 @@ extern SERVICE_STATUS IRCDStatus;
 
 MODVAR unsigned char conf_debuglevel = 0;
 
-#ifdef USE_LIBCURL
-extern void url_init(void);
-#endif
-
-void server_reboot(char *);
-void restart(char *);
+void server_reboot(const char *);
+void restart(const char *);
 static void open_debugfile(), setup_signals();
 extern void init_glines(void);
 extern void tkl_init(void);
@@ -82,7 +77,7 @@ void s_die()
 	Client *client;
 	if (!IsService)
 	{
-		loop.ircd_terminating = 1;
+		loop.terminating = 1;
 		unload_all_modules();
 
 		list_for_each_entry(client, &lclient_list, lclient_node)
@@ -97,7 +92,7 @@ void s_die()
 		ControlService(hService, SERVICE_CONTROL_STOP, &status);
 	}
 #else
-	loop.ircd_terminating = 1;
+	loop.terminating = 1;
 	unload_all_modules();
 	unlink(conf_files ? conf_files->pid_file : IRCD_PIDFILE);
 	exit(0);
@@ -128,7 +123,7 @@ static void s_reloadcert()
 }
 #endif // #ifndef _WIN32
 
-void restart(char *mesg)
+void restart(const char *mesg)
 {
 	server_reboot(mesg);
 }
@@ -174,12 +169,13 @@ void ignore_this_signal()
 #endif /* #ifndef _WIN32 */
 
 
-void server_reboot(char *mesg)
+void server_reboot(const char *mesg)
 {
 	int i;
 	Client *client;
-	sendto_realops("Aieeeee!!!  Restarting server... %s", mesg);
-	Debug((DEBUG_NOTICE, "Restarting server... %s", mesg));
+	unreal_log(ULOG_INFO, "main", "UNREALIRCD_RESTARTING", NULL,
+	           "Restarting server: $reason",
+	           log_data_string("reason", mesg));
 
 	list_for_each_entry(client, &lclient_list, lclient_node)
 		(void) send_queued(client);
@@ -206,12 +202,6 @@ void server_reboot(char *mesg)
 		CleanUp();
 		WinExec(cmdLine, SW_SHOWDEFAULT);
 	}
-#endif
-#ifndef _WIN32
-	Debug((DEBUG_FATAL, "Couldn't restart server: %s", strerror(errno)));
-#else
-	Debug((DEBUG_FATAL, "Couldn't restart server: %s",
-	    strerror(GetLastError())));
 #endif
 	unload_all_modules();
 #ifdef _WIN32
@@ -254,7 +244,7 @@ EVENT(garbage_collect)
 	int  ii;
 
 	if (loop.do_garbage_collect == 1)
-		sendto_realops("Doing garbage collection ..");
+		unreal_log(ULOG_INFO, "main", "GARBAGE_COLLECT_STARTED", NULL, "Doing garbage collection...");
 	if (freelinks > HOW_MANY_FREELINKS_ALLOWED) {
 		ii = freelinks;
 		while (freelink && (freelinks > HOW_MANY_FREELINKS_ALLOWED)) {
@@ -265,55 +255,12 @@ EVENT(garbage_collect)
 		}
 		if (loop.do_garbage_collect == 1) {
 			loop.do_garbage_collect = 0;
-			sendto_realops
-			    ("Cleaned up %i garbage blocks", (ii - freelinks));
+			unreal_log(ULOG_INFO, "main", "GARBAGE_COLLECT_STARTED", NULL, "Cleaned up $count garbage blocks",
+			           (ii - freelinks));
 		}
 	}
 	if (loop.do_garbage_collect == 1)
 		loop.do_garbage_collect = 0;
-}
-
-/** Perform autoconnect to servers that are not linked yet. */
-EVENT(try_connections)
-{
-	ConfigItem_link *aconf;
-	ConfigItem_deny_link *deny;
-	Client *client;
-	int  confrq;
-	ConfigItem_class *class;
-
-	for (aconf = conf_link; aconf; aconf = aconf->next)
-	{
-		/* We're only interested in autoconnect blocks that are valid. Also, we ignore temporary link blocks. */
-		if (!(aconf->outgoing.options & CONNECT_AUTO) || !aconf->outgoing.hostname || (aconf->flag.temporary == 1))
-			continue;
-
-		class = aconf->class;
-
-		/* Only do one connection attempt per <connfreq> seconds (for the same server) */
-		if ((aconf->hold > TStime()))
-			continue;
-
-		confrq = class->connfreq;
-		aconf->hold = TStime() + confrq;
-
-		client = find_client(aconf->servername, NULL);
-		if (client)
-			continue; /* Server already connected (or connecting) */
-
-		if (class->clients >= class->maxclients)
-			continue; /* Class is full */
-
-		/* Check connect rules to see if we're allowed to try the link */
-		for (deny = conf_deny_link; deny; deny = deny->next)
-			if (match_simple(deny->mask, aconf->servername) && crule_eval(deny->rule))
-				break;
-
-		if (!deny && connect_server(aconf, NULL, NULL) == 0)
-			sendto_ops_and_log("Trying to activate link with server %s[%s]...",
-				aconf->servername, aconf->outgoing.hostname);
-
-	}
 }
 
 /** Does this user match any TKL's? */
@@ -321,8 +268,6 @@ int match_tkls(Client *client)
 {
 	ConfigItem_ban *bconf = NULL;
 	char banbuf[1024];
-
-	char killflag = 0;
 
 	/* Process dynamic *LINES */
 	if (find_tkline_match(client, 0))
@@ -334,35 +279,25 @@ int match_tkls(Client *client)
 	{
 		/* Check ban realname { } */
 		if (!ValidatePermissionsForPath("immune",client,NULL,NULL,NULL) && (bconf = find_ban(NULL, client->info, CONF_BAN_REALNAME)))
-			killflag++;
-	}
+		{
+			unreal_log(ULOG_INFO, "tkl", "BAN_REALNAME", client,
+			           "Banned client $client.details due to realname ban: $reason",
+			           bconf->reason ? bconf->reason : "no reason");
 
-	/* If user is meant to be killed, take action: */
-	if (killflag)
-	{
-		if (IsUser(client))
-			sendto_realops("Ban active for %s (%s)",
-				get_client_name(client, FALSE),
-				bconf->reason ? bconf->reason : "no reason");
-
-		if (IsServer(client))
-			sendto_realops("Ban active for server %s (%s)",
-				get_client_name(client, FALSE),
-				bconf->reason ? bconf->reason : "no reason");
-
-		if (bconf->reason) {
-			if (IsUser(client))
-				snprintf(banbuf, sizeof(banbuf), "User has been banned (%s)", bconf->reason);
-			else
-				snprintf(banbuf, sizeof(banbuf), "Banned (%s)", bconf->reason);
-			exit_client(client, NULL, banbuf);
-		} else {
-			if (IsUser(client))
-				exit_client(client, NULL, "User has been banned");
-			else
-				exit_client(client, NULL, "Banned");
+			if (bconf->reason) {
+				if (IsUser(client))
+					snprintf(banbuf, sizeof(banbuf), "User has been banned (%s)", bconf->reason);
+				else
+					snprintf(banbuf, sizeof(banbuf), "Banned (%s)", bconf->reason);
+				exit_client(client, NULL, banbuf);
+			} else {
+				if (IsUser(client))
+					exit_client(client, NULL, "User has been banned");
+				else
+					exit_client(client, NULL, "Banned");
+			}
+			return 1; /* stop processing, client is dead now */
 		}
-		return 1; /* stop processing this user, as (s)he is dead now. */
 	}
 
 	if (loop.do_bancheck_spamf_user && IsUser(client) && find_spamfilter_user(client, SPAMFLAG_NOWARN))
@@ -385,14 +320,10 @@ EVENT(handshake_timeout)
 
 	list_for_each_entry_safe(client, next, &unknown_list, lclient_node)
 	{
-		if (client->local->firsttime && ((TStime() - client->local->firsttime) > iConf.handshake_timeout))
+		if (client->local->creationtime && ((TStime() - client->local->creationtime) > iConf.handshake_timeout))
 		{
-			if (client->serv && *client->serv->by)
-			{
-				/* If this is a handshake timeout to an outgoing server then notify ops & log it */
-				sendto_ops_and_log("Connection handshake timeout while trying to link to server '%s' (%s)",
-					client->name, client->ip?client->ip:"<unknown ip>");
-			}
+			if (client->server && *client->server->by)
+				continue; /* handled by server module */
 
 			exit_client(client, NULL, "Registration Timeout");
 			continue;
@@ -407,37 +338,31 @@ void check_ping(Client *client)
 	int ping = 0;
 
 	ping = client->local->class ? client->local->class->pingfreq : iConf.handshake_timeout;
-	Debug((DEBUG_DEBUG, "c(%s)=%d p %d a %lld", client->name,
-		client->status, ping,
-		(long long)(TStime() - client->local->lasttime)));
 
 	/* If ping is less than or equal to the last time we received a command from them */
-	if (ping > (TStime() - client->local->lasttime))
+	if (ping > (TStime() - client->local->last_msg_received))
 		return; /* some recent command was executed */
 
 	if (
 		/* If we have sent a ping */
 		(IsPingSent(client)
 		/* And they had 2x ping frequency to respond */
-		&& ((TStime() - client->local->lasttime) >= (2 * ping)))
+		&& ((TStime() - client->local->last_msg_received) >= (2 * ping)))
 		||
 		/* Or isn't registered and time spent is larger than ping (CONNECTTIMEOUT).. */
-		(!IsRegistered(client) && (TStime() - client->local->since >= ping))
+		(!IsRegistered(client) && (TStime() - client->local->fake_lag >= ping))
 		)
 	{
 		if (IsServer(client) || IsConnecting(client) ||
 		    IsHandshake(client) || IsTLSConnectHandshake(client))
 		{
-			sendto_umode_global(UMODE_OPER, "No response from %s, closing link",
-			                    get_client_name(client, FALSE));
-			ircd_log(LOG_ERROR, "No response from %s, closing link",
-			         get_client_name(client, FALSE));
+			unreal_log(ULOG_ERROR, "link", "LINK_DISCONNECTED", client,
+			           "Lost server link to $client [$client.ip]: No response (Ping timeout)",
+			           client->server->conf ? log_data_link_block(client->server->conf) : NULL);
+			SetServerDisconnectLogged(client);
 		}
-		if (IsTLSAcceptHandshake(client))
-			Debug((DEBUG_DEBUG, "ssl accept handshake timeout: %s (%lld-%lld > %lld)", client->local->sockhost,
-				(long long)TStime(), (long long)client->local->since, (long long)ping));
 		ircsnprintf(scratch, sizeof(scratch), "Ping timeout: %lld seconds",
-			(long long) (TStime() - client->local->lasttime));
+			(long long) (TStime() - client->local->last_msg_received));
 		exit_client(client, NULL, scratch);
 		return;
 	}
@@ -447,17 +372,19 @@ void check_ping(Client *client)
 		SetPingSent(client);
 		ClearPingWarning(client);
 		/* not nice but does the job */
-		client->local->lasttime = TStime() - ping;
+		client->local->last_msg_received = TStime() - ping;
 		sendto_one(client, NULL, "PING :%s", me.name);
 	}
 	else if (!IsPingWarning(client) && PINGWARNING > 0 &&
 		(IsServer(client) || IsHandshake(client) || IsConnecting(client) ||
 		IsTLSConnectHandshake(client)) &&
-		(TStime() - client->local->lasttime) >= (ping + PINGWARNING))
+		(TStime() - client->local->last_msg_received) >= (ping + PINGWARNING))
 	{
 		SetPingWarning(client);
-		sendto_realops("Warning, no response from %s for %d seconds",
-			get_client_name(client, FALSE), PINGWARNING);
+		unreal_log(ULOG_WARNING, "link", "LINK_UNRELIABLE", client,
+			   "Warning, no response from $client for $time_delta seconds",
+			   log_data_integer("time_delta", PINGWARNING),
+			   client->server->conf ? log_data_link_block(client->server->conf) : NULL);
 	}
 
 	return;
@@ -496,9 +423,6 @@ EVENT(check_deadsockets)
 		/* No need to notify opers here. It's already done when dead socket is set */
 		if (IsDeadSocket(client))
 		{
-#ifdef DEBUGMODE
-			ircd_log(LOG_ERROR, "Closing deadsock: %d/%s", client->local->fd, client->name);
-#endif
 			ClearDeadSocket(client); /* CPR. So we send the error. */
 			exit_client(client, NULL, client->local->error_str ? client->local->error_str : "Dead socket");
 			continue;
@@ -510,9 +434,6 @@ EVENT(check_deadsockets)
 		/* No need to notify opers here. It's already done when dead socket is set */
 		if (IsDeadSocket(client))
 		{
-#ifdef DEBUGMODE
-			ircd_log(LOG_ERROR, "Closing deadsock: %d/%s", client->local->fd, client->name);
-#endif
 			ClearDeadSocket(client); /* CPR. So we send the error. */
 			exit_client(client, NULL, client->local->error_str ? client->local->error_str : "Dead socket");
 			continue;
@@ -562,21 +483,6 @@ char chess[] = {
 	85, 110, 114, 101, 97, 108, 0
 };
 
-static void version_check_logerror(char *fmt, ...)
-{
-va_list va;
-char buf[1024];
-
-	va_start(va, fmt);
-	vsnprintf(buf, sizeof(buf), fmt, va);
-	va_end(va);
-#ifndef _WIN32
-	fprintf(stderr, "[!!!] %s\n", buf);
-#else
-	win_log("[!!!] %s", buf);
-#endif
-}
-
 extern void applymeblock(void);
 
 extern MODVAR Event *events;
@@ -595,41 +501,20 @@ void fix_timers(void)
 
 	list_for_each_entry(client, &lclient_list, lclient_node)
 	{
-		if (client->local->since > TStime())
-		{
-			Debug((DEBUG_DEBUG, "fix_timers(): %s: client->local->since %ld -> %ld",
-				client->name, client->local->since, TStime()));
-			client->local->since = TStime();
-		}
-		if (client->local->lasttime > TStime())
-		{
-			Debug((DEBUG_DEBUG, "fix_timers(): %s: client->local->lasttime %ld -> %ld",
-				client->name, client->local->lasttime, TStime()));
-			client->local->lasttime = TStime();
-		}
-		if (client->local->last > TStime())
-		{
-			Debug((DEBUG_DEBUG, "fix_timers(): %s: client->local->last %ld -> %ld",
-				client->name, client->local->last, TStime()));
-			client->local->last = TStime();
-		}
+		if (client->local->fake_lag > TStime())
+			client->local->fake_lag = TStime();
+		if (client->local->last_msg_received > TStime())
+			client->local->last_msg_received = TStime();
+		if (client->local->idle_since > TStime())
+			client->local->idle_since = TStime();
 
 		/* users */
 		if (MyUser(client))
 		{
-			if (client->local->nextnick > TStime())
-			{
-				Debug((DEBUG_DEBUG, "fix_timers(): %s: client->local->nextnick %ld -> %ld",
-					client->name, client->local->nextnick, TStime()));
-				client->local->nextnick = TStime();
-			}
+			if (client->local->next_nick_allowed > TStime())
+				client->local->next_nick_allowed = TStime();
 			if (client->local->nexttarget > TStime())
-			{
-				Debug((DEBUG_DEBUG, "fix_timers(): %s: client->local->nexttarget %ld -> %ld",
-					client->name, client->local->nexttarget, TStime()));
 				client->local->nexttarget = TStime();
-			}
-
 		}
 	}
 
@@ -658,7 +543,6 @@ void fix_timers(void)
 				thr->since = TStime();
 		}
 	}
-	Debug((DEBUG_DEBUG, "fix_timers(): removed %d throttling item(s)", cnt));
 
 	/* Make sure autoconnect for servers still works (lnk->hold) */
 	for (lnk = conf_link; lnk; lnk = lnk->next)
@@ -668,37 +552,34 @@ void fix_timers(void)
 		if (lnk->hold > TStime() + t)
 		{
 			lnk->hold = TStime() + (t / 2); /* compromise */
-			Debug((DEBUG_DEBUG, "fix_timers(): link '%s' hold-time adjusted to %ld", lnk->servername, lnk->hold));
 		}
 	}
 }
 
 
 #ifndef _WIN32
+/* Generate 3 cloak keys and print to console */
 static void generate_cloakkeys()
 {
-	/* Generate 3 cloak keys */
-#define GENERATE_CLOAKKEY_MINLEN 50
-#define GENERATE_CLOAKKEY_MAXLEN 60 /* Length of cloak keys to generate. */
-	char keyBuf[GENERATE_CLOAKKEY_MAXLEN + 1];
+	#define GENERATE_CLOAKKEY_LEN 80 /* Length of cloak keys to generate. */
+	char keyBuf[GENERATE_CLOAKKEY_LEN + 1];
 	int keyNum;
-	int keyLen;
 	int charIndex;
 
 	short has_upper;
 	short has_lower;
 	short has_num;
 
-	fprintf(stderr, "Here are 3 random cloak keys:\n");
+	fprintf(stderr, "Here are 3 random cloak keys that you can copy-paste to your configuration file:\n\n");
 
+	fprintf(stderr, "set {\n\tcloak-keys {\n");
 	for (keyNum = 0; keyNum < 3; ++keyNum)
 	{
 		has_upper = 0;
 		has_lower = 0;
 		has_num = 0;
 
-		keyLen = (getrandom8() % (GENERATE_CLOAKKEY_MAXLEN - GENERATE_CLOAKKEY_MINLEN + 1)) + GENERATE_CLOAKKEY_MINLEN;
-		for (charIndex = 0; charIndex < keyLen; ++charIndex)
+		for (charIndex = 0; charIndex < sizeof(keyBuf)-1; ++charIndex)
 		{
 			switch (getrandom8() % 3)
 			{
@@ -716,14 +597,15 @@ static void generate_cloakkeys()
 					break;
 			}
 		}
-		keyBuf[keyLen] = '\0';
+		keyBuf[sizeof(keyBuf)-1] = '\0';
 
 		if (has_upper && has_lower && has_num)
-			(void)fprintf(stderr, "%s\n", keyBuf);
+			fprintf(stderr, "\t\t\"%s\";\n", keyBuf);
 		else
 			/* Try again. For this reason, keyNum must be signed. */
 			keyNum--;
 	}
+	fprintf(stderr, "\t}\n}\n\n");
 }
 #endif
 
@@ -743,38 +625,35 @@ void detect_timeshift_and_warn(void)
 	if (oldtimeofday == 0)
 		oldtimeofday = timeofday; /* pretend everything is ok the first time.. */
 
-	if (mytdiff(timeofday, oldtimeofday) < NEGATIVE_SHIFT_WARN) {
+	if (mytdiff(timeofday, oldtimeofday) < NEGATIVE_SHIFT_WARN)
+	{
 		/* tdiff = # of seconds of time set backwards (positive number! eg: 60) */
 		time_t tdiff = oldtimeofday - timeofday;
-		ircd_log(LOG_ERROR, "WARNING: Time running backwards! Clock set back ~%lld seconds (%lld -> %lld)",
-			(long long)tdiff, (long long)oldtimeofday, (long long)timeofday);
-		ircd_log(LOG_ERROR, "[TimeShift] Resetting a few timers to prevent IRCd freeze!");
-		sendto_realops("WARNING: Time running backwards! Clock set back ~%lld seconds (%lld -> %lld)",
-			(long long)tdiff, (long long)oldtimeofday, (long long)timeofday);
-		sendto_realops("Incorrect time for IRC servers is a serious problem. "
-			       "Time being set backwards (system clock changed) is "
-			       "even more serious and can cause clients to freeze, channels to be "
-			       "taken over, and other issues.");
-		sendto_realops("Please be sure your clock is always synchronized before "
-			       "the IRCd is started!");
-		sendto_realops("[TimeShift] Resetting a few timers to prevent IRCd freeze!");
+		unreal_log(ULOG_WARNING, "system", "SYSTEM_CLOCK_JUMP_BACKWARDS", NULL,
+		           "System clock jumped back in time ~$time_delta seconds ($time_from -> $time_to)\n"
+		           "Incorrect time for IRC servers is a serious problem. "
+		           "Time being set backwards (system clock changed) is "
+		           "even more serious and can cause clients to freeze, channels to be "
+		           "taken over, and other issues.\n"
+		           "Please be sure your clock is always synchronized before the IRCd is started!",
+		           log_data_integer("time_delta", tdiff),
+		           log_data_timestamp("time_from", oldtimeofday),
+		           log_data_timestamp("time_to", timeofday));
 		fix_timers();
 	} else
 	if (mytdiff(timeofday, oldtimeofday) > POSITIVE_SHIFT_WARN) /* do not set too low or you get false positives */
 	{
 		/* tdiff = # of seconds of time set forward (eg: 60) */
 		time_t tdiff = timeofday - oldtimeofday;
-		ircd_log(LOG_ERROR, "WARNING: Time jumped ~%lld seconds ahead! (%lld -> %lld)",
-			(long long)tdiff, (long long)oldtimeofday, (long long)timeofday);
-		ircd_log(LOG_ERROR, "[TimeShift] Resetting some timers!");
-		sendto_realops("WARNING: Time jumped ~%lld seconds ahead! (%lld -> %lld)",
-			(long long)tdiff, (long long)oldtimeofday, (long long)timeofday);
-		sendto_realops("Incorrect time for IRC servers is a serious problem. "
-			       "Time being adjusted (by changing the system clock) "
-			       "more than a few seconds forward/backward can lead to serious issues.");
-		sendto_realops("Please be sure your clock is always synchronized before "
-			       "the IRCd is started!");
-		sendto_realops("[TimeShift] Resetting some timers!");
+		unreal_log(ULOG_WARNING, "system", "SYSTEM_CLOCK_JUMP_FORWARDS", NULL,
+		           "System clock jumped ~$time_delta seconds forward ($time_from -> $time_to)\n"
+		           "Incorrect time for IRC servers is a serious problem. "
+		           "Time being adjusted (by changing the system clock) "
+		           "more than a few seconds forward/backward can lead to serious issues.\n"
+		           "Please be sure your clock is always synchronized before the IRCd is started!",
+		           log_data_integer("time_delta", tdiff),
+		           log_data_timestamp("time_from", oldtimeofday),
+		           log_data_timestamp("time_to", timeofday));
 		fix_timers();
 	}
 
@@ -784,13 +663,11 @@ void detect_timeshift_and_warn(void)
 			lasthighwarn = timeofday;
 		if (timeofday - lasthighwarn > 300)
 		{
-			ircd_log(LOG_ERROR, "[TimeShift] The (IRCd) clock was set backwards. "
-				"Waiting for time to be OK again. This will be in %lld seconds",
-				(long long)(highesttimeofday - timeofday));
-			sendto_realops("[TimeShift] The (IRCd) clock was set backwards. Timers, nick- "
-				       "and channel-timestamps are possibly incorrect. This message will "
-				       "repeat itself until we catch up with the original time, which will be "
-				       "in %lld seconds", (long long)(highesttimeofday - timeofday));
+			unreal_log(ULOG_WARNING, "system", "SYSTEM_CLOCK_JUMP_BACKWARDS_PREVIOUSLY", NULL,
+				   "The system clock previously went backwards. Waiting for time to be OK again. This will be in $time_delta seconds.",
+				   log_data_integer("time_delta", highesttimeofday - timeofday),
+				   log_data_timestamp("time_from", highesttimeofday),
+				   log_data_timestamp("time_to", timeofday));
 			lasthighwarn = timeofday;
 		}
 	} else {
@@ -909,7 +786,6 @@ int InitUnrealIRCd(int argc, char *argv[])
 #else
 	WSAStartup(wVersionRequested, &wsaData);
 #endif
-	memset(&StatsZ, 0, sizeof(StatsZ));
 	setup_signals();
 
 	memset(&irccounts, '\0', sizeof(irccounts));
@@ -918,10 +794,10 @@ int InitUnrealIRCd(int argc, char *argv[])
 	mp_pool_init();
 	dbuf_init();
 	initlists();
+	initlist_channels();
 
-#ifdef USE_LIBCURL
+	early_init_tls();
 	url_init();
-#endif
 	tkl_init();
 	umode_init();
 	extcmode_init();
@@ -967,7 +843,7 @@ int InitUnrealIRCd(int argc, char *argv[])
 #ifndef _WIN32
 		  case 'P':{
 			  short type;
-			  char *result;
+			  const char *result;
 			  srandom(TStime());
 			  type = Auth_FindType(NULL, p);
 			  if (type == -1)
@@ -1001,11 +877,10 @@ int InitUnrealIRCd(int argc, char *argv[])
 			  exit(0);
 		  }
 #endif
-#if 1
+#if 0
 		case 'S':
-			//charsys_dump_table(p ? p : "*");
-			unrealdb_test();
-			exit(0);
+			charsys_dump_table(p ? p : "*");
+			//unrealdb_test();
 #endif
 #ifndef _WIN32
 		  case 't':
@@ -1065,14 +940,6 @@ int InitUnrealIRCd(int argc, char *argv[])
 			  	fprintf(stderr, "It is impossible to get here\n");
 			  	exit(0);
 			  }
-		  case 'U':
-		      if (chdir(CONFDIR) < 0)
-	{
-		      	fprintf(stderr, "Unable to change to '%s' directory\n", CONFDIR);
-		      	exit(1);
-		      }
-		      update_conf();
-		      exit(0);
 		  case 'R':
 		      report_crash();
 		      exit(0);
@@ -1142,7 +1009,8 @@ int InitUnrealIRCd(int argc, char *argv[])
 #ifndef _WIN32
 	fprintf(stderr, "%s", unreallogo);
 	fprintf(stderr, "                           v%s\n\n", VERSIONONLY);
-	fprintf(stderr, "UnrealIRCd is brought to you by Bram Matthys (Syzop), Gottem and i\n\n");
+	fprintf(stderr, "UnrealIRCd is brought to you by Bram Matthys (Syzop),\n"
+	                "Krzysztof Beresztant (k4be), Gottem and i\n\n");
 
 	fprintf(stderr, "Using the following libraries:\n");
 	fprintf(stderr, "* %s\n", SSLeay_version(SSLEAY_VERSION));
@@ -1170,7 +1038,7 @@ int InitUnrealIRCd(int argc, char *argv[])
 	(void)chmod(CPATH, DEFAULT_PERMISSIONS);
 #endif
 	init_dynconf();
-	early_init_ssl();
+	init_sys();
 	/*
 	 * Add default class
 	 */
@@ -1181,10 +1049,17 @@ int InitUnrealIRCd(int argc, char *argv[])
 	default_class->sendq = DEFAULT_RECVQ;
 	default_class->name = "default";
 	AddListItem(default_class, conf_class);
-	if (init_conf(configfile, 0) < 0)
-	{
+	if (config_read_start() < 0)
 		exit(-1);
+	while (!is_config_read_finished())
+	{
+		gettimeofday(&timeofday_tv, NULL);
+		timeofday = timeofday_tv.tv_sec;
+		url_socket_timeout(NULL);
+		fd_select(500);
 	}
+	if (config_test() < 0)
+		exit(-1);
 	booted = TRUE;
 	load_tunefile();
 	make_umodestr();
@@ -1192,7 +1067,6 @@ int InitUnrealIRCd(int argc, char *argv[])
 	me.local->fd = -1;
 	SetMe(&me);
 	make_server(&me);
-	extcmodes_check_for_changes();
 	umodes_check_for_changes();
 	charsys_check_for_changes();
 	clicap_init();
@@ -1202,37 +1076,30 @@ int InitUnrealIRCd(int argc, char *argv[])
 		exit(-4);
 	}
 
-#ifndef _WIN32
-	fprintf(stderr, "Initializing TLS..\n");
-#endif
-	if (!init_ssl())
+	if (!init_tls())
 	{
-		config_error("Failed to load SSL/TLS (see errors above). UnrealIRCd can not start.");
+		config_error("Failed to load TLS (see errors above). UnrealIRCd can not start.");
 #ifdef _WIN32
 		win_error(); /* display error dialog box */
 #endif
 		exit(9);
 	}
+	unreal_log(ULOG_INFO, "config", "CONFIG_PASSED", NULL, "Configuration test passed OK");
 	if (loop.config_test)
 	{
-		ircd_log(LOG_ERROR, "Configuration test passed OK");
 		fflush(stderr);
 		exit(0);
 	}
 	if (loop.boot_function)
 		loop.boot_function();
-#ifndef _WIN32
-	fprintf(stderr, "Dynamic configuration initialized.. booting IRCd.\n");
-#endif
 	open_debugfile();
 	me.local->port = 6667; /* pointless? */
-	init_sys();
 	applymeblock();
 #ifdef HAVE_SYSLOG
 	openlog("ircd", LOG_PID | LOG_NDELAY, LOG_DAEMON);
 #endif
-	run_configuration();
-	ircd_log(LOG_ERROR, "UnrealIRCd started.");
+	config_run();
+	unreal_log(ULOG_INFO, "main", "UNREALIRCD_START", NULL, "UnrealIRCd started.");
 
 	read_motd(conf_files->botmotd_file, &botmotd);
 	read_motd(conf_files->rules_file, &rules);
@@ -1250,11 +1117,10 @@ int InitUnrealIRCd(int argc, char *argv[])
 	 * This listener will never go away
 	 */
 	me_hash = find_or_add(me.name);
-	me.serv->up = me_hash;
 	timeofday = time(NULL);
-	me.local->lasttime = me.local->since = me.local->firsttime = me.serv->boottime = TStime();
-	me.serv->features.protocol = UnrealProtocol;
-	safe_strdup(me.serv->features.software, version);
+	me.local->last_msg_received = me.local->fake_lag = me.local->creationtime = me.server->boottime = TStime();
+	me.server->features.protocol = UnrealProtocol;
+	safe_strdup(me.server->features.software, version);
 	add_to_client_hash_table(me.name, &me);
 	add_to_id_hash_table(me.id, &me);
 	list_add(&me.client_node, &global_server_list);
@@ -1277,18 +1143,16 @@ int InitUnrealIRCd(int argc, char *argv[])
 		/* Background process (child) continues below... */
 		close_std_descriptors();
 		fd_fork();
-		loop.ircd_forked = 1;
+		loop.forked = 1;
 	}
 #endif
 #ifdef _WIN32
-	loop.ircd_forked = 1;
+	loop.forked = 1;
 #endif
 
 	fix_timers();
 	write_pidfile();
-	Debug((DEBUG_NOTICE, "Server ready..."));
-	init_throttling();
-	loop.ircd_booted = 1;
+	loop.booted = 1;
 #if defined(HAVE_SETPROCTITLE)
 	setproctitle("%s", me.name);
 #elif defined(HAVE_PSTAT)
@@ -1346,7 +1210,7 @@ void SocketLoop(void *dummy)
 		 */
 		if (dorehash)
 		{
-			(void)rehash(&me, 1);
+			request_rehash(NULL);
 			dorehash = 0;
 		}
 		if (dorestart)
@@ -1355,7 +1219,8 @@ void SocketLoop(void *dummy)
 		}
 		if (doreloadcert)
 		{
-			reinit_ssl(NULL);
+			unreal_log(ULOG_INFO, "config", "CONFIG_RELOAD_TLS", NULL, "Reloading all TLS related data (./unrealircd reloadtls)");
+			reinit_tls();
 			doreloadcert = 0;
 		}
 	}
@@ -1408,9 +1273,6 @@ static void open_debugfile(void)
 		else
 # endif
 			strlcpy(client->name, "FD2-Pipe", sizeof(client->name));
-		Debug((DEBUG_FATAL,
-		    "Debug: File <%s> Level: %d at %s", client->name,
-		    client->local->port, myctime(time(NULL))));
 	}
 #endif
 }

@@ -29,14 +29,14 @@ ModuleHeader MOD_HEADER
 	"5.0",
 	"Link Security CAP",
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
 	};
 
 /* Forward declarations */
-char *link_security_md_serialize(ModData *m);
-void link_security_md_unserialize(char *str, ModData *m);
+const char *link_security_md_serialize(ModData *m);
+void link_security_md_unserialize(const char *str, ModData *m);
 EVENT(checklinksec);
-char *link_security_capability_parameter(Client *client);
+const char *link_security_capability_parameter(Client *client);
 CMD_FUNC(cmd_linksecurity);
 
 /* Global variables */
@@ -59,6 +59,7 @@ MOD_INIT()
 	mreq.serialize = link_security_md_serialize;
 	mreq.unserialize = link_security_md_unserialize;
 	mreq.sync = 1;
+	mreq.self_write = 1;
 	link_security_md = ModDataAdd(modinfo->handle, mreq);
 	if (!link_security_md)
 	{
@@ -97,7 +98,7 @@ MOD_UNLOAD()
  */
 #define LNKSECMAGIC 100
 
-char *link_security_md_serialize(ModData *m)
+const char *link_security_md_serialize(ModData *m)
 {
 	static char buf[32];
 	if (m->i == 0)
@@ -106,7 +107,7 @@ char *link_security_md_serialize(ModData *m)
 	return buf;
 }
 
-void link_security_md_unserialize(char *str, ModData *m)
+void link_security_md_unserialize(const char *str, ModData *m)
 {
 	m->i = atoi(str) + LNKSECMAGIC;
 }
@@ -118,9 +119,9 @@ int certificate_verification_active(Client *client)
 {
 	ConfigItem_link *conf;
 	
-	if (!client->serv || !client->serv->conf)
+	if (!client->server || !client->server->conf)
 		return 0; /* wtf? */
-	conf = client->serv->conf;
+	conf = client->server->conf;
 	
 	if (conf->verify_certificate)
 		return 1; /* yes, verify-certificate is 'yes' */
@@ -140,7 +141,7 @@ int certificate_verification_active(Client *client)
 
 /** Calculate our (local) link-security level.
  * This means stepping through the list of directly linked
- * servers and determining if they are linked via SSL and
+ * servers and determining if they are linked via TLS and
  * certificate verification is active.
  * @returns value from 0 to 2.
  */
@@ -154,7 +155,7 @@ int our_link_security(void)
 		if (IsLocalhost(client))
 			continue; /* server connected via localhost */
 		if (!IsSecure(client))
-			return 0; /* Any non-SSL server (which is not localhost) results in level 0. */
+			return 0; /* Any non-TLS server (which is not localhost) results in level 0. */
 		if (!certificate_verification_active(client))
 			level = 1; /* downgrade to level 1 */
 	}
@@ -177,7 +178,6 @@ EVENT(checklinksec)
 	int last_local_link_security = local_link_security;
 	int last_global_link_security = global_link_security;
 	Client *client;
-	char *s;
 	int v;
 	int warning_sent = 0;
 	
@@ -193,7 +193,7 @@ EVENT(checklinksec)
 	global_link_security = 2;
 	list_for_each_entry(client, &global_server_list, client_node)
 	{
-		s = moddata_client_get(client, "link-security");
+		const char *s = moddata_client_get(client, "link-security");
 		if (s)
 		{
 			v = atoi(s);
@@ -209,15 +209,19 @@ EVENT(checklinksec)
 	
 	if (local_link_security < last_local_link_security)
 	{
-		sendto_realops("Local link-security downgraded from level %d to %d due to just linked in server(s)",
-			last_local_link_security, local_link_security);
+		unreal_log(ULOG_INFO, "link-security", "LOCAL_LINK_SECURITY_DOWNGRADED", NULL,
+		           "Local link-security downgraded from level $previous_level to $new_level due to just linked in server(s)",
+		           log_data_integer("previous_level", last_local_link_security),
+		           log_data_integer("new_level", local_link_security));
 		warning_sent = 1;
 	}
 	
 	if (global_link_security < last_global_link_security)
 	{
-		sendto_realops("Global link-security downgraded from level %d to %d due to just linked in server(s)",
-			last_global_link_security, global_link_security);
+		unreal_log(ULOG_INFO, "link-security", "GLOBAL_LINK_SECURITY_DOWNGRADED", NULL,
+		           "Global link-security downgraded from level $previous_level to $new_level due to just linked in server(s)",
+		           log_data_integer("previous_level", last_global_link_security),
+		           log_data_integer("new_level", global_link_security));
 		warning_sent = 1;
 	}
 	
@@ -225,12 +229,14 @@ EVENT(checklinksec)
 
 	if (warning_sent)
 	{
-		sendto_realops("Effective (network-wide) link-security is: level %d", effective_link_security);
-		sendto_realops("More information about this can be found at https://www.unrealircd.org/docs/Link_security");
+		unreal_log(ULOG_INFO, "link-security", "EFFECTIVE_LINK_SECURITY_REPORT", NULL,
+		           "Effective (network-wide) link-security is now: level $effective_link_security\n"
+		           "More information about this can be found at https://www.unrealircd.org/docs/Link_security",
+		           log_data_integer("effective_link_security", effective_link_security));
 	}
 }
 
-char *link_security_capability_parameter(Client *client)
+const char *link_security_capability_parameter(Client *client)
 {
 	return valtostr(effective_link_security);
 }
@@ -239,8 +245,6 @@ char *link_security_capability_parameter(Client *client)
 CMD_FUNC(cmd_linksecurity)
 {
 	Client *acptr;
-	char *s;
-	int v;
 	
 	if (!IsOper(client))
 	{
@@ -253,15 +257,11 @@ CMD_FUNC(cmd_linksecurity)
 	sendtxtnumeric(client, "= By server =");
 	list_for_each_entry(acptr, &global_server_list, client_node)
 	{
-		v = -1;
-		s = moddata_client_get(acptr, "link-security");
+		const char *s = moddata_client_get(acptr, "link-security");
 		if (s)
-		{
-			v = atoi(s);
-			sendtxtnumeric(client, "%s: level %d", acptr->name, v);
-		} else {
+			sendtxtnumeric(client, "%s: level %d", acptr->name, atoi(s));
+		else
 			sendtxtnumeric(client, "%s: level UNKNOWN", acptr->name);
-		}
 	}
 	
 	sendtxtnumeric(client, "-");
@@ -271,9 +271,9 @@ CMD_FUNC(cmd_linksecurity)
 	sendtxtnumeric(client, "= Legend =");
 	sendtxtnumeric(client, "Higher level means better link security");
 	sendtxtnumeric(client, "Level UNKNOWN: Not an UnrealIRCd server (eg: services) or an old version (<4.0.14)");
-	sendtxtnumeric(client, "Level 0: One or more servers linked insecurely (not using SSL/TLS)");
-	sendtxtnumeric(client, "Level 1: Servers are linked with SSL/TLS but at least one of them is not verifying certificates");
-	sendtxtnumeric(client, "Level 2: Servers linked with SSL/TLS and certificates are properly verified");
+	sendtxtnumeric(client, "Level 0: One or more servers linked insecurely (not using TLS)");
+	sendtxtnumeric(client, "Level 1: Servers are linked with TLS but at least one of them is not verifying certificates");
+	sendtxtnumeric(client, "Level 2: Servers linked with TLS and certificates are properly verified");
 	sendtxtnumeric(client, "-");
 	sendtxtnumeric(client, "= More information =");
 	sendtxtnumeric(client, "To understand more about link security and how to improve your level");

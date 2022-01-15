@@ -24,22 +24,25 @@ ModuleHeader MOD_HEADER
 	"4.2",
 	"ExtBan ~O - Ban/exempt operclass",
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
 };
 
 /* Forward declarations */
-char *extban_operclass_conv_param(char *para);
-int extban_operclass_is_banned(Client *client, Channel *channel, char *banin, int type, char **msg, char **errmsg);
+const char *extban_operclass_conv_param(BanContext *b, Extban *extban);
+int extban_operclass_is_banned(BanContext *b);
 
 /** Called upon module init */
 MOD_INIT()
 {
 	ExtbanInfo req;
 	
-	req.flag = 'O';
+	memset(&req, 0, sizeof(req));
+	req.letter = 'O';
+	req.name = "operclass";
 	req.is_ok = NULL;
 	req.conv_param = extban_operclass_conv_param;
 	req.is_banned = extban_operclass_is_banned;
+	req.is_banned_events = BANCHK_ALL;
 	req.options = EXTBOPT_INVEX;
 	if (!ExtbanAdd(modinfo->handle, req))
 	{
@@ -67,15 +70,15 @@ MOD_UNLOAD()
 
 #define OPERCLASSLEN 64
 
-char *extban_operclass_conv_param(char *para)
+const char *extban_operclass_conv_param(BanContext *b, Extban *extban)
 {
 	static char retbuf[OPERCLASSLEN + 4];
 	char *p;
 
-	strlcpy(retbuf, para, sizeof(retbuf));
+	strlcpy(retbuf, b->banstr, sizeof(retbuf));
 
 	/* allow alpha, numeric, -, _, * and ? wildcards */
-	for (p = retbuf+3; *p; p++)
+	for (p = retbuf; *p; p++)
 		if (!strchr("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ-_?*", *p))
 			*p = '\0';
 
@@ -85,18 +88,12 @@ char *extban_operclass_conv_param(char *para)
 	return retbuf;
 }
 
-int extban_operclass_is_banned(Client *client, Channel *channel, char *banin, int type, char **msg, char **errmsg)
+int extban_operclass_is_banned(BanContext *b)
 {
-	char *ban = banin+3;
-
-	if (MyUser(client) && IsOper(client))
+	if (MyUser(b->client) && IsOper(b->client))
 	{
-		char *operclass = NULL;
-		ConfigItem_oper *oper = find_oper(client->user->operlogin);
-		if (oper && oper->operclass)
-			operclass = oper->operclass;
-		
-		if (operclass && match_simple(ban, operclass))
+		const char *operclass = get_operclass(b->client);
+		if (operclass && match_simple(b->banstr, operclass))
 			return 1;
 	}
 

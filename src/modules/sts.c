@@ -28,7 +28,7 @@ ModuleHeader MOD_HEADER
 	"5.0",
 	"Strict Transport Security CAP", 
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
 	};
 
 MOD_INIT()
@@ -66,7 +66,7 @@ int sts_capability_visible(Client *client)
 	if (!IsSecure(client))
 	{
 		if (iConf.tls_options && iConf.tls_options->sts_port)
-			return 1; /* YES, non-SSL user and set::tls::sts-policy configured */
+			return 1; /* YES, non-TLS user and set::tls::sts-policy configured */
 		return 0; /* NO, there is no sts-policy */
 	}
 
@@ -78,7 +78,7 @@ int sts_capability_visible(Client *client)
 	return 0;
 }
 
-char *sts_capability_parameter(Client *client)
+const char *sts_capability_parameter(Client *client)
 {
 	TLSOptions *ssl;
 	static char buf[256];

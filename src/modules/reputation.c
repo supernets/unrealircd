@@ -64,7 +64,7 @@ ModuleHeader MOD_HEADER
 	REPUTATION_VERSION,
 	"Known IP's scoring system",
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
     };
 
 /* Defines */
@@ -81,9 +81,10 @@ ModuleHeader MOD_HEADER
 
 #define WARN_WRITE_ERROR(fname) \
 	do { \
-		sendto_realops_and_log("[reputation] Error writing to temporary database file " \
-		                       "'%s': %s (DATABASE NOT SAVED)", \
-		                       fname, unrealdb_get_error_string()); \
+		unreal_log(ULOG_ERROR, "reputation", "REPUTATION_FILE_WRITE_ERROR", NULL, \
+			   "[reputation] Error writing to temporary database file $filename: $system_error", \
+			   log_data_string("filename", fname), \
+			   log_data_string("system_error", unrealdb_get_error_string())); \
 	} while(0)
 
 #define W_SAFE(x) \
@@ -131,21 +132,21 @@ ModDataInfo *reputation_md; /* Module Data structure which we acquire */
 
 /* Forward declarations */
 void reputation_md_free(ModData *m);
-char *reputation_md_serialize(ModData *m);
-void reputation_md_unserialize(char *str, ModData *m);
+const char *reputation_md_serialize(ModData *m);
+void reputation_md_unserialize(const char *str, ModData *m);
 void reputation_config_setdefaults(struct cfgstruct *cfg);
 void reputation_free_config(struct cfgstruct *cfg);
 CMD_FUNC(reputation_cmd);
 CMD_FUNC(reputationunperm);
-int reputation_whois(Client *client, Client *target);
+int reputation_whois(Client *client, Client *target, NameValuePrioList **list);
 int reputation_set_on_connect(Client *client);
 int reputation_pre_lconnect(Client *client);
 int reputation_connect_extinfo(Client *client, NameValuePrioList **list);
 int reputation_config_test(ConfigFile *cf, ConfigEntry *ce, int type, int *errs);
 int reputation_config_run(ConfigFile *cf, ConfigEntry *ce, int type);
 int reputation_config_posttest(int *errs);
-static uint64_t hash_reputation_entry(char *ip);
-ReputationEntry *find_reputation_entry(char *ip);
+static uint64_t hash_reputation_entry(const char *ip);
+ReputationEntry *find_reputation_entry(const char *ip);
 void add_reputation_entry(ReputationEntry *e);
 EVENT(delete_old_records);
 EVENT(add_scores);
@@ -162,7 +163,7 @@ MOD_TEST()
 	reputation_config_setdefaults(&test);
 	HookAdd(modinfo->handle, HOOKTYPE_CONFIGTEST, 0, reputation_config_test);
 	HookAdd(modinfo->handle, HOOKTYPE_CONFIGPOSTTEST, 0, reputation_config_posttest);
-	CallbackAddEx(modinfo->handle, CALLBACKTYPE_REPUTATION_STARTTIME, reputation_starttime_callback);
+	CallbackAdd(modinfo->handle, CALLBACKTYPE_REPUTATION_STARTTIME, reputation_starttime_callback);
 	return MOD_SUCCESS;
 }
 
@@ -239,7 +240,7 @@ MOD_LOAD()
 
 MOD_UNLOAD()
 {
-	if (loop.ircd_terminating)
+	if (loop.terminating)
 		reputation_save_db();
 	reputation_free_config(&test);
 	reputation_free_config(&cfg);
@@ -283,37 +284,37 @@ int reputation_config_test(ConfigFile *cf, ConfigEntry *ce, int type, int *errs)
 		return 0;
 
 	/* We are only interrested in set::reputation.. */
-	if (!ce || strcmp(ce->ce_varname, "reputation"))
+	if (!ce || strcmp(ce->name, "reputation"))
 		return 0;
 
-	for (cep = ce->ce_entries; cep; cep = cep->ce_next)
+	for (cep = ce->items; cep; cep = cep->next)
 	{
-		if (!cep->ce_vardata)
+		if (!cep->value)
 		{
 			config_error("%s:%i: blank set::reputation::%s without value",
-				cep->ce_fileptr->cf_filename, cep->ce_varlinenum, cep->ce_varname);
+				cep->file->filename, cep->line_number, cep->name);
 			errors++;
 			continue;
 		} else
-		if (!strcmp(cep->ce_varname, "database"))
+		if (!strcmp(cep->name, "database"))
 		{
-			convert_to_absolute_path(&cep->ce_vardata, PERMDATADIR);
-			safe_strdup(test.database, cep->ce_vardata);
+			convert_to_absolute_path(&cep->value, PERMDATADIR);
+			safe_strdup(test.database, cep->value);
 		} else
-		if (!strcmp(cep->ce_varname, "db-secret"))
+		if (!strcmp(cep->name, "db-secret"))
 		{
-			char *err;
-			if ((err = unrealdb_test_secret(cep->ce_vardata)))
+			const char *err;
+			if ((err = unrealdb_test_secret(cep->value)))
 			{
-				config_error("%s:%i: set::channeldb::db-secret: %s", cep->ce_fileptr->cf_filename, cep->ce_varlinenum, err);
+				config_error("%s:%i: set::channeldb::db-secret: %s", cep->file->filename, cep->line_number, err);
 				errors++;
 				continue;
 			}
-			safe_strdup(test.db_secret, cep->ce_vardata);
+			safe_strdup(test.db_secret, cep->value);
 		} else
 		{
 			config_error("%s:%i: unknown directive set::reputation::%s",
-				cep->ce_fileptr->cf_filename, cep->ce_varlinenum, cep->ce_varname);
+				cep->file->filename, cep->line_number, cep->name);
 			errors++;
 			continue;
 		}
@@ -331,18 +332,18 @@ int reputation_config_run(ConfigFile *cf, ConfigEntry *ce, int type)
 		return 0;
 
 	/* We are only interrested in set::reputation.. */
-	if (!ce || strcmp(ce->ce_varname, "reputation"))
+	if (!ce || strcmp(ce->name, "reputation"))
 		return 0;
 
-	for (cep = ce->ce_entries; cep; cep = cep->ce_next)
+	for (cep = ce->items; cep; cep = cep->next)
 	{
-		if (!strcmp(cep->ce_varname, "database"))
+		if (!strcmp(cep->name, "database"))
 		{
-			safe_strdup(cfg.database, cep->ce_vardata);
+			safe_strdup(cfg.database, cep->value);
 		} else
-		if (!strcmp(cep->ce_varname, "db-secret"))
+		if (!strcmp(cep->name, "db-secret"))
 		{
-			safe_strdup(cfg.db_secret, cep->ce_vardata);
+			safe_strdup(cfg.db_secret, cep->value);
 		}
 	}
 	return 1;
@@ -465,8 +466,9 @@ void reputation_load_db_old(void)
 
 #ifdef BENCHMARK
 	gettimeofday(&tv_beta, NULL);
-	ircd_log(LOG_ERROR, "Reputation benchmark: LOAD DB: %lld microseconds",
-		(long long)(((tv_beta.tv_sec - tv_alpha.tv_sec) * 1000000) + (tv_beta.tv_usec - tv_alpha.tv_usec)));
+	unreal_log(ULOG_DEBUG, "reputation", "REPUTATION_BENCHMARK", NULL,
+	           "[reputation] Benchmark: LOAD DB: $time_msec microseconds",
+	           log_data_integer("time_msec", ((tv_beta.tv_sec - tv_alpha.tv_sec) * 1000000) + (tv_beta.tv_usec - tv_alpha.tv_usec)));
 #endif
 }
 
@@ -529,8 +531,9 @@ int reputation_load_db_new(UnrealDB *db)
 	unrealdb_close(db);
 #ifdef BENCHMARK
 	gettimeofday(&tv_beta, NULL);
-	ircd_log(LOG_ERROR, "Reputation benchmark: LOAD DB: %lld microseconds",
-		(long long)(((tv_beta.tv_sec - tv_alpha.tv_sec) * 1000000) + (tv_beta.tv_usec - tv_alpha.tv_usec)));
+	unreal_log(ULOG_DEBUG, "reputation", "REPUTATION_BENCHMARK", NULL,
+	           "Reputation benchmark: LOAD DB: $time_msec microseconds",
+	           log_data_integer("time_msec", ((tv_beta.tv_sec - tv_alpha.tv_sec) * 1000000) + (tv_beta.tv_usec - tv_alpha.tv_usec)));
 #endif
 	return 1;
 }
@@ -656,8 +659,9 @@ write_fail:
 
 #ifdef BENCHMARK
 	gettimeofday(&tv_beta, NULL);
-	ircd_log(LOG_ERROR, "Reputation benchmark: SAVE DB: %lld microseconds",
-		(long long)(((tv_beta.tv_sec - tv_alpha.tv_sec) * 1000000) + (tv_beta.tv_usec - tv_alpha.tv_usec)));
+	unreal_log(ULOG_DEBUG, "reputation", "REPUTATION_BENCHMARK", NULL,
+	           "Reputation benchmark: SAVE DB: $time_msec microseconds",
+	           log_data_integer("time_msec", ((tv_beta.tv_sec - tv_alpha.tv_sec) * 1000000) + (tv_beta.tv_usec - tv_alpha.tv_usec)));
 #endif
 
 	return 1;
@@ -677,7 +681,7 @@ int reputation_save_db(void)
 #endif
 
 #ifdef TEST
-	sendto_realops("REPUTATION IS RUNNING IN TEST MODE. SAVING DB'S...");
+	unreal_log(ULOG_DEBUG, "reputation", "REPUTATION_TEST", NULL, "Reputation in running in test mode. Saving DB's....");
 #endif
 
 	/* Comment this out after one or more releases (means you cannot downgrade to <=5.0.9.1 anymore) */
@@ -741,13 +745,14 @@ int reputation_save_db(void)
 
 #ifdef BENCHMARK
 	gettimeofday(&tv_beta, NULL);
-	ircd_log(LOG_ERROR, "Reputation benchmark: SAVE DB: %lld microseconds",
-		(long long)(((tv_beta.tv_sec - tv_alpha.tv_sec) * 1000000) + (tv_beta.tv_usec - tv_alpha.tv_usec)));
+	unreal_log(ULOG_DEBUG, "reputation", "REPUTATION_BENCHMARK", NULL,
+	           "Reputation benchmark: SAVE DB: $time_msec microseconds",
+	           log_data_integer("time_msec", ((tv_beta.tv_sec - tv_alpha.tv_sec) * 1000000) + (tv_beta.tv_usec - tv_alpha.tv_usec)));
 #endif
 	return 1;
 }
 
-static uint64_t hash_reputation_entry(char *ip)
+static uint64_t hash_reputation_entry(const char *ip)
 {
 	return siphash(ip, siphashkey_reputation) % REPUTATION_HASH_TABLE_SIZE;
 }
@@ -759,7 +764,7 @@ void add_reputation_entry(ReputationEntry *e)
 	AddListItem(e, ReputationHashTable[hashv]);
 }
 
-ReputationEntry *find_reputation_entry(char *ip)
+ReputationEntry *find_reputation_entry(const char *ip)
 {
 	ReputationEntry *e;
 	int hashv = hash_reputation_entry(ip);
@@ -924,8 +929,11 @@ EVENT(delete_old_records)
 			if (is_reputation_expired(e))
 			{
 #ifdef DEBUGMODE
-				ircd_log(LOG_ERROR, "Deleting expired entry for '%s' (score %hd, last seen %lld seconds ago)",
-				         e->ip, e->score, (long long)(TStime() - e->last_seen));
+				unreal_log(ULOG_DEBUG, "reputation", "REPUTATION_EXPIRY", NULL,
+				           "Deleting expired entry for $ip (score $score, last seen $time_delta seconds ago)",
+				           log_data_string("ip", e->ip),
+				           log_data_integer("score", e->score),
+				           log_data_integer("time_delta", TStime() - e->last_seen));
 #endif
 				DelListItem(e, ReputationHashTable[i]);
 				safe_free(e);
@@ -935,8 +943,9 @@ EVENT(delete_old_records)
 
 #ifdef BENCHMARK
 	gettimeofday(&tv_beta, NULL);
-	ircd_log(LOG_ERROR, "Reputation benchmark: EXPIRY IN MEM: %lld microseconds",
-		(long long)(((tv_beta.tv_sec - tv_alpha.tv_sec) * 1000000) + (tv_beta.tv_usec - tv_alpha.tv_usec)));
+	unreal_log(ULOG_DEBUG, "reputation", "REPUTATION_BENCHMARK", NULL,
+	           "Reputation benchmark: EXPIRY IN MEM: $time_msec microseconds",
+	           log_data_integer("time_msec", ((tv_beta.tv_sec - tv_alpha.tv_sec) * 1000000) + (tv_beta.tv_usec - tv_alpha.tv_usec)));
 #endif
 }
 
@@ -955,9 +964,9 @@ CMD_FUNC(reputationunperm)
 
 	ModuleSetOptions(ModInf.handle, MOD_OPT_PERM, 0);
 
-	sendto_realops("%s used /REPUTATIONUNPERM. On next REHASH the module can be RELOADED or UNLOADED. "
-	               "Note however that for a few minutes the scoring may be skipped, so don't do this too often.",
-	               client->name);
+	unreal_log(ULOG_INFO, "reputation", "REPUTATIONUNPERM_COMMAND", client,
+	           "$client used /REPUTATIONUNPERM. On next REHASH the module can be RELOADED or UNLOADED. "
+	           "Note however that for a few minutes the scoring may be skipped, so don't do this too often.");
 }
 
 int reputation_connect_extinfo(Client *client, NameValuePrioList **list)
@@ -989,7 +998,7 @@ void reputation_channel_query(Client *client, Channel *channel)
 	int cnt = 0, i, j;
 	ReputationEntry *e;
 
-	sendtxtnumeric(client, "Users and reputation scores for %s:", channel->chname);
+	sendtxtnumeric(client, "Users and reputation scores for %s:", channel->name);
 
 	/* Step 1: build a list of nicks and their reputation */
 	nicks = safe_alloc((channel->users+1) * sizeof(char *));
@@ -1005,8 +1014,11 @@ void reputation_channel_query(Client *client, Channel *channel)
 		}
 		if (++cnt > channel->users)
 		{
-			sendto_ops("[BUG] reputation_channel_query() expected %d users but %d (or more) were present in %s",
-				channel->users, cnt, channel->chname);
+			unreal_log(ULOG_WARNING, "bug", "REPUTATION_CHANNEL_QUERY_BUG", client,
+				   "[BUG] reputation_channel_query() expected $expected_users users, but $found_users (or more) users were present in $channel",
+				   log_data_integer("expected_users", channel->users),
+				   log_data_integer("found_users", cnt),
+				   log_data_string("channel", channel->name));
 #ifdef DEBUGMODE
 			abort();
 #endif
@@ -1083,7 +1095,7 @@ void reputation_list_query(Client *client, int maxscore)
 CMD_FUNC(reputation_user_cmd)
 {
 	ReputationEntry *e;
-	char *ip;
+	const char *ip;
 
 	if (!IsOper(client))
 	{
@@ -1121,16 +1133,16 @@ CMD_FUNC(reputation_user_cmd)
 	} else
 	if (parv[1][0] == '#')
 	{
-		Channel *channel = find_channel(parv[1], NULL);
+		Channel *channel = find_channel(parv[1]);
 		if (!channel)
 		{
 			sendnumeric(client, ERR_NOSUCHCHANNEL, parv[1]);
 			return;
 		}
 		/* corner case: ircop without proper permissions and not in channel */
-		if (!ValidatePermissionsForPath("channel:see:names:invisible",client,NULL,NULL,NULL) && !get_access(client,channel))
+		if (!ValidatePermissionsForPath("channel:see:names:invisible",client,NULL,NULL,NULL) && !IsMember(client,channel))
 		{
-			sendnumeric(client, ERR_NOTONCHANNEL, channel->chname);
+			sendnumeric(client, ERR_NOTONCHANNEL, channel->name);
 			return;
 		}
 		reputation_channel_query(client, channel);
@@ -1147,7 +1159,7 @@ CMD_FUNC(reputation_user_cmd)
 		reputation_list_query(client, max);
 		return;
 	} else {
-		Client *target = find_person(parv[1], NULL);
+		Client *target = find_user(parv[1], NULL);
 		if (!target)
 		{
 			sendnumeric(client, ERR_NOSUCHNICK, parv[1]);
@@ -1206,7 +1218,7 @@ CMD_FUNC(reputation_user_cmd)
 CMD_FUNC(reputation_server_cmd)
 {
 	ReputationEntry *e;
-	char *ip;
+	const char *ip;
 	int score;
 	int allow_reply;
 
@@ -1239,8 +1251,11 @@ CMD_FUNC(reputation_server_cmd)
 		 */
 		sendto_one(client, NULL, ":%s REPUTATION %s *%d", me.id, parv[1], e->score);
 #ifdef DEBUGMODE
-		ircd_log(LOG_ERROR, "[reputation] Score for '%s' from %s is %d, but we have %d, sending back %d",
-			ip, client->name, score, e->score, e->score);
+		unreal_log(ULOG_DEBUG, "reputation", "REPUTATION_DIFFERS", client,
+			   "Reputation score for for $ip from $client is $their_score, but we have $score, sending back $score",
+			   log_data_string("ip", ip),
+			   log_data_integer("their_score", score),
+			   log_data_integer("score", e->score));
 #endif
 		score = e->score; /* Update for propagation in the non-client direction */
 	}
@@ -1249,8 +1264,11 @@ CMD_FUNC(reputation_server_cmd)
 	if (e && (score > e->score))
 	{
 #ifdef DEBUGMODE
-		ircd_log(LOG_ERROR, "[reputation] Score for '%s' from %s is %d, but we have %d, updating our score to %d",
-			ip, client->name, score, e->score, score);
+		unreal_log(ULOG_DEBUG, "reputation", "REPUTATION_DIFFERS", client,
+			   "Reputation score for for $ip from $client is $their_score, but we have $score, updating our score to $score",
+			   log_data_string("ip", ip),
+			   log_data_integer("their_score", score),
+			   log_data_integer("score", e->score));
 #endif
 		e->score = score;
 	}
@@ -1259,8 +1277,11 @@ CMD_FUNC(reputation_server_cmd)
 	if (!e && (score > 0))
 	{
 #ifdef DEBUGMODE
-		ircd_log(LOG_ERROR, "[reputation] Score for '%s' from %s is %d, we had no entry, adding it",
-			ip, client->name, score);
+		unreal_log(ULOG_DEBUG, "reputation", "REPUTATION_NEW", client,
+			   "Reputation score for for $ip from $client is $their_score, we had no entry, adding it",
+			   log_data_string("ip", ip),
+			   log_data_integer("their_score", score),
+			   log_data_integer("score", 0));
 #endif
 		e = safe_alloc(sizeof(ReputationEntry)+strlen(ip));
 		strcpy(e->ip, ip); /* safe, see alloc above */
@@ -1286,18 +1307,19 @@ CMD_FUNC(reputation_cmd)
 		reputation_server_cmd(client, recv_mtags, parc, parv);
 }
 
-int reputation_whois(Client *client, Client *target)
+int reputation_whois(Client *client, Client *target, NameValuePrioList **list)
 {
-	int reputation = Reputation(target);
+	int reputation;
 
-	if (!IsOper(client))
-		return 0; /* only opers can see this.. */
+	if (whois_get_policy(client, target, "reputation") != WHOIS_CONFIG_DETAILS_FULL)
+		return 0;
 
+	reputation = Reputation(target);
 	if (reputation > 0)
 	{
-		sendto_one(client, NULL, ":%s %d %s %s :is using an IP with a reputation score of %d",
-			me.name, RPL_WHOISSPECIAL, client->name,
-			target->name, reputation);
+		add_nvplist_numeric_fmt(list, 0, "reputation", client, RPL_WHOISSPECIAL,
+		                        "%s :is using an IP with a reputation score of %d",
+		                        target->name, reputation);
 	}
 	return 0;
 }
@@ -1308,7 +1330,7 @@ void reputation_md_free(ModData *m)
 	m->l = 0;
 }
 
-char *reputation_md_serialize(ModData *m)
+const char *reputation_md_serialize(ModData *m)
 {
 	static char buf[32];
 	if (m->i == 0)
@@ -1317,7 +1339,7 @@ char *reputation_md_serialize(ModData *m)
 	return buf;
 }
 
-void reputation_md_unserialize(char *str, ModData *m)
+void reputation_md_unserialize(const char *str, ModData *m)
 {
 	m->i = atoi(str);
 }

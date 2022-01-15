@@ -17,7 +17,7 @@ ModuleHeader MOD_HEADER
 	"2.0",
 	"History backend: memory",
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
 };
 
 /* Defines */
@@ -97,16 +97,16 @@ static void freecfg(struct cfgstruct *cfg);
 static void hbm_init_hashes(ModuleInfo *m);
 static void init_history_storage(ModuleInfo *modinfo);
 int hbm_modechar_del(Channel *channel, int modechar);
-int hbm_history_add(char *object, MessageTag *mtags, char *line);
+int hbm_history_add(const char *object, MessageTag *mtags, const char *line);
 int hbm_history_cleanup(HistoryLogObject *h);
-HistoryResult *hbm_history_request(char *object, HistoryFilter *filter);
-int hbm_history_destroy(char *object);
-int hbm_history_set_limit(char *object, int max_lines, long max_time);
+HistoryResult *hbm_history_request(const char *object, HistoryFilter *filter);
+int hbm_history_destroy(const char *object);
+int hbm_history_set_limit(const char *object, int max_lines, long max_time);
 EVENT(history_mem_clean);
 EVENT(history_mem_init);
 static int hbm_read_masterdb(void);
 static void hbm_read_dbs(void);
-static int hbm_read_db(char *fname);
+static int hbm_read_db(const char *fname);
 static int hbm_write_masterdb(void);
 static int hbm_write_db(HistoryLogObject *h);
 static void hbm_delete_db(HistoryLogObject *h);
@@ -200,7 +200,7 @@ EVENT(history_mem_init)
 
 MOD_UNLOAD()
 {
-	if (loop.ircd_terminating)
+	if (loop.terminating)
 		hbm_flush();
 	freecfg(&test);
 	freecfg(&cfg);
@@ -235,6 +235,7 @@ static void setcfg(struct cfgstruct *cfg)
 
 static void freecfg(struct cfgstruct *cfg)
 {
+	safe_free(cfg->masterdb);
 	safe_free(cfg->directory);
 	safe_free(cfg->db_secret);
 }
@@ -264,40 +265,40 @@ int hbm_config_test(ConfigFile *cf, ConfigEntry *ce, int type, int *errs)
 {
 	int errors = 0;
 
-	if ((type != CONFIG_SET_HISTORY_CHANNEL) || !ce || !ce->ce_varname)
+	if ((type != CONFIG_SET_HISTORY_CHANNEL) || !ce || !ce->name)
 		return 0;
 
-	if (!strcmp(ce->ce_varname, "persist"))
+	if (!strcmp(ce->name, "persist"))
 	{
-		if (!ce->ce_vardata)
+		if (!ce->value)
 		{
 			config_error("%s:%i: missing parameter",
-				ce->ce_fileptr->cf_filename, ce->ce_varlinenum);
+				ce->file->filename, ce->line_number);
 			errors++;
 		} else {
-			test.persist = config_checkval(ce->ce_vardata, CFG_YESNO);
+			test.persist = config_checkval(ce->value, CFG_YESNO);
 		}
 	} else
-	if (!strcmp(ce->ce_varname, "db-secret"))
+	if (!strcmp(ce->name, "db-secret"))
 	{
-		char *err;
-		if ((err = unrealdb_test_secret(ce->ce_vardata)))
+		const char *err;
+		if ((err = unrealdb_test_secret(ce->value)))
 		{
-			config_error("%s:%i: set::history::channel::db-secret: %s", ce->ce_fileptr->cf_filename, ce->ce_varlinenum, err);
+			config_error("%s:%i: set::history::channel::db-secret: %s", ce->file->filename, ce->line_number, err);
 			errors++;
 		}
-		safe_strdup(test.db_secret, ce->ce_vardata);
+		safe_strdup(test.db_secret, ce->value);
 	} else
-	if (!strcmp(ce->ce_varname, "directory")) // or "path" ?
+	if (!strcmp(ce->name, "directory")) // or "path" ?
 	{
-		if (!ce->ce_vardata)
+		if (!ce->value)
 		{
 			config_error("%s:%i: missing parameter",
-				ce->ce_fileptr->cf_filename, ce->ce_varlinenum);
+				ce->file->filename, ce->line_number);
 			errors++;
 		} else
 		{
-			safe_strdup(test.directory, ce->ce_vardata);
+			safe_strdup(test.directory, ce->value);
 			hbm_set_masterdb_filename(&test);
 		}
 	} else
@@ -322,7 +323,7 @@ int hbm_config_posttest(int *errs)
 	} else
 	if (!test.db_secret && test.persist)
 	{
-		config_error("set::history::channel::db-secret needs to be set."); // TODO: REFER TO FAQ OR OTHER ENTRY!!!!
+		config_error("set::history::channel::db-secret needs to be set.");
 		errors++;
 	} else
 	if (test.db_secret && test.persist)
@@ -367,22 +368,22 @@ hbm_config_posttest_end:
 /** Configure ourselves based on the set::history::channel settings */
 int hbm_config_run(ConfigFile *cf, ConfigEntry *ce, int type)
 {
-	if ((type != CONFIG_SET_HISTORY_CHANNEL) || !ce || !ce->ce_varname)
+	if ((type != CONFIG_SET_HISTORY_CHANNEL) || !ce || !ce->name)
 		return 0;
 
-	if (!strcmp(ce->ce_varname, "persist"))
+	if (!strcmp(ce->name, "persist"))
 	{
-		cfg.persist = config_checkval(ce->ce_vardata, CFG_YESNO);
+		cfg.persist = config_checkval(ce->value, CFG_YESNO);
 	} else
-	if (!strcmp(ce->ce_varname, "directory")) // or "path" ?
+	if (!strcmp(ce->name, "directory")) // or "path" ?
 	{
-		safe_strdup(cfg.directory, ce->ce_vardata);
+		safe_strdup(cfg.directory, ce->value);
 		convert_to_absolute_path(&cfg.directory, PERMDATADIR);
 		hbm_set_masterdb_filename(&cfg);
 	} else
-	if (!strcmp(ce->ce_varname, "db-secret"))
+	if (!strcmp(ce->name, "db-secret"))
 	{
-		safe_strdup(cfg.db_secret, ce->ce_vardata);
+		safe_strdup(cfg.db_secret, ce->value);
 	} else
 	{
 		return 0; /* unknown option to us, let another module handle it */
@@ -403,7 +404,7 @@ int hbm_rehash_complete(void)
 	return 0;
 }
 
-char *history_storage_capability_parameter(Client *client)
+const char *history_storage_capability_parameter(Client *client)
 {
 	static char buf[128];
 
@@ -426,12 +427,12 @@ static void init_history_storage(ModuleInfo *modinfo)
 	ClientCapabilityAdd(modinfo->handle, &cap, NULL);
 }
 
-uint64_t hbm_hash(char *object)
+uint64_t hbm_hash(const char *object)
 {
 	return siphash_nocase(object, siphashkey_history_backend_mem) % HISTORY_BACKEND_MEM_HASH_TABLE_SIZE;
 }
 
-HistoryLogObject *hbm_find_object(char *object)
+HistoryLogObject *hbm_find_object(const char *object)
 {
 	int hashv = hbm_hash(object);
 	HistoryLogObject *h;
@@ -444,7 +445,7 @@ HistoryLogObject *hbm_find_object(char *object)
 	return NULL;
 }
 
-HistoryLogObject *hbm_find_or_add_object(char *object)
+HistoryLogObject *hbm_find_or_add_object(const char *object)
 {
 	int hashv = hbm_hash(object);
 	HistoryLogObject *h;
@@ -480,7 +481,7 @@ int hbm_modechar_del(Channel *channel, int modechar)
 	if (!cfg.persist)
 		return 0;
 
-	if ((modechar == 'P') && ((h = hbm_find_object(channel->chname))))
+	if ((modechar == 'P') && ((h = hbm_find_object(channel->name))))
 	{
 		/* Channel went from +P to -P and also has channel history: delete the history file */
 		hbm_delete_db(h);
@@ -538,7 +539,7 @@ void hbm_duplicate_mtags(HistoryLogLine *l, MessageTag *m)
 }
 
 /** Add a line to a history object */
-void hbm_history_add_line(HistoryLogObject *h, MessageTag *mtags, char *line)
+void hbm_history_add_line(HistoryLogObject *h, MessageTag *mtags, const char *line)
 {
 	HistoryLogLine *l = safe_alloc(sizeof(HistoryLogLine) + strlen(line));
 	strcpy(l->line, line); /* safe, see memory allocation above ^ */
@@ -589,12 +590,14 @@ void hbm_history_del_line(HistoryLogObject *h, HistoryLogLine *l)
 }
 
 /** Add history entry */
-int hbm_history_add(char *object, MessageTag *mtags, char *line)
+int hbm_history_add(const char *object, MessageTag *mtags, const char *line)
 {
 	HistoryLogObject *h = hbm_find_or_add_object(object);
 	if (!h->max_lines)
 	{
-		sendto_realops("hbm_history_add() for '%s', which has no limit", h->name);
+		unreal_log(ULOG_WARNING, "history", "BUG_HISTORY_ADD_NO_LIMIT", NULL,
+		           "[BUG] hbm_history_add() called for $object, which has no limit set",
+		           log_data_string("object", h->name));
 #ifdef DEBUGMODE
 		abort();
 #else
@@ -955,7 +958,7 @@ static int hbm_return_between(HistoryResult *r, HistoryLogObject *h, HistoryFilt
 	return 0;
 }
 
-HistoryResult *hbm_history_request(char *object, HistoryFilter *filter)
+HistoryResult *hbm_history_request(const char *object, HistoryFilter *filter)
 {
 	HistoryResult *r;
 	HistoryLogObject *h = hbm_find_object(object);
@@ -1050,7 +1053,7 @@ int hbm_history_cleanup(HistoryLogObject *h)
 	return 1;
 }
 
-int hbm_history_destroy(char *object)
+int hbm_history_destroy(const char *object)
 {
 	HistoryLogObject *h = hbm_find_object(object);
 	HistoryLogLine *l, *l_next;
@@ -1075,7 +1078,7 @@ int hbm_history_destroy(char *object)
 }
 
 /** Set new limit on history object */
-int hbm_history_set_limit(char *object, int max_lines, long max_time)
+int hbm_history_set_limit(const char *object, int max_lines, long max_time)
 {
 	HistoryLogObject *h = hbm_find_or_add_object(object);
 	h->max_lines = max_lines;
@@ -1104,8 +1107,6 @@ static int hbm_read_masterdb(void)
 		{
 			/* Database does not exist. Could be first boot */
 			config_warn("[history] No database present at '%s', will start a new one", test.masterdb);
-			// TODO: maybe check for condition where 'master.db' does not exist but
-			// there are other .db files.
 			if (!hbm_write_masterdb())
 				return 0; /* fatal error */
 			return 1;
@@ -1125,10 +1126,10 @@ static int hbm_read_masterdb(void)
 	    !unrealdb_read_str(db, &prehash) ||
 	    !unrealdb_read_str(db, &posthash))
 	{
-		safe_free(prehash);
-		safe_free(posthash);
 		config_error("[history] Read error from database file '%s': %s",
 			test.masterdb, unrealdb_get_error_string());
+		safe_free(prehash);
+		safe_free(posthash);
 		unrealdb_close(db);
 		return 0;
 	}
@@ -1138,14 +1139,24 @@ static int hbm_read_masterdb(void)
 	{
 		config_error("[history] Read error from database file '%s': unexpected values encountered",
 			test.masterdb);
+		safe_free(prehash);
+		safe_free(posthash);
 		return 0;
 	}
 
 	/* Now, safely switch over.. */
-	safe_free(hbm_prehash);
-	safe_free(hbm_posthash);
-	hbm_prehash = prehash;
-	hbm_posthash = posthash;
+	if (hbm_prehash && !strcmp(hbm_prehash, prehash) && hbm_posthash && !strcmp(hbm_posthash, posthash))
+	{
+		/* Identical sets */
+		safe_free(prehash);
+		safe_free(posthash);
+	} else {
+		/* Diffferent */
+		safe_free(hbm_prehash);
+		safe_free(hbm_posthash);
+		hbm_prehash = prehash;
+		hbm_posthash = posthash;
+	}
 
 	return 1;
 }
@@ -1275,7 +1286,7 @@ static void hbm_read_dbs(void)
 
 
 /** Read a channel history db file */
-static int hbm_read_db(char *fname)
+static int hbm_read_db(const char *fname)
 {
 	UnrealDB *db = NULL;
 	// header
@@ -1475,7 +1486,7 @@ EVENT(history_mem_clean)
 	} while(loopcnt++ < HISTORY_CLEAN_PER_LOOP);
 }
 
-char *hbm_history_filename(HistoryLogObject *h)
+const char *hbm_history_filename(HistoryLogObject *h)
 {
 	static char fname[512];
 	char oname[OBJECTLEN+1];
@@ -1495,9 +1506,10 @@ char *hbm_history_filename(HistoryLogObject *h)
 
 #define WARN_WRITE_ERROR(fname) \
 	do { \
-		sendto_realops_and_log("[history] Error writing to temporary database file " \
-		                       "'%s': %s (DATABASE NOT SAVED)", \
-		                       fname, unrealdb_get_error_string()); \
+		unreal_log(ULOG_ERROR, "history", "HISTORYDB_FILE_WRITE_ERROR", NULL, \
+			   "[historydb] Error writing to temporary database file $filename: $system_error", \
+			   log_data_string("filename", fname), \
+			   log_data_string("system_error", unrealdb_get_error_string())); \
 	} while(0)
 
 #define W_SAFE(x) \
@@ -1515,7 +1527,7 @@ char *hbm_history_filename(HistoryLogObject *h)
 static int hbm_write_db(HistoryLogObject *h)
 {
 	UnrealDB *db;
-	char *realfname;
+	const char *realfname;
 	char tmpfname[512];
 	HistoryLogLine *l;
 	MessageTag *m;
@@ -1524,7 +1536,7 @@ static int hbm_write_db(HistoryLogObject *h)
 	if (!cfg.db_secret)
 		abort();
 
-	channel = find_channel(h->name, NULL);
+	channel = find_channel(h->name);
 	if (!channel || !has_channel_mode(channel, 'P'))
 		return 1; /* Don't save this channel, pretend success */
 
@@ -1575,7 +1587,7 @@ static int hbm_write_db(HistoryLogObject *h)
 #endif
 	if (rename(tmpfname, realfname) < 0)
 	{
-		sendto_realops_and_log("[history] Error renaming '%s' to '%s': %s (HISTORY NOT SAVED)",
+		config_error("[history] Error renaming '%s' to '%s': %s (HISTORY NOT SAVED)",
 			tmpfname, realfname, strerror(errno));
 		return 0;
 	}
@@ -1588,7 +1600,7 @@ static int hbm_write_db(HistoryLogObject *h)
 static void hbm_delete_db(HistoryLogObject *h)
 {
 	UnrealDB *db;
-	char *fname;
+	const char *fname;
 	if (!cfg.persist || !hbm_prehash || !hbm_posthash)
 	{
 #ifdef DEBUGMODE

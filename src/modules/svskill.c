@@ -29,7 +29,7 @@ ModuleHeader MOD_HEADER
 	"5.0", /* Version */
 	"command /svskill", /* Short description of module */
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
     };
 
 
@@ -63,7 +63,7 @@ CMD_FUNC(cmd_svskill)
 {
 	MessageTag *mtags = NULL;
 	Client *target;
-	char *comment = "SVS Killed";
+	const char *comment = "SVS Killed";
 	int n;
 
 	if (parc < 2)
@@ -76,7 +76,7 @@ CMD_FUNC(cmd_svskill)
 	if (!IsULine(client))
 		return;
 
-	if (!(target = find_person(parv[1], NULL)))
+	if (!(target = find_user(parv[1], NULL)))
 		return;
 
 	/* for new_message() we use target here, makes sense for the exit_client, right? */

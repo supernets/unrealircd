@@ -40,9 +40,9 @@ void unrealdns_cb_nametoip_verify(void *arg, int status, int timeouts, struct ho
 void unrealdns_cb_nametoip_link(void *arg, int status, int timeouts, struct hostent *he);
 void unrealdns_delasyncconnects(void);
 static uint64_t unrealdns_hash_ip(const char *ip);
-static void unrealdns_addtocache(char *name, char *ip);
-static char *unrealdns_findcache_ip(char *ip);
-struct hostent *unreal_create_hostent(char *name, char *ip);
+static void unrealdns_addtocache(const char *name, const char *ip);
+static const char *unrealdns_findcache_ip(const char *ip);
+struct hostent *unreal_create_hostent(const char *name, const char *ip);
 static void unrealdns_freeandremovereq(DNSReq *r);
 void unrealdns_removecacherecord(DNSCache *c);
 
@@ -87,10 +87,7 @@ static void unrealdns_sock_state_cb(void *data, ares_socket_t fd, int read, int 
 
 	if (!read && !write)
 	{
-		/* Socket is going to be closed *BY C-ARES*..
-		 * so don't call fd_close() but fd_unmap().
-		 */
-		fd_unmap(fd);
+		fd_close(fd);
 		return;
 	}
 	
@@ -108,7 +105,11 @@ static void unrealdns_sock_state_cb(void *data, ares_socket_t fd, int read, int 
  */
 static int unrealdns_sock_create_cb(ares_socket_t fd, int type, void *data)
 {
-	fd_open(fd, "DNS Resolver Socket");
+	/* NOTE: We use FDCLOSE_NONE here because c-ares
+	 * will take care of the closing. So *WE* must
+	 * never close the socket.
+	 */
+	fd_open(fd, "DNS Resolver Socket", FDCLOSE_NONE);
 	return ARES_SUCCESS;
 }
 
@@ -174,12 +175,10 @@ void reinit_resolver(Client *client)
 {
 	EventDel(unrealdns_timeout_hdl);
 
-	sendto_ops_and_log("%s requested reinitalization of resolver!", client->name);
-	sendto_realops("Destroying resolver channel, along with all currently pending queries...");
+	unreal_log(ULOG_INFO, "dns", "REINIT_RESOLVER", client,
+	           "$client requested reinitalization of the DNS resolver");
 	ares_destroy(resolver_channel);
-	sendto_realops("Initializing resolver again...");
 	init_resolver(0);
-	sendto_realops("Reinitalization finished successfully.");
 }
 
 void unrealdns_addreqtolist(DNSReq *r)
@@ -202,7 +201,7 @@ void unrealdns_addreqtolist(DNSReq *r)
 struct hostent *unrealdns_doclient(Client *client)
 {
 	DNSReq *r;
-	char *cache_name;
+	const char *cache_name;
 
 	cache_name = unrealdns_findcache_ip(client->ip);
 	if (cache_name)
@@ -233,7 +232,7 @@ struct hostent *unrealdns_doclient(Client *client)
 
 /** Resolve a name to an IP, for a link block.
  */
-void unrealdns_gethostbyname_link(char *name, ConfigItem_link *conf, int ipv4_only)
+void unrealdns_gethostbyname_link(const char *name, ConfigItem_link *conf, int ipv4_only)
 {
 	DNSReq *r;
 
@@ -283,27 +282,6 @@ void unrealdns_cb_iptoname(void *arg, int status, int timeouts, struct hostent *
 	ares_gethostbyname(resolver_channel, he->h_name, ipv6 ? AF_INET6 : AF_INET, unrealdns_cb_nametoip_verify, newr);
 }
 
-/*
-  returns:
-  1 = good hostname
-  0 = bad hostname
- */
-int verify_hostname(char *name)
-{
-char *p;
-
-	if (strlen(name) > HOSTLEN)
-		return 0; 
-
-	/* No underscores or other illegal characters */
-	for (p = name; *p; p++)
-		if (!isalnum(*p) && !strchr(".-", *p))
-			return 0;
-
-	return 1;
-}
-
-
 void unrealdns_cb_nametoip_verify(void *arg, int status, int timeouts, struct hostent *he)
 {
 	DNSReq *r = (DNSReq *)arg;
@@ -348,12 +326,15 @@ void unrealdns_cb_nametoip_verify(void *arg, int status, int timeouts, struct ho
 		goto bad;
 	}
 
-	if (!verify_hostname(r->name))
+	if (!valid_host(r->name, 1))
 	{
 		/* Hostname is bad, don't cache and consider unresolved */
 		proceed_normal_client_handshake(client, NULL);
 		goto bad;
 	}
+
+	/* Get rid of stupid uppercase DNS names... */
+	strtolower(r->name);
 
 	/* Entry was found, verified, and can be added to cache */
 
@@ -372,7 +353,7 @@ void unrealdns_cb_nametoip_link(void *arg, int status, int timeouts, struct host
 	int n;
 	struct hostent *he2;
 	char ipbuf[HOSTLEN+1];
-	char *ip = NULL;
+	const char *ip = NULL;
 
 	if (!r->linkblock)
 	{
@@ -393,8 +374,9 @@ void unrealdns_cb_nametoip_link(void *arg, int status, int timeouts, struct host
 		}
 
 		/* fatal error while resolving */
-		sendto_ops_and_log("Unable to resolve hostname '%s', when trying to connect to server %s.",
-			r->name, r->linkblock->servername);
+		unreal_log(ULOG_ERROR, "link", "LINK_ERROR_RESOLVING", NULL,
+			   "Unable to resolve hostname $link_block.hostname, when trying to connect to server $link_block.",
+			   log_data_link_block(r->linkblock));
 		r->linkblock->refcount--;
 		unrealdns_freeandremovereq(r);
 		return;
@@ -405,8 +387,9 @@ void unrealdns_cb_nametoip_link(void *arg, int status, int timeouts, struct host
 	    !(ip = inetntop(r->ipv6 ? AF_INET6 : AF_INET, he->h_addr_list[0], ipbuf, sizeof(ipbuf))))
 	{
 		/* Illegal response -- fatal */
-		sendto_ops_and_log("Unable to resolve hostname '%s', when trying to connect to server %s.",
-			r->name, r->linkblock->servername);
+		unreal_log(ULOG_ERROR, "link", "LINK_ERROR_RESOLVING", NULL,
+		           "Unable to resolve hostname $link_block.hostname, when trying to connect to server $link_block.",
+		           log_data_link_block(r->linkblock));
 		unrealdns_freeandremovereq(r);
 		return;
 	}
@@ -417,22 +400,9 @@ void unrealdns_cb_nametoip_link(void *arg, int status, int timeouts, struct host
 	safe_strdup(r->linkblock->connect_ip, ip);
 	he2 = unreal_create_hostent(he->h_name, ip);
 
-	switch ((n = connect_server(r->linkblock, r->client, he2)))
-	{
-		case 0:
-			sendto_ops_and_log("Trying to activate link with server %s[%s]...", r->linkblock->servername, ip);
-			break;
-		case -1:
-			sendto_ops_and_log("Couldn't connect to server %s[%s].", r->linkblock->servername, ip);
-			break;
-		case -2:
-			/* Should not happen since he is not NULL */
-			sendto_ops_and_log("Hostname %s is unknown for server %s (!?).", r->linkblock->outgoing.hostname, r->linkblock->servername);
-			break;
-		default:
-			sendto_ops_and_log("Connection to server %s failed: %s", r->linkblock->servername, STRERROR(n));
-	}
-	
+	/* Try to connect to the server */
+	connect_server(r->linkblock, r->client, he2);
+
 	unrealdns_freeandremovereq(r);
 	/* DONE */
 }
@@ -442,7 +412,7 @@ static uint64_t unrealdns_hash_ip(const char *ip)
         return siphash(ip, siphashkey_dns_ip) % DNS_HASH_SIZE;
 }
 
-static void unrealdns_addtocache(char *name, char *ip)
+static void unrealdns_addtocache(const char *name, const char *ip)
 {
 	unsigned int hashv;
 	DNSCache *c;
@@ -494,7 +464,7 @@ static void unrealdns_addtocache(char *name, char *ip)
 /** Search the cache for a confirmed ip->name and name->ip match, by address.
  * @returns The resolved hostname, or NULL if not found in cache.
  */
-static char *unrealdns_findcache_ip(char *ip)
+static const char *unrealdns_findcache_ip(const char *ip)
 {
 	unsigned int hashv;
 	DNSCache *c;
@@ -562,17 +532,11 @@ DNSCache *c, *next;
 	{
 		next = c->next;
 		if (c->expires < TStime())
-		{
-#if 0
-			sendto_realops(client, "[Syzop/DNS] Expire: %s [%s] (%ld < %ld)",
-				c->name, c->ip, c->expires, TStime());
-#endif
 			unrealdns_removecacherecord(c);
-		}
 	}
 }
 
-struct hostent *unreal_create_hostent(char *name, char *ip)
+struct hostent *unreal_create_hostent(const char *name, const char *ip)
 {
 struct hostent *he;
 
@@ -646,7 +610,7 @@ CMD_FUNC(cmd_dns)
 {
 	DNSCache *c;
 	DNSReq *r;
-	char *param;
+	const char *param;
 
 	if (!ValidatePermissionsForPath("server:dns",client,NULL,NULL,NULL))
 	{
@@ -673,8 +637,8 @@ CMD_FUNC(cmd_dns)
 	} else
 	if (*param == 'c') /* CLEAR CACHE */
 	{
-		sendto_realops("%s (%s@%s) cleared the DNS cache list (/QUOTE DNS c)",
-			client->name, client->user->username, client->user->realhost);
+		unreal_log(ULOG_INFO, "dns", "DNS_CACHE_CLEARED", client,
+		            "DNS cache cleared by $client");
 		
 		while (cache_list)
 		{
@@ -702,7 +666,8 @@ CMD_FUNC(cmd_dns)
 		ares_get_servers(resolver_channel, &serverlist);
 		for (ns = serverlist; ns; ns = ns->next)
 		{
-			char ipbuf[128], *ip;
+			char ipbuf[128];
+			const char *ip;
 			i++;
 			
 			ip = inetntop(ns->family, &ns->addr, ipbuf, sizeof(ipbuf));

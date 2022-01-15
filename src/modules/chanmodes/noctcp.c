@@ -27,14 +27,14 @@ ModuleHeader MOD_HEADER
 	"4.2",
 	"Channel Mode +C",
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
     };
 
 Cmode_t EXTCMODE_NOCTCP;
 
-#define IsNoCTCP(channel)    (channel->mode.extmode & EXTCMODE_NOCTCP)
+#define IsNoCTCP(channel)    (channel->mode.mode & EXTCMODE_NOCTCP)
 
-int noctcp_can_send_to_channel(Client *client, Channel *channel, Membership *lp, char **msg, char **errmsg, SendType sendtype);
+int noctcp_can_send_to_channel(Client *client, Channel *channel, Membership *lp, const char **msg, const char **errmsg, SendType sendtype);
 
 MOD_TEST()
 {
@@ -47,7 +47,7 @@ CmodeInfo req;
 
 	memset(&req, 0, sizeof(req));
 	req.paracount = 0;
-	req.flag = 'C';
+	req.letter = 'C';
 	req.is_ok = extcmode_default_requirehalfop;
 	CmodeAdd(modinfo->handle, req, &EXTCMODE_NOCTCP);
 	
@@ -67,7 +67,7 @@ MOD_UNLOAD()
 	return MOD_SUCCESS;
 }
 
-static int IsACTCP(char *s)
+static int IsACTCP(const char *s)
 {
 	if (!s)
 		return 0;
@@ -78,7 +78,7 @@ static int IsACTCP(char *s)
 	return 0;
 }
 
-int noctcp_can_send_to_channel(Client *client, Channel *channel, Membership *lp, char **msg, char **errmsg, SendType sendtype)
+int noctcp_can_send_to_channel(Client *client, Channel *channel, Membership *lp, const char **msg, const char **errmsg, SendType sendtype)
 {
 	if (IsNoCTCP(channel) && IsACTCP(*msg))
 	{

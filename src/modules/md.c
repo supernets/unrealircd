@@ -14,7 +14,7 @@ ModuleHeader MOD_HEADER
 	"5.0",
 	"command /MD (S2S only)",
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
     };
 
 CMD_FUNC(cmd_md);
@@ -23,11 +23,13 @@ void _broadcast_md_channel(ModDataInfo *mdi, Channel *channel, ModData *md);
 void _broadcast_md_member(ModDataInfo *mdi, Channel *channel, Member *m, ModData *md);
 void _broadcast_md_membership(ModDataInfo *mdi, Client *client, Membership *m, ModData *md);
 void _broadcast_md_globalvar(ModDataInfo *mdi, ModData *md);
-void _broadcast_md_client_cmd(Client *except, Client *sender, Client *client, char *varname, char *value);
-void _broadcast_md_channel_cmd(Client *except, Client *sender, Channel *channel, char *varname, char *value);
-void _broadcast_md_member_cmd(Client *except, Client *sender, Channel *channel, Client *client, char *varname, char *value);
-void _broadcast_md_membership_cmd(Client *except, Client *sender, Client *client, Channel *channel, char *varname, char *value);
-void _broadcast_md_globalvar_cmd(Client *except, Client *sender, char *varname, char *value);
+void _broadcast_md_client_cmd(Client *except, Client *sender, Client *client, const char *varname, const char *value);
+void _broadcast_md_channel_cmd(Client *except, Client *sender, Channel *channel, const char *varname, const char *value);
+void _broadcast_md_member_cmd(Client *except, Client *sender, Channel *channel, Client *client, const char *varname, const char *value);
+void _broadcast_md_membership_cmd(Client *except, Client *sender, Client *client, Channel *channel, const char *varname, const char *value);
+void _broadcast_md_globalvar_cmd(Client *except, Client *sender, const char *varname, const char *value);
+void _moddata_add_s2s_mtags(Client *client, MessageTag **mtags);
+void _moddata_extract_s2s_mtags(Client *client, MessageTag *mtags);
 void _send_moddata_client(Client *srv, Client *client);
 void _send_moddata_channel(Client *srv, Channel *channel);
 void _send_moddata_members(Client *srv);
@@ -48,6 +50,8 @@ MOD_TEST()
 	EfunctionAddVoid(modinfo->handle, EFUNC_BROADCAST_MD_MEMBER_CMD, _broadcast_md_member_cmd);
 	EfunctionAddVoid(modinfo->handle, EFUNC_BROADCAST_MD_MEMBERSHIP_CMD, _broadcast_md_membership_cmd);
 	EfunctionAddVoid(modinfo->handle, EFUNC_BROADCAST_MD_GLOBALVAR_CMD, _broadcast_md_globalvar_cmd);
+	EfunctionAddVoid(modinfo->handle, EFUNC_MODDATA_ADD_S2S_MTAGS, _moddata_add_s2s_mtags);
+	EfunctionAddVoid(modinfo->handle, EFUNC_MODDATA_EXTRACT_S2S_MTAGS, _moddata_extract_s2s_mtags);
 	EfunctionAddVoid(modinfo->handle, EFUNC_SEND_MODDATA_CLIENT, _send_moddata_client);
 	EfunctionAddVoid(modinfo->handle, EFUNC_SEND_MODDATA_CHANNEL, _send_moddata_channel);
 	EfunctionAddVoid(modinfo->handle, EFUNC_SEND_MODDATA_MEMBERS, _send_moddata_members);
@@ -72,6 +76,25 @@ MOD_UNLOAD()
 	return MOD_SUCCESS;
 }
 
+/** Check if client may write to this MD object */
+int md_access_check(Client *client, ModDataInfo *md, Client *target)
+{
+	if ((client == target) && md->self_write)
+		return 1;
+
+	if (MyConnect(target) && !md->remote_write)
+	{
+		unreal_log(ULOG_WARNING, "md", "REMOTE_MD_WRITE_DENIED", client,
+		           "Remote server $client tried to write moddata $moddata_name "
+		           "of a client from ours ($target.name) -- attempt BLOCKED",
+		           log_data_string("moddata_name", md->name),
+		           log_data_client("target", target));
+		return 0;
+	}
+
+	return 1;
+}
+
 /** Set ModData command.
  *  Syntax: MD <type> <object name> <variable name> <value>
  * Example: MD client Syzop sslfp 123456789
@@ -88,7 +111,7 @@ MOD_UNLOAD()
  */
 CMD_FUNC(cmd_md)
 {
-	char *type, *objname, *varname, *value;
+	const char *type, *objname, *varname, *value;
 	ModDataInfo *md;
 
 	if (!IsServer(client) || (parc < 4) || BadPtr(parv[3]))
@@ -105,6 +128,10 @@ CMD_FUNC(cmd_md)
 		md = findmoddata_byname(varname, MODDATATYPE_CLIENT);
 		if (!md || !md->unserialize || !target)
 			return;
+
+		if (!md_access_check(client, md, target))
+			return;
+
 		if (value)
 			md->unserialize(value, &moddata_client(target, md));
 		else
@@ -118,7 +145,7 @@ CMD_FUNC(cmd_md)
 	} else
 	if (!strcmp(type, "channel"))
 	{
-		Channel *channel = find_channel(objname, NULL);
+		Channel *channel = find_channel(objname);
 		md = findmoddata_byname(varname, MODDATATYPE_CHANNEL);
 		if (!md || !md->unserialize || !channel)
 			return;
@@ -146,11 +173,11 @@ CMD_FUNC(cmd_md)
 			return;
 		*p++ = '\0';
 
-		channel = find_channel(objname, NULL);
+		channel = find_channel(objname);
 		if (!channel)
 			return;
 
-		target = find_person(p, NULL);
+		target = find_user(p, NULL);
 		if (!target)
 			return;
 
@@ -160,6 +187,9 @@ CMD_FUNC(cmd_md)
 
 		md = findmoddata_byname(varname, MODDATATYPE_MEMBER);
 		if (!md || !md->unserialize)
+			return;
+
+		if (!md_access_check(client, md, target))
 			return;
 
 		if (value)
@@ -186,11 +216,11 @@ CMD_FUNC(cmd_md)
 			return;
 		*p++ = '\0';
 
-		target = find_person(objname, NULL);
+		target = find_user(objname, NULL);
 		if (!target)
 			return;
 
-		channel = find_channel(p, NULL);
+		channel = find_channel(p);
 		if (!channel)
 			return;
 
@@ -200,6 +230,9 @@ CMD_FUNC(cmd_md)
 
 		md = findmoddata_byname(varname, MODDATATYPE_MEMBERSHIP);
 		if (!md || !md->unserialize)
+			return;
+
+		if (!md_access_check(client, md, target))
 			return;
 
 		if (value)
@@ -232,7 +265,7 @@ CMD_FUNC(cmd_md)
 	}
 }
 
-void _broadcast_md_client_cmd(Client *except, Client *sender, Client *client, char *varname, char *value)
+void _broadcast_md_client_cmd(Client *except, Client *sender, Client *client, const char *varname, const char *value)
 {
 	if (value)
 	{
@@ -246,45 +279,45 @@ void _broadcast_md_client_cmd(Client *except, Client *sender, Client *client, ch
 	}
 }
 
-void _broadcast_md_channel_cmd(Client *except, Client *sender, Channel *channel, char *varname, char *value)
+void _broadcast_md_channel_cmd(Client *except, Client *sender, Channel *channel, const char *varname, const char *value)
 {
 	if (value)
 		sendto_server(except, 0, 0, NULL, ":%s MD %s %s %s :%s",
-			sender->id, "channel", channel->chname, varname, value);
+			sender->id, "channel", channel->name, varname, value);
 	else
 		sendto_server(except, 0, 0, NULL, ":%s MD %s %s %s",
-			sender->id, "channel", channel->chname, varname);
+			sender->id, "channel", channel->name, varname);
 }
 
-void _broadcast_md_member_cmd(Client *except, Client *sender, Channel *channel, Client *client, char *varname, char *value)
+void _broadcast_md_member_cmd(Client *except, Client *sender, Channel *channel, Client *client, const char *varname, const char *value)
 {
 	if (value)
 	{
 		sendto_server(except, 0, 0, NULL, ":%s MD %s %s:%s %s :%s",
-			sender->id, "member", channel->chname, client->id, varname, value);
+			sender->id, "member", channel->name, client->id, varname, value);
 	}
 	else
 	{
 		sendto_server(except, 0, 0, NULL, ":%s MD %s %s:%s %s",
-			sender->id, "member", channel->chname, client->id, varname);
+			sender->id, "member", channel->name, client->id, varname);
 	}
 }
 
-void _broadcast_md_membership_cmd(Client *except, Client *sender, Client *client, Channel *channel, char *varname, char *value)
+void _broadcast_md_membership_cmd(Client *except, Client *sender, Client *client, Channel *channel, const char *varname, const char *value)
 {
 	if (value)
 	{
 		sendto_server(except, 0, 0, NULL, ":%s MD %s %s:%s %s :%s",
-			sender->id, "membership", client->id, channel->chname, varname, value);
+			sender->id, "membership", client->id, channel->name, varname, value);
 	}
 	else
 	{
 		sendto_server(except, 0, 0, NULL, ":%s MD %s %s:%s %s",
-			sender->id, "membership", client->id, channel->chname, varname);
+			sender->id, "membership", client->id, channel->name, varname);
 	}
 }
 
-void _broadcast_md_globalvar_cmd(Client *except, Client *sender, char *varname, char *value)
+void _broadcast_md_globalvar_cmd(Client *except, Client *sender, const char *varname, const char *value)
 {
 	if (value)
 	{
@@ -306,35 +339,35 @@ void _broadcast_md_globalvar_cmd(Client *except, Client *sender, char *varname, 
  
 void _broadcast_md_client(ModDataInfo *mdi, Client *client, ModData *md)
 {
-	char *value = md ? mdi->serialize(md) : NULL;
+	const char *value = md ? mdi->serialize(md) : NULL;
 
 	broadcast_md_client_cmd(NULL, &me, client, mdi->name, value);
 }
 
 void _broadcast_md_channel(ModDataInfo *mdi, Channel *channel, ModData *md)
 {
-	char *value = md ? mdi->serialize(md) : NULL;
+	const char *value = md ? mdi->serialize(md) : NULL;
 
 	broadcast_md_channel_cmd(NULL, &me, channel, mdi->name, value);
 }
 
 void _broadcast_md_member(ModDataInfo *mdi, Channel *channel, Member *m, ModData *md)
 {
-	char *value = md ? mdi->serialize(md) : NULL;
+	const char *value = md ? mdi->serialize(md) : NULL;
 
 	broadcast_md_member_cmd(NULL, &me, channel, m->client, mdi->name, value);
 }
 
 void _broadcast_md_membership(ModDataInfo *mdi, Client *client, Membership *m, ModData *md)
 {
-	char *value = md ? mdi->serialize(md) : NULL;
+	const char *value = md ? mdi->serialize(md) : NULL;
 
 	broadcast_md_membership_cmd(NULL, &me, client, m->channel, mdi->name, value);
 }
 
 void _broadcast_md_globalvar(ModDataInfo *mdi, ModData *md)
 {
-	char *value = md ? mdi->serialize(md) : NULL;
+	const char *value = md ? mdi->serialize(md) : NULL;
 
 	broadcast_md_globalvar_cmd(NULL, &me, mdi->name, value);
 }
@@ -348,10 +381,66 @@ void _send_moddata_client(Client *srv, Client *client)
 	{
 		if ((mdi->type == MODDATATYPE_CLIENT) && mdi->sync && mdi->serialize)
 		{
-			char *value = mdi->serialize(&moddata_client(client, mdi));
+			const char *value = mdi->serialize(&moddata_client(client, mdi));
 			if (value)
 				sendto_one(srv, NULL, ":%s MD %s %s %s :%s",
 					me.id, "client", client->id, mdi->name, value);
+		}
+	}
+}
+
+/** Enhance the command with moddata message tags, so we can send
+ * traffic like @s2s-md/certfp=xxxxx UID ....
+ */
+void _moddata_add_s2s_mtags(Client *client, MessageTag **mtags_list)
+{
+	ModDataInfo *mdi;
+	char name[128];
+
+	for (mdi = MDInfo; mdi; mdi = mdi->next)
+	{
+		if ((mdi->type == MODDATATYPE_CLIENT) && (mdi->sync == MODDATA_SYNC_EARLY) && mdi->serialize)
+		{
+			MessageTag *m;
+			const char *value = mdi->serialize(&moddata_client(client, mdi));
+			if (!value)
+				continue;
+			snprintf(name, sizeof(name), "s2s-md/%s", mdi->name);
+
+			m = safe_alloc(sizeof(MessageTag));
+			safe_strdup(m->name, name);
+			safe_strdup(m->value, value);
+			AddListItem(m, *mtags_list);
+		}
+	}
+}
+
+/** Extract the s2s-md/<moddataname> tags again from an incoming command,
+ * eg @s2s-md/certfp=xxxxx UID ....
+ */
+void _moddata_extract_s2s_mtags(Client *client, MessageTag *mtags)
+{
+	MessageTag *m;
+	ModDataInfo *md;
+
+	for (m = mtags; m; m = m->next)
+	{
+		if (!strncmp(m->name, "s2s-md/", 7))
+		{
+			char *varname = m->name + 7;
+			char *value = m->value;
+
+			if (!value)
+				continue;
+
+			md = findmoddata_byname(varname, MODDATATYPE_CLIENT);
+			if (!md || !md->unserialize)
+				continue;
+
+			if (!md_access_check(client, md, client))
+				return;
+
+			md->unserialize(value, &moddata_client(client, md));
 		}
 	}
 }
@@ -365,10 +454,10 @@ void _send_moddata_channel(Client *srv, Channel *channel)
 	{
 		if ((mdi->type == MODDATATYPE_CHANNEL) && mdi->sync && mdi->serialize)
 		{
-			char *value = mdi->serialize(&moddata_channel(channel, mdi));
+			const char *value = mdi->serialize(&moddata_channel(channel, mdi));
 			if (value)
 				sendto_one(srv, NULL, ":%s MD %s %s %s :%s",
-					me.id, "channel", channel->chname, mdi->name, value);
+					me.id, "channel", channel->name, mdi->name, value);
 		}
 	}
 }
@@ -392,10 +481,10 @@ void _send_moddata_members(Client *srv)
 			{
 				if ((mdi->type == MODDATATYPE_MEMBER) && mdi->sync && mdi->serialize)
 				{
-					char *value = mdi->serialize(&moddata_member(m, mdi));
+					const char *value = mdi->serialize(&moddata_member(m, mdi));
 					if (value)
 						sendto_one(srv, NULL, ":%s MD %s %s:%s %s :%s",
-							me.id, "member", channel->chname, client->id, mdi->name, value);
+							me.id, "member", channel->name, client->id, mdi->name, value);
 				}
 			}
 		}
@@ -416,10 +505,10 @@ void _send_moddata_members(Client *srv)
 			{
 				if ((mdi->type == MODDATATYPE_MEMBERSHIP) && mdi->sync && mdi->serialize)
 				{
-					char *value = mdi->serialize(&moddata_membership(m, mdi));
+					const char *value = mdi->serialize(&moddata_membership(m, mdi));
 					if (value)
 						sendto_one(srv, NULL, ":%s MD %s %s:%s %s :%s",
-							me.id, "membership", client->id, m->channel->chname, mdi->name, value);
+							me.id, "membership", client->id, m->channel->name, mdi->name, value);
 				}
 			}
 		}

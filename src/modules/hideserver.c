@@ -49,7 +49,7 @@ ModuleHeader MOD_HEADER
 	"5.0",
 	"Hide servers from /MAP & /LINKS",
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
     };
 
 static void InitConf()
@@ -95,10 +95,10 @@ MOD_INIT()
 
 MOD_LOAD()
 {
-	if (!CommandOverrideAdd(MyMod, "MAP", override_map))
+	if (!CommandOverrideAdd(MyMod, "MAP", 0, override_map))
 		return MOD_FAILED;
 
-	if (!CommandOverrideAdd(MyMod, "LINKS", override_links))
+	if (!CommandOverrideAdd(MyMod, "LINKS", 0, override_links))
 		return MOD_FAILED;
 
 	return MOD_SUCCESS;
@@ -118,35 +118,35 @@ static int cb_test(ConfigFile *cf, ConfigEntry *ce, int type, int *errs)
 
 	if (type == CONFIG_MAIN)
 	{
-		if (!strcmp(ce->ce_varname, "hideserver"))
+		if (!strcmp(ce->name, "hideserver"))
 		{
-			for (cep = ce->ce_entries; cep; cep = cep->ce_next)
+			for (cep = ce->items; cep; cep = cep->next)
 			{
-				if (!strcmp(cep->ce_varname, "hide"))
+				if (!strcmp(cep->name, "hide"))
 				{
 					/* No checking needed */
 				}
-				else if (!cep->ce_vardata)
+				else if (!cep->value)
 				{
 					config_error("%s:%i: %s::%s without value",
-						cep->ce_fileptr->cf_filename,
-						cep->ce_varlinenum,
-						ce->ce_varname, cep->ce_varname);
+						cep->file->filename,
+						cep->line_number,
+						ce->name, cep->name);
 					errors++;
 					continue;
 				}
-				else if (!strcmp(cep->ce_varname, "disable-map"))
+				else if (!strcmp(cep->name, "disable-map"))
 					;
-				else if (!strcmp(cep->ce_varname, "disable-links"))
+				else if (!strcmp(cep->name, "disable-links"))
 					;
-				else if (!strcmp(cep->ce_varname, "map-deny-message"))
+				else if (!strcmp(cep->name, "map-deny-message"))
 					;
-				else if (!strcmp(cep->ce_varname, "links-deny-message"))
+				else if (!strcmp(cep->name, "links-deny-message"))
 					;
 				else
 				{
 					config_error("%s:%i: unknown directive hideserver::%s",
-						cep->ce_fileptr->cf_filename, cep->ce_varlinenum, cep->ce_varname);
+						cep->file->filename, cep->line_number, cep->name);
 					errors++;
 				}
 			}
@@ -165,31 +165,31 @@ static int cb_conf(ConfigFile *cf, ConfigEntry *ce, int type)
 
 	if (type == CONFIG_MAIN)
 	{
-		if (!strcmp(ce->ce_varname, "hideserver"))
+		if (!strcmp(ce->name, "hideserver"))
 		{
-			for (cep = ce->ce_entries; cep; cep = cep->ce_next)
+			for (cep = ce->items; cep; cep = cep->next)
 			{
-				if (!strcmp(cep->ce_varname, "disable-map"))
-					Settings.disable_map = config_checkval(cep->ce_vardata, CFG_YESNO);
-				else if (!strcmp(cep->ce_varname, "disable-links"))
-					Settings.disable_links = config_checkval(cep->ce_vardata, CFG_YESNO);
-				else if (!strcmp(cep->ce_varname, "map-deny-message"))
+				if (!strcmp(cep->name, "disable-map"))
+					Settings.disable_map = config_checkval(cep->value, CFG_YESNO);
+				else if (!strcmp(cep->name, "disable-links"))
+					Settings.disable_links = config_checkval(cep->value, CFG_YESNO);
+				else if (!strcmp(cep->name, "map-deny-message"))
 				{
-					safe_strdup(Settings.map_deny_message, cep->ce_vardata);
+					safe_strdup(Settings.map_deny_message, cep->value);
 				}
-				else if (!strcmp(cep->ce_varname, "links-deny-message"))
+				else if (!strcmp(cep->name, "links-deny-message"))
 				{
-					safe_strdup(Settings.links_deny_message, cep->ce_vardata);
+					safe_strdup(Settings.links_deny_message, cep->value);
 				}
-				else if (!strcmp(cep->ce_varname, "hide"))
+				else if (!strcmp(cep->name, "hide"))
 				{
-					for (cepp = cep->ce_entries; cepp; cepp = cepp->ce_next)
+					for (cepp = cep->items; cepp; cepp = cepp->next)
 					{
-						if (!strcasecmp(cepp->ce_varname, me.name))
+						if (!strcasecmp(cepp->name, me.name))
 							continue;
 
 						ca = safe_alloc(sizeof(ConfigItem_ulines));
-						safe_strdup(ca->servername, cepp->ce_varname);
+						safe_strdup(ca->servername, cepp->name);
 						AddListItem(ca, HiddenServers);
 					}
 				}
@@ -231,7 +231,7 @@ static void dump_map(Client *client, Client *server, char *mask, int prompt_leng
 	else
 	{
 		sendnumeric(client, RPL_MAP, prompt,
-		            length, server->name, server->serv->users, IsOper(client) ? server->id : "");
+		            length, server->name, server->server->users, IsOper(client) ? server->id : "");
 		cnt = 0;
 	}
 
@@ -248,7 +248,7 @@ static void dump_map(Client *client, Client *server, char *mask, int prompt_leng
 
 	list_for_each_entry(acptr, &global_server_list, client_node)
 	{
-		if (acptr->srvptr != server ||
+		if (acptr->uplink != server ||
  		    (IsULine(acptr) && HIDE_ULINES && !ValidatePermissionsForPath("server:info:map:ulines",client,NULL,NULL,NULL)))
 			continue;
 		if (FindHiddenServer(acptr->name))
@@ -263,7 +263,7 @@ static void dump_map(Client *client, Client *server, char *mask, int prompt_leng
 			continue;
 		if (FindHiddenServer(acptr->name))
 			break;
-		if (acptr->srvptr != server)
+		if (acptr->uplink != server)
 			continue;
 		if (!IsMap(acptr))
 			continue;
@@ -284,7 +284,7 @@ void dump_flat_map(Client *client, Client *server, int length)
 
 	hide_ulines = (HIDE_ULINES && !ValidatePermissionsForPath("server:info:map:ulines",client,NULL,NULL,NULL)) ? 1 : 0;
 
-	sendnumeric(client, RPL_MAP, "", length, server->name, server->serv->users, "");
+	sendnumeric(client, RPL_MAP, "", length, server->name, server->server->users, "");
 
 	list_for_each_entry(acptr, &global_server_list, client_node)
 	{
@@ -304,7 +304,7 @@ void dump_flat_map(Client *client, Client *server, int length)
 			break;
 		if (--cnt == 0)
 			*buf = '`';
-		sendnumeric(client, RPL_MAP, buf, length-2, acptr->name, acptr->serv->users, "");
+		sendnumeric(client, RPL_MAP, buf, length-2, acptr->name, acptr->server->users, "");
 	}
 }
 
@@ -388,7 +388,7 @@ CMD_OVERRIDE_FUNC(override_links)
 			sendnumeric(client, RPL_LINKS, acptr->name, me.name,
 			    1, (acptr->info[0] ? acptr->info : "(Unknown Location)"));
 		else
-			sendnumeric(client, RPL_LINKS, acptr->name, acptr->serv->up,
+			sendnumeric(client, RPL_LINKS, acptr->name, acptr->uplink->name,
 			    acptr->hopcount, (acptr->info[0] ? acptr->info : "(Unknown Location)"));
 	}
 

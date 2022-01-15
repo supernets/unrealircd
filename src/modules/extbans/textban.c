@@ -61,30 +61,20 @@
 /** Which censor replace word to use when CENSORFEATURE is enabled. */
 #define CENSORWORD "<censored>"
 
-/** Benchmark mode.
- * Should never be used on production servers.
- * Mainly meant for debugging/profiling purposes for myself, but if you
- * have a test server and are curious about the speed of this module,
- * then you can enable it of course ;).
- */
-#undef BENCHMARK
-
-
 ModuleHeader MOD_HEADER
   = {
 	"extbans/textban",
 	"2.2",
 	"ExtBan ~T (textban) by Syzop",
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
     };
 
 /* Forward declarations */
-char *extban_modeT_conv_param(char *para_in);
-int textban_check_ban(Client *client, Channel *channel, char *ban, char **msg, char **errmsg);
-int textban_can_send_to_channel(Client *client, Channel *channel, Membership *lp, char **msg, char **errmsg, SendType sendtype);
-int extban_modeT_is_banned(Client *client, Channel *channel, char *ban, int type, char **msg, char **errmsg);
-int extban_modeT_is_ok(Client *client, Channel *channel, char *para, int checkt, int what, int what2);
+const char *extban_modeT_conv_param(BanContext *b, Extban *extban);
+int textban_check_ban(Client *client, Channel *channel, const char *ban, const char **msg, const char **errmsg);
+int textban_can_send_to_channel(Client *client, Channel *channel, Membership *lp, const char **msg, const char **errmsg, SendType sendtype);
+int extban_modeT_is_ok(BanContext *b);
 void parse_word(const char *s, char **word, int *type);
 
 MOD_INIT()
@@ -94,10 +84,10 @@ MOD_INIT()
 	MARK_AS_OFFICIAL_MODULE(modinfo);
 
 	memset(&req, 0, sizeof(ExtbanInfo));
-	req.flag = 'T';
+	req.letter = 'T';
+	req.name = "text";
 	req.options = EXTBOPT_NOSTACKCHILD; /* disallow things like ~n:~T, as we only affect text. */
 	req.conv_param = extban_modeT_conv_param;
-	req.is_banned = extban_modeT_is_banned;
 	req.is_ok = extban_modeT_is_ok;
 
 	if (!ExtbanAdd(modinfo->handle, req))
@@ -262,21 +252,21 @@ unsigned int counttextbans(Channel *channel)
 }
 
 
-int extban_modeT_is_ok(Client *client, Channel *channel, char *para, int checkt, int what, int what2)
+int extban_modeT_is_ok(BanContext *b)
 {
 	int n;
 
-	if ((what == MODE_ADD) && (what2 == EXBTYPE_EXCEPT) && MyUser(client))
+	if ((b->what == MODE_ADD) && (b->ban_type == EXBTYPE_EXCEPT) && MyUser(b->client))
 		return 0; /* except is not supported */
 
 	/* We check the # of bans in the channel, may not exceed MAX_EXTBANT_PER_CHAN */
-	if ((what == MODE_ADD) && (checkt == EXBCHK_PARAM) &&
-	     MyUser(client) && !IsOper(client) &&
-	    ((n = counttextbans(channel)) >= MAX_EXTBANT_PER_CHAN))
+	if ((b->what == MODE_ADD) && (b->is_ok_check == EXBCHK_PARAM) &&
+	     MyUser(b->client) && !IsOper(b->client) &&
+	    ((n = counttextbans(b->channel)) >= MAX_EXTBANT_PER_CHAN))
 	{
 		/* We check the # of bans in the channel, may not exceed MAX_EXTBANT_PER_CHAN */
-		sendnumeric(client, ERR_BANLISTFULL, channel->chname, para);
-		sendnotice(client, "Too many textbans for this channel");
+		sendnumeric(b->client, ERR_BANLISTFULL, b->channel->name, b->banstr); // FIXME: wants b->full_banstr here
+		sendnotice(b->client, "Too many textbans for this channel");
 		return 0;
 	}
 	return 1;
@@ -298,7 +288,7 @@ char *conv_pattern_asterisks(const char *pattern)
 }
 
 /** Ban callbacks */
-char *extban_modeT_conv_param(char *para_in)
+const char *extban_modeT_conv_param(BanContext *b, Extban *extban)
 {
 	static char retbuf[MAX_LENGTH+1];
 	char para[MAX_LENGTH+1], *action, *text, *p;
@@ -307,7 +297,7 @@ char *extban_modeT_conv_param(char *para_in)
 	int ap = 0;
 #endif
 
-	strlcpy(para, para_in+3, sizeof(para)); /* work on a copy (and truncate it) */
+	strlcpy(para, b->banstr, sizeof(para)); /* work on a copy (and truncate it) */
 
 	/* ~T:<action>:<text>
 	 * ~T:user@host:<action>:<text> if UHOSTFEATURE is enabled
@@ -380,26 +370,20 @@ char *extban_modeT_conv_param(char *para_in)
 
 	/* Rebuild the string.. can be cut off if too long. */
 #ifdef UHOSTFEATURE
-	snprintf(retbuf, sizeof(retbuf), "~T:%s:%s:%s", uhost, action, text);
+	snprintf(retbuf, sizeof(retbuf), "%s:%s:%s", uhost, action, text);
 #else
-	snprintf(retbuf, sizeof(retbuf), "~T:%s:%s", action, text);
+	snprintf(retbuf, sizeof(retbuf), "%s:%s", action, text);
 #endif
 	return retbuf;
 }
 
-/** This is the regular "is banned?" routine. We can't use this as we need to be called for voiced users as well */
-int extban_modeT_is_banned(Client *client, Channel *channel, char *ban, int checktype, char **msg, char **errmsg)
-{
-	return 0;
-}
-
 /** Check for text bans (censor and block) */
-int textban_can_send_to_channel(Client *client, Channel *channel, Membership *lp, char **msg, char **errmsg, SendType sendtype)
+int textban_can_send_to_channel(Client *client, Channel *channel, Membership *lp, const char **msg, const char **errmsg, SendType sendtype)
 {
 	Ban *ban;
 
 	/* +h/+o/+a/+q users bypass textbans */
-	if (is_skochanop(client, channel))
+	if (check_channel_access(client, channel, "hoaq"))
 		return HOOK_CONTINUE;
 
 	/* IRCOps with these privileges bypass textbans too */
@@ -409,21 +393,29 @@ int textban_can_send_to_channel(Client *client, Channel *channel, Membership *lp
 	/* Now we have to manually walk the banlist and check if things match */
 	for (ban = channel->banlist; ban; ban=ban->next)
 	{
-		if (!strncmp(ban->banstr, "~T:", 3))
+		char *banstr = ban->banstr;
+
+		/* Pretend time does not exist... */
+		if (!strncmp(banstr, "~t:", 3))
 		{
-			/* ~T ban */
-			if (textban_check_ban(client, channel, ban->banstr, msg, errmsg))
+			banstr = strchr(banstr+3, ':');
+			if (!banstr)
+				continue;
+			banstr++;
+		}
+		else if (!strncmp(banstr, "~time:", 6))
+		{
+			banstr = strchr(banstr+6, ':');
+			if (!banstr)
+				continue;
+			banstr++;
+		}
+
+		if (!strncmp(banstr, "~T:", 3) || !strncmp(banstr, "~text:", 6))
+		{
+			/* text ban */
+			if (textban_check_ban(client, channel, banstr, msg, errmsg))
 				return HOOK_DENY;
-		} else
-		if (!strncmp(ban->banstr, "~t:", 3))
-		{
-			/* Stacked ~t:xx:~T ban (timed text ban) */
-			char *p = strchr(ban->banstr+3, ':');
-			if (p && !strncmp(p+1, "~T:", 3))
-			{
-				if (textban_check_ban(client, channel, p+1, msg, errmsg))
-					return HOOK_DENY;
-			}
 		}
 	}
 
@@ -431,23 +423,18 @@ int textban_can_send_to_channel(Client *client, Channel *channel, Membership *lp
 }
 
 
-int textban_check_ban(Client *client, Channel *channel, char *ban, char **msg, char **errmsg)
+int textban_check_ban(Client *client, Channel *channel, const char *ban, const char **msg, const char **errmsg)
 {
 	static char retbuf[512];
 	char filtered[512]; /* temp input buffer */
 	long fl;
 	int cleaned=0;
-	char *p;
+	const char *p;
 #ifdef UHOSTFEATURE
 	char buf[512], uhost[USERLEN + HOSTLEN + 16];
 #endif
 	char tmp[1024], *word;
 	int type;
-#ifdef BENCHMARK
-	struct timeval tv_alpha, tv_beta;
-
-	gettimeofday(&tv_alpha, NULL);
-#endif
 
 	/* We can only filter on non-NULL text of course */
 	if ((msg == NULL) || (*msg == NULL))
@@ -460,7 +447,10 @@ int textban_check_ban(Client *client, Channel *channel, char *ban, char **msg, c
 #endif
 	strlcpy(filtered, StripControlCodes(*msg), sizeof(filtered));
 
-	p = ban + 3;
+	p = strchr(ban, ':');
+	if (!p)
+		return 0; /* "impossible" */
+	p++;
 #ifdef UHOSTFEATURE
 	/* First.. deal with userhost... */
 	strcpy(buf, p);
@@ -495,13 +485,6 @@ int textban_check_ban(Client *client, Channel *channel, char *ban, char **msg, c
 		}
 #endif
 	}
-
-#ifdef BENCHMARK
-	gettimeofday(&tv_beta, NULL);
-	ircd_log(LOG_ERROR, "TextBan Timing: %ld microseconds (%s / %s / %d)",
-		((tv_beta.tv_sec - tv_alpha.tv_sec) * 1000000) + (tv_beta.tv_usec - tv_alpha.tv_usec),
-		client->name, channel->chname, strlen(*msg));
-#endif
 
 	if (cleaned)
 	{

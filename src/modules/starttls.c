@@ -32,7 +32,7 @@ ModuleHeader MOD_HEADER
 	"5.0",
 	"command /starttls", 
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
     };
 
 long CLICAP_STARTTLS;
@@ -71,7 +71,7 @@ CMD_FUNC(cmd_starttls)
 	ctx = client->local->listener->ssl_ctx ? client->local->listener->ssl_ctx : ctx_server;
 	tls_options = client->local->listener->tls_options ? client->local->listener->tls_options->options : iConf.tls_options->options;
 
-	/* Is SSL support enabled? (may not, if failed to load cert/keys/..) */
+	/* This should never happen? */
 	if (!ctx)
 	{
 		/* Pretend STARTTLS is an unknown command, this is the safest approach */
@@ -97,14 +97,13 @@ CMD_FUNC(cmd_starttls)
 	send_queued(client);
 
 	SetStartTLSHandshake(client);
-	Debug((DEBUG_DEBUG, "Starting SSL handshake (due to STARTTLS) for %s", client->local->sockhost));
 	if ((client->local->ssl = SSL_new(ctx)) == NULL)
 		goto fail;
 	SetTLS(client);
 	SSL_set_fd(client->local->ssl, client->local->fd);
 	SSL_set_nonblocking(client->local->ssl);
-	if (!ircd_SSL_accept(client, client->local->fd)) {
-		Debug((DEBUG_DEBUG, "Failed SSL accept handshake in instance 1: %s", client->local->sockhost));
+	if (!unreal_tls_accept(client, client->local->fd))
+	{
 		SSL_set_shutdown(client->local->ssl, SSL_RECEIVED_SHUTDOWN);
 		SSL_smart_shutdown(client->local->ssl);
 		SSL_free(client->local->ssl);

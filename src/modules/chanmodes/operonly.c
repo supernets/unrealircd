@@ -27,15 +27,15 @@ ModuleHeader MOD_HEADER
 	"4.2",
 	"Channel Mode +O",
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
     };
 
 Cmode_t EXTCMODE_OPERONLY;
 
-int operonly_require_oper(Client *client, Channel *channel, char mode, char *para, int checkt, int what);
-int operonly_check (Client *client, Channel *channel, char *key, char *parv[]);
-int operonly_topic_allow (Client *client, Channel *channel);
-int operonly_check_ban(Client *client, Channel *channel);
+int operonly_require_oper(Client *client, Channel *channel, char mode, const char *para, int checkt, int what);
+int operonly_can_join(Client *client, Channel *channel, const char *key, char **errmsg);
+int operonly_view_topic_outside_channel(Client *client, Channel *channel);
+int operonly_oper_invite_ban(Client *client, Channel *channel);
 
 MOD_TEST()
 {
@@ -48,13 +48,13 @@ CmodeInfo req;
 
 	memset(&req, 0, sizeof(req));
 	req.paracount = 0;
-	req.flag = 'O';
+	req.letter = 'O';
 	req.is_ok = operonly_require_oper;
 	CmodeAdd(modinfo->handle, req, &EXTCMODE_OPERONLY);
 	
-	HookAdd(modinfo->handle, HOOKTYPE_CAN_JOIN, 0, operonly_check);
-	HookAdd(modinfo->handle, HOOKTYPE_OPER_INVITE_BAN, 0, operonly_check_ban);
-	HookAdd(modinfo->handle, HOOKTYPE_VIEW_TOPIC_OUTSIDE_CHANNEL, 0, operonly_topic_allow);
+	HookAdd(modinfo->handle, HOOKTYPE_CAN_JOIN, 0, operonly_can_join);
+	HookAdd(modinfo->handle, HOOKTYPE_OPER_INVITE_BAN, 0, operonly_oper_invite_ban);
+	HookAdd(modinfo->handle, HOOKTYPE_VIEW_TOPIC_OUTSIDE_CHANNEL, 0, operonly_view_topic_outside_channel);
 
 	
 	MARK_AS_OFFICIAL_MODULE(modinfo);
@@ -71,31 +71,34 @@ MOD_UNLOAD()
 	return MOD_SUCCESS;
 }
 
-int operonly_check (Client *client, Channel *channel, char *key, char *parv[])
+int operonly_can_join(Client *client, Channel *channel, const char *key, char **errmsg)
 {
-	if ((channel->mode.extmode & EXTCMODE_OPERONLY) && !ValidatePermissionsForPath("channel:operonly:join",client,NULL,channel,NULL))
+	if ((channel->mode.mode & EXTCMODE_OPERONLY) && !ValidatePermissionsForPath("channel:operonly:join",client,NULL,channel,NULL))
+	{
+		*errmsg = STR_ERR_OPERONLY;
 		return ERR_OPERONLY;
+	}
 	return 0;
 }
 
-int operonly_check_ban(Client *client, Channel *channel)
+int operonly_oper_invite_ban(Client *client, Channel *channel)
 {
-	 if ((channel->mode.extmode & EXTCMODE_OPERONLY) &&
+	 if ((channel->mode.mode & EXTCMODE_OPERONLY) &&
 		    !ValidatePermissionsForPath("channel:operonly:ban",client,NULL,NULL,NULL))
 		 return HOOK_DENY;
 
 	 return HOOK_CONTINUE;
 }
 
-int operonly_topic_allow (Client *client, Channel *channel)
+int operonly_view_topic_outside_channel(Client *client, Channel *channel)
 {
-	if (channel->mode.extmode & EXTCMODE_OPERONLY && !ValidatePermissionsForPath("channel:operonly:topic",client,NULL,channel,NULL))
+	if (channel->mode.mode & EXTCMODE_OPERONLY && !ValidatePermissionsForPath("channel:operonly:topic",client,NULL,channel,NULL))
 		return HOOK_DENY;
 
 	return HOOK_CONTINUE;
 }
 
-int operonly_require_oper(Client *client, Channel *channel, char mode, char *para, int checkt, int what)
+int operonly_require_oper(Client *client, Channel *channel, char mode, const char *para, int checkt, int what)
 {
 	if (!MyUser(client) || ValidatePermissionsForPath("channel:operonly:set",client,NULL,channel,NULL))
 		return EX_ALLOW;

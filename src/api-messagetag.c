@@ -52,15 +52,21 @@ MessageTagHandler *MessageTagHandlerAdd(Module *module, MessageTagHandlerInfo *m
 	/* Some consistency checks to avoid a headache for module devs later on: */
 	if ((mreq->flags & MTAG_HANDLER_FLAGS_NO_CAP_NEEDED) && mreq->clicap_handler)
 	{
-		ircd_log(LOG_ERROR, "MessageTagHandlerAdd(): .flags is set to MTAG_HANDLER_FLAGS_NO_CAP_NEEDED "
-		                    "but a .clicap_handler is passed as well. These options are mutually "
-		                    "exclusive, choose one or the other.");
+		unreal_log(ULOG_ERROR, "module", "MESSAGETAGHANDLERADD_API_ERROR", NULL,
+			   "MessageTagHandlerAdd() from module $module_name: "
+			   ".flags is set to MTAG_HANDLER_FLAGS_NO_CAP_NEEDED "
+			   "but a .clicap_handler is passed as well. These options are mutually "
+			   "exclusive, choose one or the other.",
+			   log_data_string("module_name", module->header->name));
 		abort();
 	} else if (!(mreq->flags & MTAG_HANDLER_FLAGS_NO_CAP_NEEDED) && !mreq->clicap_handler)
 	{
-		ircd_log(LOG_ERROR, "MessageTagHandlerAdd(): no .clicap_handler is passed. If the "
-		                    "message tag really does not require a cap then you must "
-		                    "set .flags to MTAG_HANDLER_FLAGS_NO_CAP_NEEDED");
+		unreal_log(ULOG_ERROR, "module", "MESSAGETAGHANDLERADD_API_ERROR", NULL,
+			   "MessageTagHandlerAdd() from module $module_name: "
+			   "no .clicap_handler is passed. If the "
+		           "message tag really does not require a cap then you must "
+		           "set .flags to MTAG_HANDLER_FLAGS_NO_CAP_NEEDED",
+		           log_data_string("module_name", module->header->name));
 		abort();
 	}
 
@@ -85,7 +91,7 @@ MessageTagHandler *MessageTagHandlerAdd(Module *module, MessageTagHandlerInfo *m
 	m->owner = module;
 	m->flags = mreq->flags;
 	m->is_ok = mreq->is_ok;
-	m->can_send = mreq->can_send;
+	m->should_send_to_client = mreq->should_send_to_client;
 	m->clicap_handler = mreq->clicap_handler;
 
 	/* Update reverse dependency (if any) */
@@ -141,7 +147,7 @@ void MessageTagHandlerDel(MessageTagHandler *m)
 		m->owner = NULL;
 	}
 
-	if (loop.ircd_rehashing)
+	if (loop.rehashing)
 		m->unloaded = 1;
 	else
 		unload_mtag_handler_commit(m);
@@ -152,8 +158,9 @@ void MessageTagHandlerDel(MessageTagHandler *m)
 static void unload_mtag_handler_commit(MessageTagHandler *m)
 {
 	/* This is an unusual operation, I think we should log it. */
-	ircd_log(LOG_ERROR, "Unloading message-tag handler for '%s'", m->name);
-	sendto_realops("Unloading message-tag handler for '%s'", m->name);
+	unreal_log(ULOG_INFO, "module", "UNLOAD_MESSAGE_TAG", NULL,
+	           "Unloading message-tag handler for '$token'",
+	           log_data_string("token", m->name));
 
 	/* Remove reverse dependency, if any */
 	if (m->clicap_handler)

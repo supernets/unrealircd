@@ -28,14 +28,14 @@ ModuleHeader MOD_HEADER
 	"5.0",
 	"server-time CAP",
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
 	};
 
 /* Variables */
 long CAP_SERVER_TIME = 0L;
 
-int server_time_mtag_is_ok(Client *client, char *name, char *value);
-void mtag_add_or_inherit_time(Client *sender, MessageTag *recv_mtags, MessageTag **mtag_list, char *signature);
+int server_time_mtag_is_ok(Client *client, const char *name, const char *value);
+void mtag_add_or_inherit_time(Client *sender, MessageTag *recv_mtags, MessageTag **mtag_list, const char *signature);
 
 MOD_INIT()
 {
@@ -75,7 +75,7 @@ MOD_UNLOAD()
  * syntax.
  * We simply allow server-time ONLY from servers.
  */
-int server_time_mtag_is_ok(Client *client, char *name, char *value)
+int server_time_mtag_is_ok(Client *client, const char *name, const char *value)
 {
 	if (IsServer(client) && !BadPtr(value))
 		return 1;
@@ -83,7 +83,7 @@ int server_time_mtag_is_ok(Client *client, char *name, char *value)
 	return 0;
 }
 
-void mtag_add_or_inherit_time(Client *sender, MessageTag *recv_mtags, MessageTag **mtag_list, char *signature)
+void mtag_add_or_inherit_time(Client *sender, MessageTag *recv_mtags, MessageTag **mtag_list, const char *signature)
 {
 	MessageTag *m = find_mtag(recv_mtags, "time");
 	if (m)

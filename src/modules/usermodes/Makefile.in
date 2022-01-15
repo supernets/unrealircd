@@ -25,19 +25,22 @@ INCLUDES = ../../include/channel.h \
 	../../include/ircsprintf.h \
 	../../include/license.h \
 	../../include/modules.h ../../include/modversion.h ../../include/msg.h \
-	../../include/numeric.h ../../include/proto.h ../../include/dns.h \
+	../../include/numeric.h ../../include/dns.h \
 	../../include/resource.h ../../include/setup.h \
 	../../include/struct.h ../../include/sys.h \
-	../../include/types.h ../../include/url.h \
+	../../include/types.h \
 	../../include/version.h ../../include/whowas.h
 
 R_MODULES=\
 	noctcp.so censor.so bot.so showwhois.so nokick.so servicebot.so \
-	privacy.so regonlymsg.so secureonlymsg.so privdeaf.so
+	privacy.so regonlymsg.so secureonlymsg.so privdeaf.so wallops.so
 
 MODULES=$(R_MODULES)
 MODULEFLAGS=@MODULEFLAGS@
 RM=@RM@
+
+.SUFFIXES:
+.SUFFIXES: .c .h .so
 
 all: build
 
@@ -46,46 +49,6 @@ build: $(MODULES)
 clean:
 	$(RM) -f *.o *.so *~ core
 
-#############################################################################
-#             .so's section
-#############################################################################
-
-noctcp.so: noctcp.c $(INCLUDES)
+%.so: %.c $(INCLUDES)
 	$(CC) $(CFLAGS) $(MODULEFLAGS) -DDYNAMIC_LINKING \
-		-o noctcp.so noctcp.c
-
-censor.so: censor.c $(INCLUDES)
-	$(CC) $(CFLAGS) $(MODULEFLAGS) -DDYNAMIC_LINKING \
-		-o censor.so censor.c
-
-bot.so: bot.c $(INCLUDES)
-	$(CC) $(CFLAGS) $(MODULEFLAGS) -DDYNAMIC_LINKING \
-		-o bot.so bot.c
-
-showwhois.so: showwhois.c $(INCLUDES)
-	$(CC) $(CFLAGS) $(MODULEFLAGS) -DDYNAMIC_LINKING \
-		-o showwhois.so showwhois.c
-
-nokick.so: nokick.c $(INCLUDES)
-	$(CC) $(CFLAGS) $(MODULEFLAGS) -DDYNAMIC_LINKING \
-		-o nokick.so nokick.c
-
-servicebot.so: servicebot.c $(INCLUDES)
-	$(CC) $(CFLAGS) $(MODULEFLAGS) -DDYNAMIC_LINKING \
-		-o servicebot.so servicebot.c
-
-privacy.so: privacy.c $(INCLUDES)
-	$(CC) $(CFLAGS) $(MODULEFLAGS) -DDYNAMIC_LINKING \
-		-o privacy.so privacy.c
-
-regonlymsg.so: regonlymsg.c $(INCLUDES)
-	$(CC) $(CFLAGS) $(MODULEFLAGS) -DDYNAMIC_LINKING \
-		-o regonlymsg.so regonlymsg.c
-
-secureonlymsg.so: secureonlymsg.c $(INCLUDES)
-	$(CC) $(CFLAGS) $(MODULEFLAGS) -DDYNAMIC_LINKING \
-		-o secureonlymsg.so secureonlymsg.c
-
-privdeaf.so: privdeaf.c $(INCLUDES)
-	$(CC) $(CFLAGS) $(MODULEFLAGS) -DDYNAMIC_LINKING \
-		-o privdeaf.so privdeaf.c
+		-o $@ $<

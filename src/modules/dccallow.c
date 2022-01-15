@@ -32,7 +32,7 @@ ModuleHeader MOD_HEADER
 	"5.0",
 	"command /dccallow", 
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
     };
 
 MOD_INIT()
@@ -59,6 +59,7 @@ MOD_UNLOAD()
  */
 CMD_FUNC(cmd_dccallow)
 {
+	char request[BUFSIZE];
 	Link *lp;
 	char *p, *s;
 	Client *friend;
@@ -92,7 +93,8 @@ CMD_FUNC(cmd_dccallow)
 		return;
 	}
 
-	for (p = NULL, s = strtoken(&p, parv[1], ", "); s; s = strtoken(&p, NULL, ", "))
+	strlcpy(request, parv[1], sizeof(request));
+	for (p = NULL, s = strtoken(&p, request, ", "); s; s = strtoken(&p, NULL, ", "))
 	{
 		if (MyUser(client) && (++ntargets > maxtargets))
 		{
@@ -105,7 +107,7 @@ CMD_FUNC(cmd_dccallow)
 			if (!*++s)
 				continue;
 			
-			friend = find_person(s, NULL);
+			friend = find_user(s, NULL);
 			
 			if (friend == client)
 				continue;
@@ -123,7 +125,7 @@ CMD_FUNC(cmd_dccallow)
 			if (!*++s)
 				continue;
 			
-			friend = find_person(s, NULL);
+			friend = find_user(s, NULL);
 			if (friend == client)
 				continue;
 			if (!friend)
@@ -243,8 +245,11 @@ int del_dccallow(Client *client, Client *optr)
 		}
 	}
 	if (!found)
-		sendto_realops("[BUG!] %s was in dccallowme list of %s but not in dccallowrem list!",
-			optr->name, client->name);
+	{
+		unreal_log(ULOG_WARNING, "dccallow", "BUG_DCCALLOW", client,
+		           "[BUG] DCCALLOW list for $client did not contain $target",
+		           log_data_client("target", optr));
+	}
 
 	sendnumeric(client, RPL_DCCSTATUS, optr->name, "removed from");
 

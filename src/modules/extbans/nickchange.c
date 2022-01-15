@@ -24,21 +24,24 @@ ModuleHeader MOD_HEADER
 	"4.2",
 	"ExtBan ~n - prevent nick-changes only",
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
 };
 
 /* Forward declarations */
-int extban_nickchange_is_banned(Client *client, Channel *channel, char *banin, int type, char **msg, char **errmsg);
+int extban_nickchange_is_banned(BanContext *b);
 
 /** Called upon module init */
 MOD_INIT()
 {
 	ExtbanInfo req;
 	
-	req.flag = 'n';
+	memset(&req, 0, sizeof(req));
+	req.letter = 'n';
+	req.name = "nickchange";
 	req.is_ok = extban_is_ok_nuh_extban;
 	req.conv_param = extban_conv_param_nuh_or_extban;
 	req.is_banned = extban_nickchange_is_banned;
+	req.is_banned_events = BANCHK_NICK;
 	req.options = EXTBOPT_ACTMODIFIER;
 	if (!ExtbanAdd(modinfo->handle, req))
 	{
@@ -64,18 +67,10 @@ MOD_UNLOAD()
 }
 
 /** This ban that affects nick-changes only */
-int extban_nickchange_is_banned(Client *client, Channel *channel, char *banin, int type, char **msg, char **errmsg)
+int extban_nickchange_is_banned(BanContext *b)
 {
-	char *sub_ban;
-
-	if (type != BANCHK_NICK)
+	if (check_channel_access(b->client, b->channel, "v"))
 		return 0;
 
-	if (has_voice(client, channel))
-		return 0;
-
-	sub_ban = banin + 3;
-
-	return ban_check_mask(client, channel, sub_ban, type, msg, errmsg, 0);
+	return ban_check_mask(b);
 }
-

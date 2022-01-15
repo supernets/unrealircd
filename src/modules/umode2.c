@@ -32,7 +32,7 @@ ModuleHeader MOD_HEADER
 	"5.0",
 	"command /umode2", 
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
     };
 
 MOD_INIT()
@@ -60,7 +60,7 @@ MOD_UNLOAD()
 
 CMD_FUNC(cmd_umode2)
 {
-	char *xparv[5] = {
+	const char *xparv[5] = {
 		client->name,
 		client->name,
 		parv[1],

@@ -19,8 +19,13 @@ if [ ! -d ~/cipherscan ]; then
 	git clone -q https://github.com/mozilla/cipherscan
 fi
 
+if [ "$HOSTNAME" = "deb8" ]; then
+	echo "Not running tests on Debian 8. It's LTS is EOL and trouble with running tests."
+	exit 0
+fi
+
 # Install 'unrealircd-tests'
-git clone -q https://github.com/unrealircd/unrealircd-tests.git
+git clone -q --branch unreal60 https://github.com/unrealircd/unrealircd-tests.git unrealircd-tests
 cd unrealircd-tests
 
 # FreeBSD has various issues with the tests from us and others,

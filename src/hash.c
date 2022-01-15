@@ -260,11 +260,9 @@ void siphash_generate_key(char *k)
 static struct list_head clientTable[NICK_HASH_TABLE_SIZE];
 static struct list_head idTable[NICK_HASH_TABLE_SIZE];
 static Channel *channelTable[CHAN_HASH_TABLE_SIZE];
-static Watch *watchTable[WATCH_HASH_TABLE_SIZE];
 
 static char siphashkey_nick[SIPHASH_KEY_LENGTH];
 static char siphashkey_chan[SIPHASH_KEY_LENGTH];
-static char siphashkey_watch[SIPHASH_KEY_LENGTH];
 static char siphashkey_whowas[SIPHASH_KEY_LENGTH];
 static char siphashkey_throttling[SIPHASH_KEY_LENGTH];
 
@@ -277,7 +275,6 @@ void init_hash(void)
 
 	siphash_generate_key(siphashkey_nick);
 	siphash_generate_key(siphashkey_chan);
-	siphash_generate_key(siphashkey_watch);
 	siphash_generate_key(siphashkey_whowas);
 	siphash_generate_key(siphashkey_throttling);
 
@@ -288,7 +285,6 @@ void init_hash(void)
 		INIT_LIST_HEAD(&idTable[i]);
 
 	memset(channelTable, 0, sizeof(channelTable));
-	memset(watchTable, 0, sizeof(watchTable));
 
 	memset(ThrottlingHash, 0, sizeof(ThrottlingHash));
 	/* do not call init_throttling() here, as
@@ -310,11 +306,6 @@ uint64_t hash_channel_name(const char *name)
 	return siphash_nocase(name, siphashkey_chan) % CHAN_HASH_TABLE_SIZE;
 }
 
-uint64_t hash_watch_nick_name(const char *name)
-{
-	return siphash_nocase(name, siphashkey_watch) % WATCH_HASH_TABLE_SIZE;
-}
-
 uint64_t hash_whowas_name(const char *name)
 {
 	return siphash_nocase(name, siphashkey_whowas) % WHOWAS_HASH_TABLE_SIZE;
@@ -323,7 +314,7 @@ uint64_t hash_whowas_name(const char *name)
 /*
  * add_to_client_hash_table
  */
-int add_to_client_hash_table(char *name, Client *client)
+int add_to_client_hash_table(const char *name, Client *client)
 {
 	unsigned int hashv;
 	/*
@@ -349,7 +340,7 @@ int add_to_client_hash_table(char *name, Client *client)
 /*
  * add_to_client_hash_table
  */
-int add_to_id_hash_table(char *name, Client *client)
+int add_to_id_hash_table(const char *name, Client *client)
 {
 	unsigned int hashv;
 	hashv = hash_client_name(name);
@@ -360,7 +351,7 @@ int add_to_id_hash_table(char *name, Client *client)
 /*
  * add_to_channel_hash_table
  */
-int add_to_channel_hash_table(char *name, Channel *channel)
+int add_to_channel_hash_table(const char *name, Channel *channel)
 {
 	unsigned int hashv;
 
@@ -372,7 +363,7 @@ int add_to_channel_hash_table(char *name, Channel *channel)
 /*
  * del_from_client_hash_table
  */
-int del_from_client_hash_table(char *name, Client *client)
+int del_from_client_hash_table(const char *name, Client *client)
 {
 	if (!list_empty(&client->client_hash))
 		list_del(&client->client_hash);
@@ -382,7 +373,7 @@ int del_from_client_hash_table(char *name, Client *client)
 	return 0;
 }
 
-int del_from_id_hash_table(char *name, Client *client)
+int del_from_id_hash_table(const char *name, Client *client)
 {
 	if (!list_empty(&client->id_hash))
 		list_del(&client->id_hash);
@@ -395,7 +386,7 @@ int del_from_id_hash_table(char *name, Client *client)
 /*
  * del_from_channel_hash_table
  */
-void del_from_channel_hash_table(char *name, Channel *channel)
+void del_from_channel_hash_table(const char *name, Channel *channel)
 {
 	Channel *tmp, *prev = NULL;
 	unsigned int hashv;
@@ -465,7 +456,7 @@ Client *hash_find_nickatserver(const char *str, Client *def)
 	if (serv)
 		*serv++ = '\0';
 
-	client = find_person(nick, NULL);
+	client = find_user(nick, NULL);
 	if (!client)
 		return NULL; /* client not found */
 	
@@ -509,14 +500,14 @@ Client *hash_find_server(const char *server, Client *def)
 
 /** Find a client by name.
  * This searches in the list of all types of clients, user/person, servers or an unregistered clients.
- * If you know what type of client to search for, then use find_server() or find_person() instead!
+ * If you know what type of client to search for, then use find_server() or find_user() instead!
  * @param name        The name to search for (eg: "nick" or "irc.example.net")
  * @param requester   The client that is searching for this name
  * @note  If 'requester' is a server or NULL, then we also check
  *        the ID table, otherwise not.
  * @returns If the client is found then the Client is returned, otherwise NULL.
  */
-Client *find_client(char *name, Client *requester)
+Client *find_client(const char *name, Client *requester)
 {
 	if (requester == NULL || IsServer(requester))
 	{
@@ -537,7 +528,7 @@ Client *find_client(char *name, Client *requester)
  *        the ID table, otherwise not.
  * @returns If the server is found then the Client is returned, otherwise NULL.
  */
-Client *find_server(char *name, Client *requester)
+Client *find_server(const char *name, Client *requester)
 {
 	if (name)
 	{
@@ -550,14 +541,14 @@ Client *find_server(char *name, Client *requester)
 	return NULL;
 }
 
-/** Find a person (a user).
+/** Find a user (a person)
  * @param name        The name to search for (eg: "nick" or "001ABCDEFG")
  * @param requester   The client that is searching for this name
  * @note  If 'requester' is a server or NULL, then we also check
  *        the ID table, otherwise not.
  * @returns If the user is found then the Client is returned, otherwise NULL.
  */
-Client *find_person(char *name, Client *requester) /* TODO: this should have been called find_user() to be consistent */
+Client *find_user(const char *name, Client *requester)
 {
 	Client *c2ptr;
 
@@ -572,22 +563,20 @@ Client *find_person(char *name, Client *requester) /* TODO: this should have bee
 
 /** Find a channel by name.
  * @param name			The channel name to search for
- * @param default_result	If the channel is not found, this value is returned.
- * @returns If the channel exists then the Channel is returned, otherwise default_result is returned.
+ * @returns If the channel exists then the Channel is returned, otherwise NULL.
  */
-Channel *find_channel(char *name, Channel *default_result)
+Channel *find_channel(const char *name)
 {
 	unsigned int hashv;
-	Channel *tmp;
+	Channel *channel;
 
 	hashv = hash_channel_name(name);
 
-	for (tmp = channelTable[hashv]; tmp; tmp = tmp->hnextch)
-	{
-		if (smycmp(name, tmp->chname) == 0)
-			return tmp;
-	}
-	return default_result;
+	for (channel = channelTable[hashv]; channel; channel = channel->hnextch)
+		if (smycmp(name, channel->name) == 0)
+			return channel;
+
+	return NULL;
 }
 
 /** @} */
@@ -597,303 +586,6 @@ Channel *hash_get_chan_bucket(uint64_t hashv)
 	if (hashv > CHAN_HASH_TABLE_SIZE)
 		return NULL;
 	return channelTable[hashv];
-}
-
-void  count_watch_memory(int *count, u_long *memory)
-{
-	int i = WATCH_HASH_TABLE_SIZE;
-	Watch *anptr;
-
-	while (i--)
-	{
-		anptr = watchTable[i];
-		while (anptr)
-		{
-			(*count)++;
-			(*memory) += sizeof(Watch)+strlen(anptr->nick);
-			anptr = anptr->hnext;
-		}
-	}
-}
-
-/*
- * add_to_watch_hash_table
- */
-int add_to_watch_hash_table(char *nick, Client *client, int awaynotify)
-{
-	unsigned int hashv;
-	Watch  *anptr;
-	Link  *lp;
-	
-	
-	/* Get the right bucket... */
-	hashv = hash_watch_nick_name(nick);
-	
-	/* Find the right nick (header) in the bucket, or NULL... */
-	if ((anptr = (Watch *)watchTable[hashv]))
-	  while (anptr && mycmp(anptr->nick, nick))
-		 anptr = anptr->hnext;
-	
-	/* If found NULL (no header for this nick), make one... */
-	if (!anptr) {
-		anptr = (Watch *)safe_alloc(sizeof(Watch)+strlen(nick));
-		anptr->lasttime = timeofday;
-		strcpy(anptr->nick, nick);
-		
-		anptr->watch = NULL;
-		
-		anptr->hnext = watchTable[hashv];
-		watchTable[hashv] = anptr;
-	}
-	/* Is this client already on the watch-list? */
-	if ((lp = anptr->watch))
-	  while (lp && (lp->value.client != client))
-		 lp = lp->next;
-	
-	/* No it isn't, so add it in the bucket and client addint it */
-	if (!lp) {
-		lp = anptr->watch;
-		anptr->watch = make_link();
-		anptr->watch->value.client = client;
-		anptr->watch->flags = awaynotify;
-		anptr->watch->next = lp;
-		
-		lp = make_link();
-		lp->next = client->local->watch;
-		lp->value.wptr = anptr;
-		lp->flags = awaynotify;
-		client->local->watch = lp;
-		client->local->watches++;
-	}
-	
-	return 0;
-}
-
-/*
- *  hash_check_watch
- */
-int hash_check_watch(Client *client, int reply)
-{
-	unsigned int hashv;
-	Watch  *anptr;
-	Link  *lp;
-	int awaynotify = 0;
-	
-	if ((reply == RPL_GONEAWAY) || (reply == RPL_NOTAWAY) || (reply == RPL_REAWAY))
-		awaynotify = 1;
-
-	/* Get us the right bucket */
-	hashv = hash_watch_nick_name(client->name);
-	
-	/* Find the right header in this bucket */
-	if ((anptr = (Watch *)watchTable[hashv]))
-	  while (anptr && mycmp(anptr->nick, client->name))
-		 anptr = anptr->hnext;
-	if (!anptr)
-	  return 0;   /* This nick isn't on watch */
-	
-	/* Update the time of last change to item */
-	anptr->lasttime = TStime();
-	
-	/* Send notifies out to everybody on the list in header */
-	for (lp = anptr->watch; lp; lp = lp->next)
-	{
-		if (!awaynotify)
-		{
-			sendnumeric(lp->value.client, reply,
-			    client->name,
-			    (IsUser(client) ? client->user->username : "<N/A>"),
-			    (IsUser(client) ?
-			    (IsHidden(client) ? client->user->virthost : client->
-			    user->realhost) : "<N/A>"), anptr->lasttime, client->info);
-		}
-		else
-		{
-			/* AWAY or UNAWAY */
-			if (!lp->flags)
-				continue; /* skip away/unaway notification for users not interested in them */
-
-			if (reply == RPL_NOTAWAY)
-				sendnumeric(lp->value.client, reply,
-				    client->name,
-				    (IsUser(client) ? client->user->username : "<N/A>"),
-				    (IsUser(client) ?
-				    (IsHidden(client) ? client->user->virthost : client->
-				    user->realhost) : "<N/A>"), client->user->lastaway);
-			else /* RPL_GONEAWAY / RPL_REAWAY */
-				sendnumeric(lp->value.client, reply,
-				    client->name,
-				    (IsUser(client) ? client->user->username : "<N/A>"),
-				    (IsUser(client) ?
-				    (IsHidden(client) ? client->user->virthost : client->
-				    user->realhost) : "<N/A>"), client->user->lastaway, client->user->away);
-		}
-	}
-	
-	return 0;
-}
-
-/*
- * hash_get_watch
- */
-Watch  *hash_get_watch(char *nick)
-{
-	unsigned int hashv;
-	Watch  *anptr;
-	
-	hashv = hash_watch_nick_name(nick);
-	
-	if ((anptr = (Watch *)watchTable[hashv]))
-	  while (anptr && mycmp(anptr->nick, nick))
-		 anptr = anptr->hnext;
-	
-	return anptr;
-}
-
-/*
- * del_from_watch_hash_table
- */
-int del_from_watch_hash_table(char *nick, Client *client)
-{
-	unsigned int hashv;
-	Watch  *anptr, *nlast = NULL;
-	Link  *lp, *last = NULL;
-
-	/* Get the bucket for this nick... */
-	hashv = hash_watch_nick_name(nick);
-	
-	/* Find the right header, maintaining last-link pointer... */
-	if ((anptr = (Watch *)watchTable[hashv]))
-	  while (anptr && mycmp(anptr->nick, nick)) {
-		  nlast = anptr;
-		  anptr = anptr->hnext;
-	  }
-	if (!anptr)
-	  return 0;   /* No such watch */
-	
-	/* Find this client from the list of notifies... with last-ptr. */
-	if ((lp = anptr->watch))
-	  while (lp && (lp->value.client != client)) {
-		  last = lp;
-		  lp = lp->next;
-	  }
-	if (!lp)
-	  return 0;   /* No such client to watch */
-	
-	/* Fix the linked list under header, then remove the watch entry */
-	if (!last)
-	  anptr->watch = lp->next;
-	else
-	  last->next = lp->next;
-	free_link(lp);
-	
-	/* Do the same regarding the links in client-record... */
-	last = NULL;
-	if ((lp = client->local->watch))
-	  while (lp && (lp->value.wptr != anptr)) {
-		  last = lp;
-		  lp = lp->next;
-	  }
-	
-	/*
-	 * Give error on the odd case... probobly not even neccessary
-	 * No error checking in ircd is unneccessary ;) -Cabal95
-	 */
-	if (!lp)
-	  sendto_ops("WATCH debug error: del_from_watch_hash_table "
-					 "found a watch entry with no client "
-					 "counterpoint processing nick %s on client %p!",
-					 nick, client->user);
-	else {
-		if (!last) /* First one matched */
-		  client->local->watch = lp->next;
-		else
-		  last->next = lp->next;
-		free_link(lp);
-	}
-	/* In case this header is now empty of notices, remove it */
-	if (!anptr->watch) {
-		if (!nlast)
-		  watchTable[hashv] = anptr->hnext;
-		else
-		  nlast->hnext = anptr->hnext;
-		safe_free(anptr);
-	}
-	
-	/* Update count of notifies on nick */
-	client->local->watches--;
-	
-	return 0;
-}
-
-/*
- * hash_del_watch_list
- */
-int   hash_del_watch_list(Client *client)
-{
-	unsigned int   hashv;
-	Watch  *anptr;
-	Link  *np, *lp, *last;
-	
-	
-	if (!(np = client->local->watch))
-	  return 0;   /* Nothing to do */
-	
-	client->local->watch = NULL; /* Break the watch-list for client */
-	while (np) {
-		/* Find the watch-record from hash-table... */
-		anptr = np->value.wptr;
-		last = NULL;
-		for (lp = anptr->watch; lp && (lp->value.client != client);
-			  lp = lp->next)
-		  last = lp;
-		
-		/* Not found, another "worst case" debug error */
-		if (!lp)
-		  sendto_ops("WATCH Debug error: hash_del_watch_list "
-						 "found a WATCH entry with no table "
-						 "counterpoint processing client %s!",
-						 client->name);
-		else {
-			/* Fix the watch-list and remove entry */
-			if (!last)
-			  anptr->watch = lp->next;
-			else
-			  last->next = lp->next;
-			free_link(lp);
-			
-			/*
-			 * If this leaves a header without notifies,
-			 * remove it. Need to find the last-pointer!
-			 */
-			if (!anptr->watch) {
-				Watch  *np2, *nl;
-				
-				hashv = hash_watch_nick_name(anptr->nick);
-				
-				nl = NULL;
-				np2 = watchTable[hashv];
-				while (np2 != anptr) {
-					nl = np2;
-					np2 = np2->hnext;
-				}
-				
-				if (nl)
-				  nl->hnext = anptr->hnext;
-				else
-				  watchTable[hashv] = anptr->hnext;
-				safe_free(anptr);
-			}
-		}
-		
-		lp = np; /* Save last pointer processed */
-		np = np->next; /* Jump to the next pointer */
-		free_link(lp); /* Free the previous */
-	}
-	
-	client->local->watches = 0;
-	
-	return 0;
 }
 
 /* Throttling - originally by Stskeeps */
@@ -925,15 +617,7 @@ void update_throttling_timer_settings(void)
 	EventMod(EventFind("throttling_check_expire"), &eInfo);
 }
 
-void init_throttling()
-{
-	EventAdd(NULL, "throttling_check_expire", throttling_check_expire, NULL, 123456, 0);
-	/* Note: the every_ms value (123,456) will be adjusted on boot and rehash
-	 * via the update_throttling_timer_settings() function.
-	 */
-}
-
-uint64_t hash_throttling(char *ip)
+uint64_t hash_throttling(const char *ip)
 {
 	return siphash(ip, siphashkey_throttling) % THROTTLING_HASH_TABLE_SIZE;
 }

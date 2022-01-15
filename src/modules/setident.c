@@ -32,7 +32,7 @@ ModuleHeader MOD_HEADER
 	"5.0", /* Version */
 	"/setident", /* Short description of module */
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
     };
 
 MOD_INIT()
@@ -61,8 +61,7 @@ MOD_UNLOAD()
 */
 CMD_FUNC(cmd_setident)
 {
-
-	char *vident, *s;
+	const char *vident, *s;
 
 	if ((parc < 2) || BadPtr(parv[1]))
 	{

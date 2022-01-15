@@ -15,7 +15,7 @@ ModuleHeader MOD_HEADER
 	"5.0",
 	"command /who",
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
     };
 
 
@@ -80,10 +80,11 @@ static void who_global(Client *client, char *mask, int operspy, struct who_forma
 static void do_who(Client *client, Client *acptr, Channel *channel, struct who_format *fmt);
 static void do_who_on_channel(Client *client, Channel *channel,
                               int member, int operspy, struct who_format *fmt);
-static int convert_classical_who_request(Client *client, int *parc, char *parv[], char **orig_mask, struct who_format *fmt);
-char *whox_md_serialize(ModData *m);
-void whox_md_unserialize(char *str, ModData *m);
+static int convert_classical_who_request(Client *client, int *parc, const char *parv[], const char **orig_mask, struct who_format *fmt);
+const char *whox_md_serialize(ModData *m);
+void whox_md_unserialize(const char *str, ModData *m);
 void whox_md_free(ModData *md);
+static void append_format(char *buf, size_t bufsize, size_t *pos, const char *fmt, ...) __attribute__((format(printf,4,5)));
 
 MOD_INIT()
 {
@@ -126,7 +127,7 @@ MOD_UNLOAD()
 }
 
 /** whox module data operations: serialize (rare) */
-char *whox_md_serialize(ModData *m)
+const char *whox_md_serialize(ModData *m)
 {
 	static char buf[32];
 	if (m->i == 0)
@@ -136,7 +137,7 @@ char *whox_md_serialize(ModData *m)
 }
 
 /** whox module data operations: unserialize (rare) */
-void whox_md_unserialize(char *str, ModData *m)
+void whox_md_unserialize(const char *str, ModData *m)
 {
 	m->i = atoi(str);
 }
@@ -179,9 +180,9 @@ void whox_md_free(ModData *md)
 CMD_FUNC(cmd_whox)
 {
 	char *mask;
-	char *orig_mask;
+	const char *orig_mask;
 	char ch; /* Scratch char register */
-	char *p; /* Scratch char pointer */
+	const char *p; /* Scratch char pointer */
 	int member;
 	int operspy = 0;
 	struct who_format fmt;
@@ -294,7 +295,7 @@ CMD_FUNC(cmd_whox)
 	
 		while (*s)
 		{
-			int i;
+			Umode *um;
 
 			switch (*s)
 			{
@@ -316,11 +317,11 @@ CMD_FUNC(cmd_whox)
 			else
 				umodes = &fmt.noumodes;
 
-			for (i = 0; i <= Usermode_highest; i++)
+			for (um = usermodes; um; um = um->next)
 			{
-				if (*s == Usermode_Table[i].flag)
+				if (um->letter == *s)
 				{
-					*umodes |= Usermode_Table[i].mode;
+					*umodes |= um->mode;
 					break;
 				}
 			}
@@ -341,7 +342,7 @@ CMD_FUNC(cmd_whox)
 		Channel *channel = NULL;
 
 		/* List all users on a given channel */
-		if ((channel = find_channel(orig_mask, NULL)) != NULL)
+		if ((channel = find_channel(orig_mask)) != NULL)
 		{
 			if (IsMember(client, channel) || operspy)
 				do_who_on_channel(client, channel, 1, operspy, &fmt);
@@ -426,8 +427,7 @@ static int do_match(Client *client, Client *acptr, char *mask, struct who_format
 		return 1;
 
 	/* match account */
-	if (IsMatch(fmt, WMATCH_ACCOUNT) && !BadPtr(acptr->user->svid) &&
-		!isdigit(*acptr->user->svid) && match_simple(mask, acptr->user->svid))
+	if (IsMatch(fmt, WMATCH_ACCOUNT) && IsLoggedIn(acptr) && match_simple(mask, acptr->user->account))
 	{
 		return 1;
 	}
@@ -491,12 +491,12 @@ static void who_common_channel(Client *client, Channel *channel,
 				break;
 		}
 
-		if (i != 0 && !(is_skochanop(client, channel)) && !(is_skochanop(acptr, channel) || has_voice(acptr,channel)))
+		if (i != 0 && !(check_channel_access(client, channel, "hoaq")) && !(check_channel_access(acptr, channel, "hoaq") || check_channel_access(acptr,channel, "v")))
 			continue;
 
 		SetMark(acptr);
 
-		if(*maxmatches > 0)
+		if (*maxmatches > 0)
 		{
 			if (do_match(client, acptr, mask, fmt))
 			{
@@ -530,7 +530,7 @@ static void who_global(Client *client, char *mask, int operspy, struct who_forma
 
 	/* If searching for a nick explicitly, then include it later on in the result: */
 	if (mask && ((fmt->matchsel & WMATCH_NICK) || (fmt->matchsel == 0)))
-		hunted = find_person(mask, NULL);
+		hunted = find_user(mask, NULL);
 
 	/* Initialize the markers to zero */
 	list_for_each_entry(acptr, &client_list, client_node)
@@ -608,10 +608,10 @@ static void do_who_on_channel(Client *client, Channel *channel,
 				break;
 		}
 
-		if (!operspy && (acptr != client) && i != 0 && !(is_skochanop(client, channel)) && !(is_skochanop(acptr, channel) || has_voice(acptr,channel)))
+		if (!operspy && (acptr != client) && i != 0 && !(check_channel_access(client, channel, "hoaq")) && !(check_channel_access(acptr, channel, "hoaq") || check_channel_access(acptr,channel, "v")))
 			continue;
 
-		if(member || !IsInvisible(acptr))
+		if (member || !IsInvisible(acptr))
 			do_who(client, acptr, channel, fmt);
 	}
 }
@@ -688,7 +688,7 @@ static void do_who(Client *client, Client *acptr, Channel *channel, struct who_f
  	else
  		status[i++] = 'H';
 
-	if (IsARegNick(acptr))
+	if (IsRegNick(acptr))
 		status[i++] = 'r';
 
 	if (IsSecureConnect(acptr))
@@ -715,36 +715,16 @@ static void do_who(Client *client, Client *acptr, Channel *channel, struct who_f
 		{
 			if (!(fmt->fields || HasCapability(client, "multi-prefix")))
 			{
-				/* Standard NAMES reply */
-#ifdef PREFIX_AQ
-				if (lp->flags & CHFL_CHANOWNER)
-					status[i++] = '~';
-				else if (lp->flags & CHFL_CHANADMIN)
-					status[i++] = '&';
-				else
-#endif
-				if (lp->flags & CHFL_CHANOP)
-					status[i++] = '@';
-				else if (lp->flags & CHFL_HALFOP)
-					status[i++] = '%';
-				else if (lp->flags & CHFL_VOICE)
-					status[i++] = '+';
+				/* Standard NAMES reply (single character) */
+				char c = mode_to_prefix(*lp->member_modes);
+				if (c)
+					status[i++] = c;
 			}
 			else
 			{
 				/* NAMES reply with all rights included (multi-prefix / NAMESX) */
-#ifdef PREFIX_AQ
-				if (lp->flags & CHFL_CHANOWNER)
-					status[i++] = '~';
-				if (lp->flags & CHFL_CHANADMIN)
-					status[i++] = '&';
-#endif
-				if (lp->flags & CHFL_CHANOP)
-					status[i++] = '@';
-				if (lp->flags & CHFL_HALFOP)
-					status[i++] = '%';
-				if (lp->flags & CHFL_VOICE)
-					status[i++] = '+';
+				strcpy(&status[i], modes_to_prefix(lp->member_modes));
+				i += strlen(&status[i]);
 			}
 		}
 	}
@@ -761,7 +741,7 @@ static void do_who(Client *client, Client *acptr, Channel *channel, struct who_f
 		else
 			host = GetHost(acptr);
 		sendnumeric(client, RPL_WHOREPLY,
-			channel ? channel->chname : "*",
+			channel ? channel->name : "*",
 			acptr->user->username, host,
 			hide ? "*" : acptr->user->server,
 			acptr->name, status, hide ? 0 : acptr->hopcount, acptr->info);
@@ -773,7 +753,7 @@ static void do_who(Client *client, Client *acptr, Channel *channel, struct who_f
 		if (HasField(fmt, FIELD_QUERYTYPE))
 			append_format(str, sizeof str, &pos, " %s", fmt->querytype);
 		if (HasField(fmt, FIELD_CHANNEL))
-			append_format(str, sizeof str, &pos, " %s", channel ? channel->chname : "*");
+			append_format(str, sizeof str, &pos, " %s", channel ? channel->name : "*");
 		if (HasField(fmt, FIELD_USER))
 			append_format(str, sizeof str, &pos, " %s", acptr->user->username);
 		if (HasField(fmt, FIELD_IP))
@@ -801,21 +781,26 @@ static void do_who(Client *client, Client *acptr, Channel *channel, struct who_f
 		if (HasField(fmt, FIELD_MODES))
 		{
 			if (IsOper(client))
-				append_format(str, sizeof str, &pos, " %s", strtok(get_usermode_string(acptr), "+"));
-			else
+			{
+				const char *umodes = get_usermode_string(acptr);
+				if (*umodes == '+')
+					umodes++;
+				append_format(str, sizeof str, &pos, " %s", umodes);
+			} else {
 				append_format(str, sizeof str, &pos, " %s", "*");
+			}
 		}
 		if (HasField(fmt, FIELD_HOP))
 			append_format(str, sizeof str, &pos, " %d", hide ? 0 : acptr->hopcount);
 		if (HasField(fmt, FIELD_IDLE))
 		{
 			append_format(str, sizeof str, &pos, " %d",
-				(int)((MyUser(acptr) && !hide_idle_time(client, acptr)) ? (TStime() - acptr->local->last) : 0));
+				(int)((MyUser(acptr) && !hide_idle_time(client, acptr)) ? (TStime() - acptr->local->idle_since) : 0));
 		}
 		if (HasField(fmt, FIELD_ACCOUNT))
-			append_format(str, sizeof str, &pos, " %s", (!isdigit(*acptr->user->svid)) ? acptr->user->svid : "0");
+			append_format(str, sizeof str, &pos, " %s", IsLoggedIn(acptr) ? acptr->user->account : "0");
 		if (HasField(fmt, FIELD_OPLEVEL))
-			append_format(str, sizeof str, &pos, " %s", (channel && is_skochanop(acptr, channel)) ? "999" : "n/a");
+			append_format(str, sizeof str, &pos, " %s", (channel && check_channel_access(acptr, channel, "hoaq")) ? "999" : "n/a");
 		if (HasField(fmt, FIELD_REPUTATION))
 		{
 			if (IsOper(client))
@@ -826,22 +811,15 @@ static void do_who(Client *client, Client *acptr, Channel *channel, struct who_f
 		if (HasField(fmt, FIELD_INFO))
 			append_format(str, sizeof str, &pos, " :%s", acptr->info);
 
-		if (pos >= sizeof str)
-		{
-			static int warned = 0;
-			if (!warned)
-				sendto_snomask(SNO_JUNK, "*** WHOX overflow while sending information about %s to %s", acptr->name, client->name);
-			warned = 1;
- 		}
 		sendto_one(client, NULL, "%s", str);
 	}
 }
 
 /* Yeah, this is fun. Thank you WHOX !!! */
-static int convert_classical_who_request(Client *client, int *parc, char *parv[], char **orig_mask, struct who_format *fmt)
+static int convert_classical_who_request(Client *client, int *parc, const char *parv[], const char **orig_mask, struct who_format *fmt)
 {
-	char *p;
-	static char pbuf1[256];
+	const char *p;
+	static char pbuf1[512], pbuf2[512];
 	int points;
 
 	/* Figure out if the user is doing a 'classical' UnrealIRCd request,
@@ -887,7 +865,7 @@ static int convert_classical_who_request(Client *client, int *parc, char *parv[]
 			         parv[1], parv[2] ? " " : "", parv[2] ? parv[2] : "");
 			if (parv[2])
 			{
-				char *swap = parv[1];
+				const char *swap = parv[1];
 				parv[1] = parv[2];
 				parv[2] = swap;
 			} else {
@@ -925,13 +903,19 @@ static int convert_classical_who_request(Client *client, int *parc, char *parv[]
 				sendnotice(client, "WHO request '%s' failed: flag 'c' no longer exists with WHOX.", oldrequest);
 				return 0;
 			}
-			for (p = parv[2]; *p; p++)
+			if (strchr(parv[2], 'g'))
 			{
-				if (*p == 'g')
+				char *w;
+				strlcpy(pbuf2, parv[2], sizeof(pbuf2));
+				for (w = pbuf2; *w; w++)
 				{
-					*p = 'r';
-					break;
+					if (*w == 'g')
+					{
+						*w = 'r';
+						break;
+					}
 				}
+				parv[2] = pbuf2;
 			}
 
 			/* "WHO -m xyz" (now: xyz -m) should become "WHO -xyz m"

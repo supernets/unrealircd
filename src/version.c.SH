@@ -4,7 +4,10 @@ echo "Extracting src/version.c..."
 
 #id=`grep '$Id: Changes,v' ../Changes`
 #id=`echo $id |sed 's/.* Changes\,v \(.*\) .* Exp .*/\1/'`
-id="5.2.0.1"
+if [ -d ../.git ]; then
+	SUFFIX="-$(git rev-parse --short HEAD)"
+fi
+id="6.0.1.1$SUFFIX"
 echo "$id"
 
 if test -r version.c
@@ -19,7 +22,9 @@ generation=`expr $generation + 1`
 export LANG=C
 export LC_TIME=C
 export LC_ALL=C
-creation=`date | \
+SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-$(date +%s)}"
+BUILD_DATE=$(date -u -d "@$SOURCE_DATE_EPOCH" 2>/dev/null || date -u -r "$SOURCE_DATE_EPOCH" 2>/dev/null || date -u)
+creation=`echo "$BUILD_DATE" | \
 awk '{if (NF == 6) \
          { print $1 " "  $2 " " $3 " "  $6 " at " $4 " " $5 } \
 else \
@@ -143,7 +148,8 @@ char *unrealcredits[] =
 	"officially joining the staff.",
 	" ",
 	"===========================[ Coders ]=============================",
-	"Syzop <syzop@unrealircd.org> - Head Coder / Project leader",
+	"Bram Matthys (Syzop) <syzop@unrealircd.org> - Head Coder / Project leader",
+	"Krzysztof Beresztant (k4be) <k4be@unrealircd.org> - Coder",
 	"Gottem <gottem@unrealircd.org> - Coder",
 	"i <i@unrealircd.org> - Coder",
 	" ",

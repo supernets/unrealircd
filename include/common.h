@@ -98,7 +98,6 @@ extern int myncmp(const char *, const char *, int);
 extern char *strtoken(char **, char *, char *);
 
 extern MODVAR int  global_count, max_global_count;
-extern char *myctime(time_t);
 #ifdef _WIN32
 extern int gettimeofday(struct timeval *tp, void *tzp);
 #endif
@@ -174,18 +173,7 @@ extern MODVAR unsigned char char_atribs[];
 #define EXPAR2	extchmstr[1]
 #define EXPAR3	extchmstr[2]
 #define EXPAR4	extchmstr[3]
-
-#ifdef PREFIX_AQ
-#define CHPFIX        "(qaohv)~&@%+"
-#define CHPAR1        "beI"
-#else
-#define CHPFIX        "(ohv)@%+"
-#define CHPAR1        "beIqa"
-#endif /* PREFIX_AQ */
-
-#define CHPAR2        "k"
-#define CHPAR3        "l"
-#define CHPAR4        "psmntir"
+#define CHPAR1  "beI"
 
 #ifdef _WIN32
 /*

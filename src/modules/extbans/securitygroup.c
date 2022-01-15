@@ -24,23 +24,26 @@ ModuleHeader MOD_HEADER
 	"4.2",
 	"ExtBan ~G - Ban based on security-group",
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
 };
 
 /* Forward declarations */
-char *extban_securitygroup_conv_param(char *para);
-int extban_securitygroup_is_ok(Client *client, Channel *channel, char *para, int checkt, int what, int what2);
-int extban_securitygroup_is_banned(Client *client, Channel *channel, char *banin, int type, char **msg, char **errmsg);
+const char *extban_securitygroup_conv_param(BanContext *b, Extban *extban);
+int extban_securitygroup_is_ok(BanContext *b);
+int extban_securitygroup_is_banned(BanContext *b);
 
 /** Called upon module init */
 MOD_INIT()
 {
 	ExtbanInfo req;
-	
-	req.flag = 'G';
+
+	memset(&req, 0, sizeof(req));
+	req.letter = 'G';
+	req.name = "security-group";
 	req.conv_param = extban_securitygroup_conv_param;
 	req.is_ok = extban_securitygroup_is_ok;
 	req.is_banned = extban_securitygroup_is_banned;
+	req.is_banned_events = BANCHK_ALL|BANCHK_TKL;
 	req.options = EXTBOPT_INVEX|EXTBOPT_TKL;
 	if (!ExtbanAdd(modinfo->handle, req))
 	{
@@ -68,12 +71,8 @@ MOD_UNLOAD()
 /* Helper function for extban_securitygroup_is_ok() and extban_securitygroup_conv_param()
  * to do ban validation.
  */
-int extban_securitygroup_generic(char *para, int strict)
+int extban_securitygroup_generic(char *mask, int strict)
 {
-	char *mask;
-
-	mask = para+3;
-
 	/* ! at the start means negative match */
 	if (*mask == '!')
 		mask++;
@@ -91,27 +90,24 @@ int extban_securitygroup_generic(char *para, int strict)
 	if (!*mask)
 		return 0; /* don't allow "~G:" nor "~G:!" */
 
-	if (strlen(mask) > SECURITYGROUPLEN + 3)
-		mask[SECURITYGROUPLEN + 3] = '\0';
-
 	return 1;
 }
 
-int extban_securitygroup_is_ok(Client *client, Channel *channel, char *para, int checkt, int what, int what2)
+int extban_securitygroup_is_ok(BanContext *b)
 {
-	if (MyUser(client) && (what == MODE_ADD) && (checkt == EXBCHK_PARAM))
+	if (MyUser(b->client) && (b->what == MODE_ADD) && (b->is_ok_check == EXBCHK_PARAM))
 	{
 		char banbuf[SECURITYGROUPLEN+8];
-		strlcpy(banbuf, para, sizeof(banbuf));
+		strlcpy(banbuf, b->banstr, sizeof(banbuf));
 		if (!extban_securitygroup_generic(banbuf, 1))
 		{
 			SecurityGroup *s;
-			sendnotice(client, "ERROR: Unknown security-group '%s'. Syntax: +b ~G:securitygroup or +b ~G:!securitygroup", para+3);
-			sendnotice(client, "Available security groups:");
+			sendnotice(b->client, "ERROR: Unknown security-group '%s'. Syntax: +b ~G:securitygroup or +b ~G:!securitygroup", b->banstr);
+			sendnotice(b->client, "Available security groups:");
 			for (s = securitygroups; s; s = s->next)
-				sendnotice(client, "%s", s->name);
-			sendnotice(client, "unknown-users");
-			sendnotice(client, "End of security group list.");
+				sendnotice(b->client, "%s", s->name);
+			sendnotice(b->client, "unknown-users");
+			sendnotice(b->client, "End of security group list.");
 			return 0;
 		}
 	}
@@ -119,11 +115,11 @@ int extban_securitygroup_is_ok(Client *client, Channel *channel, char *para, int
 }
 
 /** Security group extban - conv_param */
-char *extban_securitygroup_conv_param(char *para)
+const char *extban_securitygroup_conv_param(BanContext *b, Extban *extban)
 {
 	static char retbuf[SECURITYGROUPLEN + 8];
 
-	strlcpy(retbuf, para, sizeof(retbuf));
+	strlcpy(retbuf, b->banstr, sizeof(retbuf));
 	if (!extban_securitygroup_generic(retbuf, 0))
 		return NULL;
 
@@ -131,11 +127,9 @@ char *extban_securitygroup_conv_param(char *para)
 }
 
 /** Is the user banned by ~G:something ? */
-int extban_securitygroup_is_banned(Client *client, Channel *channel, char *banin, int type, char **msg, char **errmsg)
+int extban_securitygroup_is_banned(BanContext *b)
 {
-	char *ban = banin+3;
-
-	if (*ban == '!')
-		return !user_allowed_by_security_group_name(client, ban+1);
-	return user_allowed_by_security_group_name(client, ban);
+	if (*b->banstr == '!')
+		return !user_allowed_by_security_group_name(b->client, b->banstr+1);
+	return user_allowed_by_security_group_name(b->client, b->banstr);
 }

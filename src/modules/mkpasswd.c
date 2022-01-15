@@ -34,7 +34,7 @@ ModuleHeader MOD_HEADER
 	"5.0",
 	"command /mkpasswd", 
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
     };
 
 MOD_INIT()
@@ -60,8 +60,8 @@ MOD_UNLOAD()
 */
 CMD_FUNC(cmd_mkpasswd)
 {
-	short	type;
-	char	*result = NULL;
+	short type;
+	const char *result = NULL;
 
 	if (!MKPASSWD_FOR_EVERYONE && !IsOper(client))
 	{
@@ -73,9 +73,9 @@ CMD_FUNC(cmd_mkpasswd)
 		/* Non-opers /mkpasswd usage: lag them up, and send a notice to eyes snomask.
 		 * This notice is always sent, even in case of bad usage/bad auth methods/etc.
 		 */
-		client->local->since += 7;
-		sendto_snomask(SNO_EYES, "*** /mkpasswd used by %s (%s@%s)",
-			client->name, client->user->username, GetHost(client));
+		add_fake_lag(client, 7000);
+		unreal_log(ULOG_INFO, "mkpasswd", "MKPASSWD_COMMAND", client,
+		           "mkpasswd command used by $client.details");
 	}
 
 	if ((parc < 3) || BadPtr(parv[2]))

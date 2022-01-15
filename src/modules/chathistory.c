@@ -13,7 +13,15 @@ ModuleHeader MOD_HEADER
 	"1.0",
 	"IRCv3 CHATHISTORY command",
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
+};
+
+/* Structs */
+typedef struct ChatHistoryTarget ChatHistoryTarget;
+struct ChatHistoryTarget {
+	ChatHistoryTarget *prev, *next;
+	char *datetime;
+	char *object;
 };
 
 /* Forward declarations */
@@ -22,7 +30,6 @@ CMD_FUNC(cmd_chathistory);
 /* Global variables */
 long CAP_CHATHISTORY = 0L;
 
-/* TODO: consider moving to config file */
 #define CHATHISTORY_LIMIT 50
 
 MOD_INIT()
@@ -49,13 +56,18 @@ MOD_UNLOAD()
 	return MOD_SUCCESS;
 }
 
-int chathistory_token(char *str, char *token, char **store)
+int chathistory_token(const char *str, char *token, char **store)
 {
-	char *p = strchr(str, '=');
+	char request[BUFSIZE];
+	char *p;
+
+	strlcpy(request, str, sizeof(request));
+
+	p = strchr(request, '=');
 	if (!p)
 		return 0;
 	*p = '\0'; // frag
-	if (!strcmp(str, token))
+	if (!strcmp(request, token))
 	{
 		*p = '='; // restore
 		*store = strdup(p + 1); // can be \0
@@ -65,15 +77,68 @@ int chathistory_token(char *str, char *token, char **store)
 	return 0;
 }
 
-static int chathistory_targets_send_line(Client *client, HistoryResult *r, char *batchid)
+static void add_chathistory_target_list(ChatHistoryTarget *new, ChatHistoryTarget **list)
+{
+	ChatHistoryTarget *x, *last = NULL;
+
+	if (!*list)
+	{
+		/* We are the only item. Easy. */
+		*list = new;
+		return;
+	}
+
+	for (x = *list; x; x = x->next)
+	{
+		last = x;
+		if (strcmp(new->datetime, x->datetime) >= 0)
+			break;
+	}
+
+	if (x)
+	{
+		if (x->prev)
+		{
+			/* We will insert ourselves just before this item */
+			new->prev = x->prev;
+			new->next = x;
+			x->prev->next = new;
+			x->prev = new;
+		} else {
+			/* We are the new head */
+			*list = new;
+			new->next = x;
+			x->prev = new;
+		}
+	} else
+	{
+		/* We are the last item */
+		last->next = new;
+		new->prev = last;
+	}
+}
+
+static void add_chathistory_target(ChatHistoryTarget **list, HistoryResult *r)
+{
+	MessageTag *m;
+	time_t ts;
+	char *datetime;
+	ChatHistoryTarget *e;
+
+	if (!r->log || !((m = find_mtag(r->log->mtags, "time"))) || !m->value)
+		return;
+	datetime = m->value;
+
+	e = safe_alloc(sizeof(ChatHistoryTarget));
+	safe_strdup(e->datetime, datetime);
+	safe_strdup(e->object, r->object);
+	add_chathistory_target_list(e, list);
+}
+
+static void chathistory_targets_send_line(Client *client, ChatHistoryTarget *r, char *batchid)
 {
 	MessageTag *mtags = NULL;
 	MessageTag *m;
-	char *ts;
-
-	if (!r->log || !((m = find_mtag(r->log->mtags, "time"))) || !m->value)
-		return 0;
-	ts = m->value;
 
 	if (!BadPtr(batchid))
 	{
@@ -83,12 +148,10 @@ static int chathistory_targets_send_line(Client *client, HistoryResult *r, char 
 	}
 
 	sendto_one(client, mtags, ":%s CHATHISTORY TARGETS %s %s",
-		me.name, r->object, ts);
+		me.name, r->object, r->datetime);
 
 	if (mtags)
 		free_message_tags(mtags);
-
-	return 1;
 }
 
 void chathistory_targets(Client *client, HistoryFilter *filter, int limit)
@@ -97,14 +160,9 @@ void chathistory_targets(Client *client, HistoryFilter *filter, int limit)
 	HistoryResult *r;
 	char batch[BATCHLEN+1];
 	int sent = 0;
+	ChatHistoryTarget *targets = NULL, *targets_next;
 
-	batch[0] = '\0';
-	if (HasCapability(client, "batch"))
-	{
-		/* Start a new batch */
-		generate_batch_id(batch);
-		sendto_one(client, NULL, ":%s BATCH +%s draft/chathistory-targets", me.name, batch);
-	}
+	/* 1. Grab all information we need */
 
 	filter->cmd = HFC_BEFORE;
 	if (strcmp(filter->timestamp_a, filter->timestamp_b) < 0)
@@ -119,14 +177,32 @@ void chathistory_targets(Client *client, HistoryFilter *filter, int limit)
 	for (mp = client->user->channel; mp; mp = mp->next)
 	{
 		Channel *channel = mp->channel;
-		r = history_request(channel->chname, filter);
-		if (r->log && chathistory_targets_send_line(client, r, batch))
+		r = history_request(channel->name, filter);
+		if (r)
 		{
-			if (++sent >= limit)
-				break; /* We are done */
+			add_chathistory_target(&targets, r);
+			free_history_result(r);
 		}
-		free_history_result(r);
-		r = NULL;
+	}
+
+	/* 2. Now send it to the client */
+
+	batch[0] = '\0';
+	if (HasCapability(client, "batch"))
+	{
+		/* Start a new batch */
+		generate_batch_id(batch);
+		sendto_one(client, NULL, ":%s BATCH +%s draft/chathistory-targets", me.name, batch);
+	}
+
+	for (; targets; targets = targets_next)
+	{
+		targets_next = targets->next;
+		if (++sent < limit)
+			chathistory_targets_send_line(client, targets, batch);
+		safe_free(targets->datetime);
+		safe_free(targets->object);
+		safe_free(targets);
 	}
 
 	/* End of batch */
@@ -160,7 +236,7 @@ CMD_FUNC(cmd_chathistory)
 		return;
 	}
 
-	if (!strcmp(parv[1], "TARGETS"))
+	if (!strcasecmp(parv[1], "TARGETS"))
 	{
 		Membership *mp;
 		int limit;
@@ -185,18 +261,39 @@ CMD_FUNC(cmd_chathistory)
 		goto end;
 	}
 
-	channel = find_channel(parv[2], NULL);
-	if (!channel || !IsMember(client, channel) || !has_channel_mode(channel, 'H'))
+	channel = find_channel(parv[2]);
+	if (!channel)
 	{
-		sendto_one(client, NULL, ":%s FAIL CHATHISTORY INVALID_TARGET %s %s :Messages could not be retrieved",
+		sendto_one(client, NULL, ":%s FAIL CHATHISTORY INVALID_TARGET %s %s :Messages could not be retrieved, not an existing channel",
 			me.name, parv[1], parv[2]);
+		return;
+	}
+
+	if (!IsMember(client, channel))
+	{
+		sendto_one(client, NULL, ":%s FAIL CHATHISTORY INVALID_TARGET %s %s :Messages could not be retrieved, you are not a member",
+			me.name, parv[1], parv[2]);
+		return;
+	}
+
+	/* Channel is not +H? Send empty response/batch (as per IRCv3 discussion) */
+	if (!has_channel_mode(channel, 'H'))
+	{
+		if (HasCapability(client, "batch"))
+		{
+			char batch[BATCHLEN+1];
+
+			generate_batch_id(batch);
+			sendto_one(client, NULL, ":%s BATCH +%s chathistory %s", me.name, batch, channel->name);
+			sendto_one(client, NULL, ":%s BATCH -%s", me.name, batch);
+		}
 		return;
 	}
 
 	filter = safe_alloc(sizeof(HistoryFilter));
 	/* Below this point, instead of 'return', use 'goto end', which takes care of the freeing of 'filter' and 'history' */
 
-	if (!strcmp(parv[1], "BEFORE"))
+	if (!strcasecmp(parv[1], "BEFORE"))
 	{
 		filter->cmd = HFC_BEFORE;
 		if (!chathistory_token(parv[3], "timestamp", &filter->timestamp_a) &&
@@ -208,7 +305,7 @@ CMD_FUNC(cmd_chathistory)
 		}
 		filter->limit = atoi(parv[4]);
 	} else
-	if (!strcmp(parv[1], "AFTER"))
+	if (!strcasecmp(parv[1], "AFTER"))
 	{
 		filter->cmd = HFC_AFTER;
 		if (!chathistory_token(parv[3], "timestamp", &filter->timestamp_a) &&
@@ -220,7 +317,7 @@ CMD_FUNC(cmd_chathistory)
 		}
 		filter->limit = atoi(parv[4]);
 	} else
-	if (!strcmp(parv[1], "LATEST"))
+	if (!strcasecmp(parv[1], "LATEST"))
 	{
 		filter->cmd = HFC_LATEST;
 		if (!chathistory_token(parv[3], "timestamp", &filter->timestamp_a) &&
@@ -233,7 +330,7 @@ CMD_FUNC(cmd_chathistory)
 		}
 		filter->limit = atoi(parv[4]);
 	} else
-	if (!strcmp(parv[1], "AROUND"))
+	if (!strcasecmp(parv[1], "AROUND"))
 	{
 		filter->cmd = HFC_AROUND;
 		if (!chathistory_token(parv[3], "timestamp", &filter->timestamp_a) &&
@@ -245,7 +342,7 @@ CMD_FUNC(cmd_chathistory)
 		}
 		filter->limit = atoi(parv[4]);
 	} else
-	if (!strcmp(parv[1], "BETWEEN"))
+	if (!strcasecmp(parv[1], "BETWEEN"))
 	{
 		filter->cmd = HFC_BETWEEN;
 		if (BadPtr(parv[5]))
@@ -283,7 +380,7 @@ CMD_FUNC(cmd_chathistory)
 	if (filter->limit > CHATHISTORY_LIMIT)
 		filter->limit = CHATHISTORY_LIMIT;
 
-	if ((r = history_request(channel->chname, filter)))
+	if ((r = history_request(channel->name, filter)))
 		history_send_result(client, r);
 
 end:

@@ -26,14 +26,14 @@ ModuleHeader MOD_HEADER
 	"4.2",
 	"Channel Mode +R",
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
     };
 
 Cmode_t EXTCMODE_REGONLY;
 
-#define IsRegOnly(channel)    (channel->mode.extmode & EXTCMODE_REGONLY)
+#define IsRegOnly(channel)    (channel->mode.mode & EXTCMODE_REGONLY)
 
-int regonly_check (Client *client, Channel *channel, char *key, char *parv[]);
+int regonly_check(Client *client, Channel *channel, const char *key, char **errmsg);
 
 
 MOD_TEST()
@@ -47,7 +47,7 @@ CmodeInfo req;
 
 	memset(&req, 0, sizeof(req));
 	req.paracount = 0;
-	req.flag = 'R';
+	req.letter = 'R';
 	req.is_ok = extcmode_default_requirehalfop;
 	CmodeAdd(modinfo->handle, req, &EXTCMODE_REGONLY);
 	
@@ -68,10 +68,13 @@ MOD_UNLOAD()
 	return MOD_SUCCESS;
 }
 
-int regonly_check (Client *client, Channel *channel, char *key, char *parv[])
+int regonly_check (Client *client, Channel *channel, const char *key, char **errmsg)
 {
 	if (IsRegOnly(channel) && !IsLoggedIn(client))
+	{
+		*errmsg = STR_ERR_NEEDREGGEDNICK;
 		return ERR_NEEDREGGEDNICK;
+	}
 	return 0;
 }
 

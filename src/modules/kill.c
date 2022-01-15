@@ -29,7 +29,7 @@ ModuleHeader MOD_HEADER
 	"5.0",
 	"command /kill",
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
     };
 
 MOD_INIT()
@@ -56,7 +56,9 @@ MOD_UNLOAD()
  */
 CMD_FUNC(cmd_kill)
 {
-	char *targetlist, *reason;
+	char targetlist[BUFSIZE];
+	char reason[BUFSIZE];
+	char *str;
 	char *nick, *save = NULL;
 	Client *target;
 	Hook *h;
@@ -69,20 +71,18 @@ CMD_FUNC(cmd_kill)
 		return;
 	}
 
-	targetlist = parv[1];
-	reason = parv[2];
-
 	if (!IsServer(client->direction) && !ValidatePermissionsForPath("kill:global",client,NULL,NULL,NULL) && !ValidatePermissionsForPath("kill:local",client,NULL,NULL,NULL))
 	{
 		sendnumeric(client, ERR_NOPRIVILEGES);
 		return;
 	}
 
-	if (strlen(reason) > iConf.quit_length)
-		reason[iConf.quit_length] = '\0';
-
 	if (MyUser(client))
-		targetlist = canonize(targetlist);
+		strlcpy(targetlist, canonize(parv[1]), sizeof(targetlist));
+	else
+		strlcpy(targetlist, parv[1], sizeof(targetlist));
+
+	strlncpy(reason, parv[2], sizeof(reason), iConf.quit_length);
 
 	for (nick = strtoken(&save, targetlist, ","); nick; nick = strtoken(&save, NULL, ","))
 	{
@@ -94,7 +94,7 @@ CMD_FUNC(cmd_kill)
 			break;
 		}
 
-		target = find_person(nick, NULL);
+		target = find_user(nick, NULL);
 
 		/* If a local user issued the /KILL then we will "chase" the user.
 		 * In other words: we'll check the history for recently changed nicks.
@@ -138,16 +138,10 @@ CMD_FUNC(cmd_kill)
 
 		/* From here on, the kill is probably going to be successful. */
 
-		sendto_snomask(SNO_KILLS,
-			"*** Received KILL message for %s (%s@%s) from %s: %s",
-			target->name, target->user->username, GetHost(target),
-			client->name,
-			reason);
-
-		ircd_log(LOG_KILL, "KILL (%s) by %s (%s)",
-			make_nick_user_host(target->name, target->user->username, GetHost(target)),
-			client->name,
-			reason);
+		unreal_log(ULOG_INFO, "kill", "KILL_COMMAND", client,
+		           "Client killed: $target.details [by: $client] ($reason)",
+		           log_data_client("target", target),
+		           log_data_string("reason", reason));
 
 		new_message(client, recv_mtags, &mtags);
 
@@ -177,7 +171,7 @@ CMD_FUNC(cmd_kill)
 		}
 
 		if (MyUser(client))
-			RunHook3(HOOKTYPE_LOCAL_KILL, client, target, reason);
+			RunHook(HOOKTYPE_LOCAL_KILL, client, target, reason);
 
 		ircsnprintf(buf2, sizeof(buf2), "Killed by %s (%s)", client->name, reason);
 		exit_client(target, mtags, buf2);

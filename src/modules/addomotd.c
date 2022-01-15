@@ -32,7 +32,7 @@ ModuleHeader MOD_HEADER
 	"5.0",
 	"command /addomotd", 
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
     };
 
 MOD_INIT()
@@ -60,7 +60,7 @@ MOD_UNLOAD()
 CMD_FUNC(cmd_addomotd)
 {
 	FILE *conf;
-	char *text;
+	const char *text;
 
 	text = parc > 1 ? parv[1] : NULL;
 

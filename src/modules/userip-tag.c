@@ -28,15 +28,15 @@ ModuleHeader MOD_HEADER
 	"5.0",
 	"userip message tag",
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
 	};
 
 /* Variables */
 long CAP_ACCOUNT_TAG = 0L;
 
-int userip_mtag_is_ok(Client *client, char *name, char *value);
-int userip_mtag_can_send(Client *target);
-void mtag_add_userip(Client *client, MessageTag *recv_mtags, MessageTag **mtag_list, char *signature);
+int userip_mtag_is_ok(Client *client, const char *name, const char *value);
+int userip_mtag_should_send_to_client(Client *target);
+void mtag_add_userip(Client *client, MessageTag *recv_mtags, MessageTag **mtag_list, const char *signature);
 
 MOD_INIT()
 {
@@ -47,7 +47,7 @@ MOD_INIT()
 	memset(&mtag, 0, sizeof(mtag));
 	mtag.name = "unrealircd.org/userip";
 	mtag.is_ok = userip_mtag_is_ok;
-	mtag.can_send = userip_mtag_can_send;
+	mtag.should_send_to_client = userip_mtag_should_send_to_client;
 	mtag.flags = MTAG_HANDLER_FLAGS_NO_CAP_NEEDED;
 	MessageTagHandlerAdd(modinfo->handle, &mtag);
 
@@ -71,7 +71,7 @@ MOD_UNLOAD()
  * syntax.
  * We simply allow userip-tag ONLY from servers and with any syntax.
  */
-int userip_mtag_is_ok(Client *client, char *name, char *value)
+int userip_mtag_is_ok(Client *client, const char *name, const char *value)
 {
 	if (IsServer(client))
 		return 1;
@@ -79,7 +79,7 @@ int userip_mtag_is_ok(Client *client, char *name, char *value)
 	return 0;
 }
 
-void mtag_add_userip(Client *client, MessageTag *recv_mtags, MessageTag **mtag_list, char *signature)
+void mtag_add_userip(Client *client, MessageTag *recv_mtags, MessageTag **mtag_list, const char *signature)
 {
 	MessageTag *m;
 
@@ -103,7 +103,7 @@ void mtag_add_userip(Client *client, MessageTag *recv_mtags, MessageTag **mtag_l
 }
 
 /** Outgoing filter for this message tag */
-int userip_mtag_can_send(Client *target)
+int userip_mtag_should_send_to_client(Client *target)
 {
 	if (IsServer(target) || IsOper(target))
 		return 1;

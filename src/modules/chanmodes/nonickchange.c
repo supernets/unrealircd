@@ -26,12 +26,12 @@ ModuleHeader MOD_HEADER
 	"4.2",
 	"Channel Mode +N",
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
     };
 
 Cmode_t EXTCMODE_NONICKCHANGE;
 
-#define IsNoNickChange(channel)    (channel->mode.extmode & EXTCMODE_NONICKCHANGE)
+#define IsNoNickChange(channel)    (channel->mode.mode & EXTCMODE_NONICKCHANGE)
 
 int nonickchange_check (Client *client, Channel *channel);
 
@@ -46,7 +46,7 @@ CmodeInfo req;
 
 	memset(&req, 0, sizeof(req));
 	req.paracount = 0;
-	req.flag = 'N';
+	req.letter = 'N';
 	req.is_ok = extcmode_default_requirehalfop;
 	CmodeAdd(modinfo->handle, req, &EXTCMODE_NONICKCHANGE);
 	
@@ -71,7 +71,7 @@ int nonickchange_check (Client *client, Channel *channel)
 {
 	if (!IsOper(client) && !IsULine(client)
 		&& IsNoNickChange(channel)
-		&& !is_chan_op(client, channel))
+		&& !check_channel_access(client, channel, "oaq"))
 	{
 		return HOOK_DENY;
 	}

@@ -1,6 +1,6 @@
 /*
- * Show DCC SEND rejection notices (Snomask +D)
- * (C) Copyright 2000-.. Bram Matthys (Syzop) and the UnrealIRCd team
+ * Channel Mode +s
+ * (C) Copyright 2021 Syzop and the UnrealIRCd team
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,34 +19,36 @@
 
 #include "unrealircd.h"
 
-/* Module header */
+
 ModuleHeader MOD_HEADER
   = {
-	"snomasks/dccreject",
-	"4.2",
-	"Snomask +D",
+	"chanmodes/secret",
+	"6.0",
+	"Channel Mode +s",
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
     };
 
-/* Global variables */
-long SNO_DCCREJECT = 0L;
+Cmode_t EXTCMODE_SECRET;
 
-/* Forward declarations */
-int dccreject_dcc_denied(Client *client, char *target, char *realfile, char *displayfile, ConfigItem_deny_dcc *dccdeny);
+#define IsSecret(channel)    (channel->mode.mode & EXTCMODE_SECRET)
 
-MOD_TEST()
-{
-	return MOD_SUCCESS;
-}
+int secret_modechar_add(Channel *channel, int modechar);
 
 MOD_INIT()
 {
-	SnomaskAdd(modinfo->handle, 'D', umode_allow_opers, &SNO_DCCREJECT);
-	
-	HookAdd(modinfo->handle, HOOKTYPE_DCC_DENIED, 0, dccreject_dcc_denied);
-	
+	CmodeInfo req;
+
 	MARK_AS_OFFICIAL_MODULE(modinfo);
+
+	memset(&req, 0, sizeof(req));
+	req.paracount = 0;
+	req.letter = 's';
+	req.is_ok = extcmode_default_requirehalfop;
+	CmodeAdd(modinfo->handle, req, &EXTCMODE_SECRET);
+
+	HookAdd(modinfo->handle, HOOKTYPE_MODECHAR_ADD, 0, secret_modechar_add);
+
 	return MOD_SUCCESS;
 }
 
@@ -60,11 +62,12 @@ MOD_UNLOAD()
 	return MOD_SUCCESS;
 }
 
-int dccreject_dcc_denied(Client *client, char *target, char *realfile, char *displayfile, ConfigItem_deny_dcc *dccdeny)
+/** This clears channel mode +s when +p gets set */
+int secret_modechar_add(Channel *channel, int modechar)
 {
-	sendto_snomask_global(SNO_DCCREJECT, 
-		"%s tried to send forbidden file %s (%s) to %s (is blocked now)",
-		client->name, displayfile, dccdeny->reason, target);
-
+	if (modechar == 'p')
+	{
+		channel->mode.mode &= ~EXTCMODE_SECRET;
+	}
 	return 0;
 }

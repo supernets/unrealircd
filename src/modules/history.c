@@ -34,7 +34,7 @@ ModuleHeader MOD_HEADER
 	"5.0",
 	"Simple history command for end-users",
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
 	};
 
 #define HISTORY_LINES_DEFAULT 100
@@ -76,13 +76,16 @@ CMD_FUNC(cmd_history)
 	Channel *channel;
 	int lines = HISTORY_LINES_DEFAULT;
 
+	if (!MyUser(client))
+		return;
+
 	if ((parc < 2) || BadPtr(parv[1]))
 	{
 		history_usage(client);
 		return;
 	}
 
-	channel = find_channel(parv[1], NULL);
+	channel = find_channel(parv[1]);
 	if (!channel)
 	{
 		sendnumeric(client, ERR_NOSUCHCHANNEL, parv[1]);
@@ -91,13 +94,13 @@ CMD_FUNC(cmd_history)
 
 	if (!IsMember(client, channel))
 	{
-		sendnumeric(client, ERR_NOTONCHANNEL, channel->chname);
+		sendnumeric(client, ERR_NOTONCHANNEL, channel->name);
 		return;
 	}
 
 	if (!has_channel_mode(channel, 'H'))
 	{
-		sendnotice(client, "Channel %s does not have channel mode +H set", channel->chname);
+		sendnotice(client, "Channel %s does not have channel mode +H set", channel->name);
 		return;
 	}
 
@@ -125,7 +128,7 @@ CMD_FUNC(cmd_history)
 	filter.cmd = HFC_SIMPLE;
 	filter.last_lines = lines;
 
-	if ((r = history_request(channel->chname, &filter)))
+	if ((r = history_request(channel->name, &filter)))
 	{
 		history_send_result(client, r);
 		free_history_result(r);

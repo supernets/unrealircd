@@ -51,13 +51,13 @@ ModuleHeader MOD_HEADER
 	"1.0",
 	"ExtBan ~t: automatically removed timed bans",
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
     };
 
 /* Forward declarations */
-char *timedban_extban_conv_param(char *para_in);
-int timedban_extban_is_ok(Client *client, Channel* channel, char *para_in, int checkt, int what, int what2);
-int timedban_is_banned(Client *client, Channel *channel, char *ban, int chktype, char **msg, char **errmsg);
+const char *timedban_extban_conv_param(BanContext *b, Extban *extban);
+int timedban_extban_is_ok(BanContext *b);
+int timedban_is_banned(BanContext *b);
 void add_send_mode_param(Channel *channel, Client *from, char what, char mode, char *param);
 char *timedban_chanmsg(Client *, Client *, Channel *, char *, int);
 
@@ -70,18 +70,20 @@ MOD_TEST()
 
 MOD_INIT()
 {
-ExtbanInfo extban;
+	ExtbanInfo extban;
 
 	MARK_AS_OFFICIAL_MODULE(modinfo);
 
 	memset(&extban, 0, sizeof(ExtbanInfo));
-	extban.flag = 't';
+	extban.letter = 't';
+	extban.name = "time";
 	extban.options |= EXTBOPT_ACTMODIFIER; /* not really, but ours shouldn't be stacked from group 1 */
 	extban.options |= EXTBOPT_CHSVSMODE; /* so "SVSMODE -nick" will unset affected ~t extbans */
 	extban.options |= EXTBOPT_INVEX; /* also permit timed invite-only exceptions (+I) */
 	extban.conv_param = timedban_extban_conv_param;
 	extban.is_ok = timedban_extban_is_ok;
 	extban.is_banned = timedban_is_banned;
+	extban.is_banned_events = BANCHK_ALL;
 
 	if (!ExtbanAdd(modinfo->handle, extban))
 	{
@@ -106,17 +108,18 @@ MOD_UNLOAD()
 
 /** Generic helper for our conv_param extban function.
  * Mostly copied from clean_ban_mask()
+ * FIXME: Figure out why we have this one at all and not use conv_param? ;)
  */
-char *generic_clean_ban_mask(char *mask)
+const char *generic_clean_ban_mask(BanContext *b, Extban *extban)
 {
 	char *cp, *x;
 	char *user;
 	char *host;
-	Extban *p;
 	static char maskbuf[512];
+	char *mask;
 
 	/* Work on a copy */
-	strlcpy(maskbuf, mask, sizeof(maskbuf));
+	strlcpy(maskbuf, b->banstr, sizeof(maskbuf));
 	mask = maskbuf;
 
 	cp = strchr(mask, ' ');
@@ -136,11 +139,22 @@ char *generic_clean_ban_mask(char *mask)
 	/* Extended ban? */
 	if (is_extended_ban(mask))
 	{
-		p = findmod_by_bantype(mask[1]);
-		if (!p)
+		const char *nextbanstr;
+		Extban *extban = findmod_by_bantype(mask, &nextbanstr);
+		if (!extban)
 			return NULL; /* reject unknown extban */
-		if (p->conv_param)
-			return p->conv_param(mask);
+		if (extban->conv_param)
+		{
+			const char *ret;
+			static char retbuf[512];
+			BanContext *newb = safe_alloc(sizeof(BanContext));
+			newb->banstr = nextbanstr;
+			newb->conv_options = b->conv_options;
+			ret = extban->conv_param(newb, extban);
+			ret = prefix_with_extban(ret, newb, extban, retbuf, sizeof(retbuf));
+			safe_free(newb);
+			return ret;
+		}
 		/* else, do some basic sanity checks and cut it off at 80 bytes */
 		if ((mask[1] != ':') || (mask[2] == '\0'))
 		    return NULL; /* require a ":<char>" after extban type */
@@ -169,7 +183,7 @@ char *generic_clean_ban_mask(char *mask)
 }
 
 /** Convert ban to an acceptable format (or return NULL to fully reject it) */
-char *timedban_extban_conv_param(char *para_in)
+const char *timedban_extban_conv_param(BanContext *b, Extban *extban)
 {
 	static char retbuf[MAX_LENGTH+1];
 	char para[MAX_LENGTH+1];
@@ -177,13 +191,13 @@ char *timedban_extban_conv_param(char *para_in)
 	char *durationstr; /**< Duration, such as '5' */
 	int duration;
 	char *matchby; /**< Matching method, such as 'n!u@h' */
-	char *newmask; /**< Cleaned matching method, such as 'n!u@h' */
+	const char *newmask; /**< Cleaned matching method, such as 'n!u@h' */
 	static int timedban_extban_conv_param_recursion = 0;
 	
 	if (timedban_extban_conv_param_recursion)
 		return NULL; /* reject: recursion detected! */
 
-	strlcpy(para, para_in+3, sizeof(para)); /* work on a copy (and truncate it) */
+	strlcpy(para, b->banstr, sizeof(para)); /* work on a copy (and truncate it) */
 	
 	/* ~t:duration:n!u@h   for direct matching
 	 * ~t:duration:~x:.... when calling another bantype
@@ -203,12 +217,14 @@ char *timedban_extban_conv_param(char *para_in)
 	strlcpy(tmpmask, matchby, sizeof(tmpmask));
 	timedban_extban_conv_param_recursion++;
 	//newmask = extban_conv_param_nuh_or_extban(tmpmask);
-	newmask = generic_clean_ban_mask(tmpmask);
+	b->banstr = matchby; // this was previously 'tmpmask' but then it's a copy-copy-copy.. :D
+	newmask = generic_clean_ban_mask(b, extban);
 	timedban_extban_conv_param_recursion--;
 	if (!newmask || (strlen(newmask) <= 1))
 		return NULL;
 
-	snprintf(retbuf, sizeof(retbuf), "~t:%d:%s", duration, newmask);
+	//snprintf(retbuf, sizeof(retbuf), "~t:%d:%s", duration, newmask);
+	snprintf(retbuf, sizeof(retbuf), "%d:%s", duration, newmask);
 	return retbuf;
 }
 
@@ -226,54 +242,50 @@ int timedban_extban_syntax(Client *client, int checkt, char *reason)
 }
 
 /** Generic helper for sub-bans, used by our "is this ban ok?" function */
-int generic_ban_is_ok(Client *client, Channel *channel, char *mask, int checkt, int what, int what2)
+int generic_ban_is_ok(BanContext *b)
 {
-	if ((mask[0] == '~') && MyUser(client))
+	if ((b->banstr[0] == '~') && MyUser(b->client))
 	{
-		Extban *p;
+		Extban *extban;
+		const char *nextbanstr;
 
 		/* This portion is copied from clean_ban_mask() */
-		if (is_extended_ban(mask) && MyUser(client))
+		if (is_extended_ban(b->banstr) && MyUser(b->client))
 		{
-			if (RESTRICT_EXTENDEDBANS && !ValidatePermissionsForPath("immune:restrict-extendedbans",client,NULL,NULL,NULL))
+			if (RESTRICT_EXTENDEDBANS && !ValidatePermissionsForPath("immune:restrict-extendedbans",b->client,NULL,NULL,NULL))
 			{
 				if (!strcmp(RESTRICT_EXTENDEDBANS, "*"))
 				{
-					if (checkt == EXBCHK_ACCESS_ERR)
-						sendnotice(client, "Setting/removing of extended bans has been disabled");
+					if (b->is_ok_check == EXBCHK_ACCESS_ERR)
+						sendnotice(b->client, "Setting/removing of extended bans has been disabled");
 					return 0; /* REJECT */
 				}
-				if (strchr(RESTRICT_EXTENDEDBANS, mask[1]))
+				if (strchr(RESTRICT_EXTENDEDBANS, b->banstr[1]))
 				{
-					if (checkt == EXBCHK_ACCESS_ERR)
-						sendnotice(client, "Setting/removing of extended bantypes '%s' has been disabled", RESTRICT_EXTENDEDBANS);
+					if (b->is_ok_check == EXBCHK_ACCESS_ERR)
+						sendnotice(b->client, "Setting/removing of extended bantypes '%s' has been disabled", RESTRICT_EXTENDEDBANS);
 					return 0; /* REJECT */
 				}
 			}
 			/* And next is inspired by cmd_mode */
-			p = findmod_by_bantype(mask[1]);
-			if (checkt == EXBCHK_ACCESS)
+			extban = findmod_by_bantype(b->banstr, &nextbanstr);
+			if (extban && extban->is_ok)
 			{
-				if (p && p->is_ok && !p->is_ok(client, channel, mask, EXBCHK_ACCESS, what, what2) &&
-				    !ValidatePermissionsForPath("channel:override:mode:extban",client,NULL,channel,NULL))
+				b->banstr = nextbanstr;
+				if ((b->is_ok_check == EXBCHK_ACCESS) || (b->is_ok_check == EXBCHK_ACCESS_ERR))
 				{
-					return 0; /* REJECT */
-				}
-			} else
-			if (checkt == EXBCHK_ACCESS_ERR)
-			{
-				if (p && p->is_ok && !p->is_ok(client, channel, mask, EXBCHK_ACCESS, what, what2) &&
-				    !ValidatePermissionsForPath("channel:override:mode:extban",client,NULL,channel,NULL))
+					if (!extban->is_ok(b) &&
+					    !ValidatePermissionsForPath("channel:override:mode:extban",b->client,NULL,b->channel,NULL))
+					{
+						return 0; /* REJECT */
+					}
+				} else
+				if (b->is_ok_check == EXBCHK_PARAM)
 				{
-					p->is_ok(client, channel, mask, EXBCHK_ACCESS_ERR, what, what2);
-					return 0; /* REJECT */
-				}
-			} else
-			if (checkt == EXBCHK_PARAM)
-			{
-				if (p && p->is_ok && !p->is_ok(client, channel, mask, EXBCHK_PARAM, what, what2))
-				{
-					return 0; /* REJECT */
+					if (!extban->is_ok(b))
+					{
+						return 0; /* REJECT */
+					}
 				}
 			}
 		}
@@ -288,7 +300,7 @@ int generic_ban_is_ok(Client *client, Channel *channel, char *mask, int checkt, 
 }
 
 /** Validate ban ("is this ban ok?") */
-int timedban_extban_is_ok(Client *client, Channel* channel, char *para_in, int checkt, int what, int what2)
+int timedban_extban_is_ok(BanContext *b)
 {
 	char para[MAX_LENGTH+1];
 	char tmpmask[MAX_LENGTH+1];
@@ -300,13 +312,13 @@ int timedban_extban_is_ok(Client *client, Channel* channel, char *para_in, int c
 	int res;
 
 	/* Always permit deletion */
-	if (what == MODE_DEL)
+	if (b->what == MODE_DEL)
 		return 1;
 
 	if (timedban_extban_is_ok_recursion)
 		return 0; /* Recursion detected (~t:1:~t:....) */
 
-	strlcpy(para, para_in+3, sizeof(para)); /* work on a copy (and truncate it) */
+	strlcpy(para, b->banstr, sizeof(para)); /* work on a copy (and truncate it) */
 	
 	/* ~t:duration:n!u@h   for direct matching
 	 * ~t:duration:~x:.... when calling another bantype
@@ -315,18 +327,19 @@ int timedban_extban_is_ok(Client *client, Channel* channel, char *para_in, int c
 	durationstr = para;
 	matchby = strchr(para, ':');
 	if (!matchby || !matchby[1])
-		return timedban_extban_syntax(client, checkt, "Invalid syntax");
+		return timedban_extban_syntax(b->client, b->is_ok_check, "Invalid syntax");
 	*matchby++ = '\0';
 
 	duration = atoi(durationstr);
 
 	if ((duration <= 0) || (duration > TIMEDBAN_MAX_TIME))
-		return timedban_extban_syntax(client, checkt, "Invalid duration time");
+		return timedban_extban_syntax(b->client, b->is_ok_check, "Invalid duration time");
 
 	strlcpy(tmpmask, matchby, sizeof(tmpmask));
 	timedban_extban_is_ok_recursion++;
-	//res = extban_is_ok_nuh_extban(client, channel, tmpmask, checkt, what, what2);
-	res = generic_ban_is_ok(client, channel, tmpmask, checkt, what, what2);
+	//res = extban_is_ok_nuh_extban(b->client, b->channel, tmpmask, b->is_ok_check, b->what, b->ban_type);
+	b->banstr = tmpmask;
+	res = generic_ban_is_ok(b);
 	timedban_extban_is_ok_recursion--;
 	if (res == 0)
 	{
@@ -334,41 +347,48 @@ int timedban_extban_is_ok(Client *client, Channel* channel, char *para_in, int c
 		 * invalid n!u@h syntax, unknown (sub)extbantype,
 		 * disabled extban type in conf, too much recursion, etc.
 		 */
-		return timedban_extban_syntax(client, checkt, "Invalid matcher");
+		return timedban_extban_syntax(b->client, b->is_ok_check, "Invalid matcher");
 	}
 
 	return 1; /* OK */
 }
 
 /** Check if the user is currently banned */
-int timedban_is_banned(Client *client, Channel *channel, char *ban, int chktype, char **msg, char **errmsg)
+int timedban_is_banned(BanContext *b)
 {
-	if (strncmp(ban, "~t:", 3))
-		return 0; /* not for us */
-	ban = strchr(ban+3, ':'); /* skip time argument */
-	if (!ban)
+	b->banstr = strchr(b->banstr, ':'); /* skip time argument */
+	if (!b->banstr)
 		return 0; /* invalid fmt */
-	ban++;
+	b->banstr++; /* skip over final semicolon */
 
-	return ban_check_mask(client, channel, ban, chktype, msg, errmsg, 0);
+	return ban_check_mask(b);
 }
 
-/** Helper to check if the ban has been expired */
+/** Helper to check if the ban has been expired.
+ */
 int timedban_has_ban_expired(Ban *ban)
 {
 	char *banstr = ban->banstr;
-	char *p;
+	char *p1, *p2;
 	int t;
 	time_t expire_on;
 
-	if (strncmp(banstr, "~t:", 3))
+	/* The caller has only performed a very light check (string starting
+	 * with ~t, in the interest of performance), so we don't know yet if
+	 * it REALLY is a timed ban. We check that first here...
+	 */
+	if (!strncmp(banstr, "~t:", 3))
+		p1 = banstr + 3;
+	else if (!strncmp(banstr, "~time:", 6))
+		p1 = banstr + 6;
+	else
 		return 0; /* not for us */
-	p = strchr(banstr+3, ':'); /* skip time argument */
-	if (!p)
+	p2 = strchr(p1+1, ':'); /* skip time argument */
+	if (!p2)
 		return 0; /* invalid fmt */
-	*p = '\0'; /* danger.. must restore!! */
-	t = atoi(banstr+3);
-	*p = ':'; /* restored.. */
+	*p2 = '\0'; /* danger.. must restore!! */
+	t = atoi(p1);
+	*p2 = ':'; /* restored.. */
 	
 	expire_on = ban->when + (t * 60) - TIMEDBAN_TIMER_DELTA;
 	
@@ -398,14 +418,14 @@ EVENT(timedban_timeout)
 		 * is too costly. So we stick with this. It should be
 		 * good enough. Alternative would be some channel->id value.
 		 */
-		if (((unsigned int)channel->chname[1] % TIMEDBAN_TIMER_ITERATION_SPLIT) != current_iteration)
+		if (((unsigned int)channel->name[1] % TIMEDBAN_TIMER_ITERATION_SPLIT) != current_iteration)
 			continue; /* not this time, maybe next */
 
 		*mbuf = *pbuf = '\0';
 		for (ban = channel->banlist; ban; ban=nextban)
 		{
 			nextban = ban->next;
-			if (!strncmp(ban->banstr, "~t:", 3) && timedban_has_ban_expired(ban))
+			if (!strncmp(ban->banstr, "~t", 2) && timedban_has_ban_expired(ban))
 			{
 				add_send_mode_param(channel, &me, '-',  'b', ban->banstr);
 				del_listmode(&channel->banlist, channel, ban->banstr);
@@ -414,7 +434,7 @@ EVENT(timedban_timeout)
 		for (ban = channel->exlist; ban; ban=nextban)
 		{
 			nextban = ban->next;
-			if (!strncmp(ban->banstr, "~t:", 3) && timedban_has_ban_expired(ban))
+			if (!strncmp(ban->banstr, "~t", 2) && timedban_has_ban_expired(ban))
 			{
 				add_send_mode_param(channel, &me, '-',  'e', ban->banstr);
 				del_listmode(&channel->exlist, channel, ban->banstr);
@@ -423,7 +443,7 @@ EVENT(timedban_timeout)
 		for (ban = channel->invexlist; ban; ban=nextban)
 		{
 			nextban = ban->next;
-			if (!strncmp(ban->banstr, "~t:", 3) && timedban_has_ban_expired(ban))
+			if (!strncmp(ban->banstr, "~t", 2) && timedban_has_ban_expired(ban))
 			{
 				add_send_mode_param(channel, &me, '-',  'I', ban->banstr);
 				del_listmode(&channel->invexlist, channel, ban->banstr);
@@ -433,8 +453,8 @@ EVENT(timedban_timeout)
 		{
 			MessageTag *mtags = NULL;
 			new_message(&me, NULL, &mtags);
-			sendto_channel(channel, &me, NULL, 0, 0, SEND_LOCAL, mtags, ":%s MODE %s %s %s", me.name, channel->chname, mbuf, pbuf);
-			sendto_server(NULL, 0, 0, mtags, ":%s MODE %s %s %s 0", me.id, channel->chname, mbuf, pbuf);
+			sendto_channel(channel, &me, NULL, 0, 0, SEND_LOCAL, mtags, ":%s MODE %s %s %s", me.name, channel->name, mbuf, pbuf);
+			sendto_server(NULL, 0, 0, mtags, ":%s MODE %s %s %s 0", me.id, channel->name, mbuf, pbuf);
 			free_message_tags(mtags);
 			*pbuf = 0;
 		}
@@ -484,8 +504,8 @@ void add_send_mode_param(Channel *channel, Client *from, char what, char mode, c
 		MessageTag *mtags = NULL;
 
 		new_message(&me, NULL, &mtags);
-		sendto_channel(channel, &me, NULL, 0, 0, SEND_LOCAL, mtags, ":%s MODE %s %s %s", me.name, channel->chname, mbuf, pbuf);
-		sendto_server(NULL, 0, 0, mtags, ":%s MODE %s %s %s 0", me.id, channel->chname, mbuf, pbuf);
+		sendto_channel(channel, &me, NULL, 0, 0, SEND_LOCAL, mtags, ":%s MODE %s %s %s", me.name, channel->name, mbuf, pbuf);
+		sendto_server(NULL, 0, 0, mtags, ":%s MODE %s %s %s 0", me.id, channel->name, mbuf, pbuf);
 		free_message_tags(mtags);
 		send = 0;
 		*pbuf = 0;

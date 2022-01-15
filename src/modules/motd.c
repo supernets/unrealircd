@@ -32,7 +32,7 @@ ModuleHeader MOD_HEADER
 	"5.0",
 	"command /motd", 
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
     };
 
 MOD_INIT()
@@ -66,10 +66,10 @@ CMD_FUNC(cmd_motd)
 	if (IsServer(client))
 		return;
 
-	if (hunt_server(client, recv_mtags, ":%s MOTD :%s", 1, parc, parv) != HUNTED_ISME)
+	if (hunt_server(client, recv_mtags, "MOTD", 1, parc, parv) != HUNTED_ISME)
 	{
 		if (MyUser(client))
-			client->local->since += 15;
+			add_fake_lag(client, 15000);
 		return;
 	}
 
@@ -101,7 +101,7 @@ CMD_FUNC(cmd_motd)
 	}
 
 	motdline = NULL;
-	if(themotd)
+	if (themotd)
 		motdline = themotd->lines;
 	while (motdline)
 	{

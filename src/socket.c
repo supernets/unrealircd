@@ -40,10 +40,6 @@ char zlinebuf[BUFSIZE];
 extern char *version;
 MODVAR time_t last_allinuse = 0;
 
-#ifdef USE_LIBCURL
-extern void url_do_transfers_async(void);
-#endif
-
 void start_of_normal_client_handshake(Client *client);
 void proceed_normal_client_handshake(Client *client, struct hostent *he);
 
@@ -85,91 +81,6 @@ void close_connections(void)
 #endif
 }
 
-/** Report an error to the log and also send to all local opers.
- * @param text		Format string for outputting the error.
- *			It must contain only two '%s'. The first
- *			one is replaced by the sockhost from the
- *			client, and the latter will be the error
- *			message from strerror(errno).
- * @param client	The client - ALWAYS locally connected.
- */
-void report_error(char *text, Client *client)
-{
-	int errtmp = ERRNO, origerr = ERRNO;
-	char *host, xbuf[256];
-	int  err, len = sizeof(err), n;
-	
-	host = (client) ? get_client_name(client, FALSE) : "";
-
-	Debug((DEBUG_ERROR, text, host, STRERROR(errtmp)));
-
-	/*
-	 * Get the *real* error from the socket (well try to anyway..).
-	 * This may only work when SO_DEBUG is enabled but its worth the
-	 * gamble anyway.
-	 */
-#ifdef	SO_ERROR
-	if (client && !IsMe(client) && client->local->fd >= 0)
-		if (!getsockopt(client->local->fd, SOL_SOCKET, SO_ERROR, (void *)&err, &len))
-			if (err)
-				errtmp = err;
-#endif
-	if (origerr != errtmp) {
-		/* Socket error is different than original error,
-		 * some tricks are needed because of 2x strerror() (or at least
-		 * according to the man page) -- Syzop.
-		 */
-		snprintf(xbuf, 200, "[syserr='%s'", STRERROR(origerr));
-		n = strlen(xbuf);
-		snprintf(xbuf+n, 256-n, ", sockerr='%s']", STRERROR(errtmp));
-		sendto_snomask(SNO_JUNK, text, host, xbuf);
-		ircd_log(LOG_ERROR, text, host, xbuf);
-	} else {
-		sendto_snomask(SNO_JUNK, text, host, STRERROR(errtmp));
-		ircd_log(LOG_ERROR, text,host,STRERROR(errtmp));
-	}
-	return;
-}
-
-/** Report a BAD error to the log and also send to all local opers.
- * TODO: Document the difference between report_error() and report_baderror()
- * @param text		Format string for outputting the error.
- *			It must contain only two '%s'. The first
- *			one is replaced by the sockhost from the
- *			client, and the latter will be the error
- *			message from strerror(errno).
- * @param client	The client - ALWAYS locally connected.
- */
-void report_baderror(char *text, Client *client)
-{
-#ifndef _WIN32
-	int  errtmp = errno;	/* debug may change 'errno' */
-#else
-	int  errtmp = WSAGetLastError();	/* debug may change 'errno' */
-#endif
-	char *host;
-	int  err, len = sizeof(err);
-
-	host = (client) ? get_client_name(client, FALSE) : "";
-
-	Debug((DEBUG_ERROR, text, host, STRERROR(errtmp)));
-
-	/*
-	 * Get the *real* error from the socket (well try to anyway..).
-	 * This may only work when SO_DEBUG is enabled but its worth the
-	 * gamble anyway.
-	 */
-#ifdef	SO_ERROR
-	if (client && !IsMe(client) && client->local->fd >= 0)
-		if (!getsockopt(client->local->fd, SOL_SOCKET, SO_ERROR, (void *)&err, &len))
-			if (err)
-				errtmp = err;
-#endif
-	sendto_umode(UMODE_OPER, text, host, STRERROR(errtmp));
-	ircd_log(LOG_ERROR, text, host, STRERROR(errtmp));
-	return;
-}
-
 /** Accept an incoming connection.
  * @param listener_fd	The file descriptor of a listen() socket.
  * @param data		The listen { } block configuration data.
@@ -190,8 +101,10 @@ static void listener_accept(int listener_fd, int revents, void *data)
 			 * Of course the underlying cause of this issue should be investigated, as this
 			 * is very much a workaround.
 			 */
-			report_baderror("Cannot accept connections %s:%s", NULL);
-			sendto_realops("[BUG] Restarting listener on %s:%d due to fatal errors (see previous message)", listener->ip, listener->port);
+			unreal_log(ULOG_FATAL, "listen", "ACCEPT_ERROR", NULL, "Cannot accept incoming connection on IP \"$listen_ip\" port $listen_port: $socket_error",
+				   log_data_socket_error(listener->fd),
+				   log_data_string("listen_ip", listener->ip),
+				   log_data_integer("listen_port", listener->port));
 			close_listener(listener);
 			start_listeners();
 		}
@@ -207,7 +120,9 @@ static void listener_accept(int listener_fd, int revents, void *data)
 		ircstats.is_ref++;
 		if (last_allinuse < TStime() - 15)
 		{
-			sendto_ops_and_log("All connections in use. ([@%s/%u])", listener->ip, listener->port);
+			unreal_log(ULOG_FATAL, "listen", "ACCEPT_ERROR_MAXCLIENTS", NULL, "Cannot accept incoming connection on IP \"$listen_ip\" port $listen_port: All connections in use",
+				   log_data_string("listen_ip", listener->ip),
+				   log_data_integer("listen_port", listener->port));
 			last_allinuse = TStime();
 		}
 
@@ -252,13 +167,20 @@ int unreal_listen(ConfigItem_listen *listener, char *ip, int port, int ipv6)
 	listener->fd = fd_socket(ipv6 ? AF_INET6 : AF_INET, SOCK_STREAM, 0, "Listener socket");
 	if (listener->fd < 0)
 	{
-		report_baderror("Cannot open stream socket() %s:%s", NULL);
+		unreal_log(ULOG_FATAL, "listen", "LISTEN_SOCKET_ERROR", NULL,
+		           "Could not listen on IP \"$listen_ip\" on port $listen_port: $socket_error",
+			   log_data_socket_error(-1),
+			   log_data_string("listen_ip", ip),
+			   log_data_integer("listen_port", port));
 		return -1;
 	}
 
 	if (++OpenFiles >= maxclients)
 	{
-		sendto_ops_and_log("No more connections allowed (%s)", listener->ip);
+		unreal_log(ULOG_FATAL, "listen", "LISTEN_ERROR_MAXCLIENTS", NULL,
+		           "Could not listen on IP \"$listen_ip\" on port $listen_port: all connections in use",
+		           log_data_string("listen_ip", ip),
+		           log_data_integer("listen_port", port));
 		fd_close(listener->fd);
 		listener->fd = -1;
 		--OpenFiles;
@@ -269,10 +191,11 @@ int unreal_listen(ConfigItem_listen *listener, char *ip, int port, int ipv6)
 
 	if (!unreal_bind(listener->fd, ip, port, ipv6))
 	{
-		char buf[512];
-		ircsnprintf(buf, sizeof(buf), "Error binding stream socket to IP %s port %d", ip, port);
-		strlcat(buf, " - %s:%s", sizeof(buf));
-		report_baderror(buf, NULL);
+		unreal_log(ULOG_FATAL, "listen", "LISTEN_BIND_ERROR", NULL,
+		           "Could not listen on IP \"$listen_ip\" on port $listen_port: $socket_error",
+		           log_data_socket_error(listener->fd),
+		           log_data_string("listen_ip", ip),
+		           log_data_integer("listen_port", port));
 		fd_close(listener->fd);
 		listener->fd = -1;
 		--OpenFiles;
@@ -281,7 +204,11 @@ int unreal_listen(ConfigItem_listen *listener, char *ip, int port, int ipv6)
 
 	if (listen(listener->fd, LISTEN_SIZE) < 0)
 	{
-		report_error("listen failed for %s:%s", NULL);
+		unreal_log(ULOG_FATAL, "listen", "LISTEN_LISTEN_ERROR", NULL,
+		           "Could not listen on IP \"$listen_ip\" on port $listen_port: $socket_error",
+		           log_data_socket_error(listener->fd),
+		           log_data_string("listen_ip", ip),
+		           log_data_integer("listen_port", port));
 		fd_close(listener->fd);
 		listener->fd = -1;
 		--OpenFiles;
@@ -344,17 +271,17 @@ void close_listener(ConfigItem_listen *listener)
 {
 	if (listener->fd >= 0)
 	{
-		ircd_log(LOG_ERROR, "IRCd no longer listening on %s:%d (%s)%s",
-			listener->ip, listener->port,
-			listener->ipv6 ? "IPv6" : "IPv4",
-			listener->options & LISTENER_TLS ? " (SSL/TLS)" : "");
+		unreal_log(ULOG_INFO, "listen", "LISTEN_REMOVED", NULL,
+			   "UnrealIRCd is now no longer listening on $listen_ip:$listen_port",
+			   log_data_string("listen_ip", listener->ip),
+			   log_data_integer("listen_port", listener->port));
 		fd_close(listener->fd);
 		--OpenFiles;
 	}
 
 	listener->options &= ~LISTENER_BOUND;
 	listener->fd = -1;
-	/* We can already free the SSL/TLS context, since it is only
+	/* We can already free the TLS context, since it is only
 	 * used for new connections, which we no longer accept.
 	 */
 	if (listener->ssl_ctx)
@@ -498,63 +425,6 @@ void close_std_descriptors(void)
 #endif
 }
 
-/** Write PID file */
-void write_pidfile(void)
-{
-#ifdef IRCD_PIDFILE
-	int fd;
-	char buff[20];
-	if ((fd = open(conf_files->pid_file, O_CREAT | O_WRONLY, 0600)) < 0)
-	{
-		ircd_log(LOG_ERROR, "Error writing to pid file %s: %s", conf_files->pid_file, strerror(ERRNO));
-		return;
-	}
-	ircsnprintf(buff, sizeof(buff), "%5d\n", (int)getpid());
-	if (write(fd, buff, strlen(buff)) < 0)
-		ircd_log(LOG_ERROR, "Error writing to pid file %s: %s", conf_files->pid_file, strerror(ERRNO));
-	if (close(fd) < 0)
-		ircd_log(LOG_ERROR, "Error writing to pid file %s: %s", conf_files->pid_file, strerror(ERRNO));
-#endif
-}
-
-/** Reject an insecure (outgoing) server link that isn't SSL/TLS.
- * This function is void and not int because it can be called from other void functions
- */
-void reject_insecure_server(Client *client)
-{
-	sendto_umode(UMODE_OPER, "Could not link with server %s with SSL/TLS enabled. "
-	                         "Please check logs on the other side of the link. "
-	                         "If you insist with insecure linking then you can set link::options::outgoing::insecure "
-	                         "(NOT recommended!).",
-	                         client->name);
-	dead_socket(client, "Rejected link without SSL/TLS");
-}
-
-/** Start server handshake - called after the outgoing connection has been established.
- * @param client	The remote server
- */
-void start_server_handshake(Client *client)
-{
-	ConfigItem_link *aconf = client->serv ? client->serv->conf : NULL;
-
-	if (!aconf)
-	{
-		/* Should be impossible. */
-		sendto_ops_and_log("Lost configuration for %s in start_server_handshake()", get_client_name(client, FALSE));
-		return;
-	}
-
-	RunHook(HOOKTYPE_SERVER_HANDSHAKE_OUT, client);
-
-	sendto_one(client, NULL, "PASS :%s", (aconf->auth->type == AUTHTYPE_PLAINTEXT) ? aconf->auth->data : "*");
-
-	send_protoctl_servers(client, 0);
-	send_proto(client, aconf);
-	/* Sending SERVER message moved to cmd_protoctl, so it's send after the first PROTOCTL
-	 * that we receive from the remote server. -- Syzop
-	 */
-}
-
 /** Do an ident lookup if necessary.
  * @param client	The incoming client
  */
@@ -563,7 +433,7 @@ void consider_ident_lookup(Client *client)
 	char buf[BUFSIZE];
 
 	/* If ident checking is disabled or it's an outgoing connect, then no ident check */
-	if ((IDENT_CHECK == 0) || (client->serv && IsHandshake(client)))
+	if ((IDENT_CHECK == 0) || (client->server && IsHandshake(client)))
 	{
 		ClearIdentLookupSent(client);
 		ClearIdentLookup(client);
@@ -579,11 +449,11 @@ void consider_ident_lookup(Client *client)
 void completed_connection(int fd, int revents, void *data)
 {
 	Client *client = data;
-	ConfigItem_link *aconf = client->serv ? client->serv->conf : NULL;
+	ConfigItem_link *aconf = client->server ? client->server->conf : NULL;
 
 	if (IsHandshake(client))
 	{
-		/* Due to delayed ircd_SSL_connect call */
+		/* Due to delayed unreal_tls_connect call */
 		start_server_handshake(client);
 		fd_setselect(fd, FD_SELECT_READ, read_packet, client);
 		return;
@@ -593,7 +463,8 @@ void completed_connection(int fd, int revents, void *data)
 
 	if (!aconf)
 	{
-		sendto_ops_and_log("Lost configuration for %s", get_client_name(client, FALSE));
+		unreal_log(ULOG_ERROR, "link", "BUG_LOST_CONFIGURATION_ON_CONNECT", client,
+		           "Lost configuration while connecting to $client.details");
 		return;
 	}
 
@@ -623,40 +494,12 @@ void close_connection(Client *client)
 	if (IsServer(client))
 	{
 		ircstats.is_sv++;
-		ircstats.is_sbs += client->local->sendB;
-		ircstats.is_sbr += client->local->receiveB;
-		ircstats.is_sks += client->local->sendK;
-		ircstats.is_skr += client->local->receiveK;
-		ircstats.is_sti += TStime() - client->local->firsttime;
-		if (ircstats.is_sbs > 1023)
-		{
-			ircstats.is_sks += (ircstats.is_sbs >> 10);
-			ircstats.is_sbs &= 0x3ff;
-		}
-		if (ircstats.is_sbr > 1023)
-		{
-			ircstats.is_skr += (ircstats.is_sbr >> 10);
-			ircstats.is_sbr &= 0x3ff;
-		}
+		ircstats.is_sti += TStime() - client->local->creationtime;
 	}
 	else if (IsUser(client))
 	{
 		ircstats.is_cl++;
-		ircstats.is_cbs += client->local->sendB;
-		ircstats.is_cbr += client->local->receiveB;
-		ircstats.is_cks += client->local->sendK;
-		ircstats.is_ckr += client->local->receiveK;
-		ircstats.is_cti += TStime() - client->local->firsttime;
-		if (ircstats.is_cbs > 1023)
-		{
-			ircstats.is_cks += (ircstats.is_cbs >> 10);
-			ircstats.is_cbs &= 0x3ff;
-		}
-		if (ircstats.is_cbr > 1023)
-		{
-			ircstats.is_ckr += (ircstats.is_cbr >> 10);
-			ircstats.is_cbr &= 0x3ff;
-		}
+		ircstats.is_cti += TStime() - client->local->creationtime;
 	}
 	else
 		ircstats.is_ni++;
@@ -727,13 +570,21 @@ void set_sock_opts(int fd, Client *client, int ipv6)
 #ifdef SO_REUSEADDR
 	opt = 1;
 	if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (void *)&opt, sizeof(opt)) < 0)
-			report_error("setsockopt(SO_REUSEADDR) %s:%s", client);
+	{
+		unreal_log(ULOG_WARNING, "socket", "SOCKET_ERROR_SETSOCKOPTS", client,
+		           "Could not setsockopt(SO_REUSEADDR): $socket_error",
+			   log_data_socket_error(-1));
+	}
 #endif
 
 #if defined(SO_USELOOPBACK) && !defined(_WIN32)
 	opt = 1;
 	if (setsockopt(fd, SOL_SOCKET, SO_USELOOPBACK, (void *)&opt, sizeof(opt)) < 0)
-		report_error("setsockopt(SO_USELOOPBACK) %s:%s", client);
+	{
+		unreal_log(ULOG_WARNING, "socket", "SOCKET_ERROR_SETSOCKOPTS", client,
+		           "Could not setsockopt(SO_USELOOPBACK): $socket_error",
+			   log_data_socket_error(-1));
+	}
 #endif
 
 	/* Previously we also called set_socket_buffers() to set some
@@ -747,14 +598,18 @@ void set_sock_opts(int fd, Client *client, int ipv6)
 	{
 		if (client)
 		{
-			report_error("fcntl(fd, F_GETFL) failed for %s:%s", client);
+			unreal_log(ULOG_WARNING, "socket", "SOCKET_ERROR_SETSOCKOPTS", client,
+				   "Could not get socket options (F_GETFL): $socket_error",
+				   log_data_socket_error(-1));
 		}
 	}
 	else if (fcntl(fd, F_SETFL, opt | O_NONBLOCK) == -1)
 	{
 		if (client)
 		{
-			report_error("fcntl(fd, F_SETL, nonb) failed for %s:%s", client);
+			unreal_log(ULOG_WARNING, "socket", "SOCKET_ERROR_SETSOCKOPTS", client,
+				   "Could not get socket options (F_SETFL): $socket_error",
+				   log_data_socket_error(-1));
 		}
 	}
 #else
@@ -763,7 +618,9 @@ void set_sock_opts(int fd, Client *client, int ipv6)
 	{
 		if (client)
 		{
-			report_error("ioctlsocket(fd,FIONBIO) failed for %s:%s", client);
+			unreal_log(ULOG_WARNING, "socket", "SOCKET_ERROR_SETSOCKOPTS", client,
+				   "Could not ioctlsocket FIONBIO: $socket_error",
+				   log_data_socket_error(-1));
 		}
 	}
 #endif
@@ -796,7 +653,7 @@ int is_loopback_ip(char *ip)
  * @param port		Remote port (will be written)
  * @returns The IP address
  */
-char *getpeerip(Client *client, int fd, int *port)
+const char *getpeerip(Client *client, int fd, int *port)
 {
 	static char ret[HOSTLEN+1];
 
@@ -859,7 +716,7 @@ static int check_too_many_unknown_connections(Client *client)
 Client *add_connection(ConfigItem_listen *listener, int fd)
 {
 	Client *client;
-	char *ip;
+	const char *ip;
 	int port = 0;
 	
 	client = make_client(NULL, &me);
@@ -877,7 +734,11 @@ Client *add_connection(ConfigItem_listen *listener, int fd)
 		 */
 		if (ERRNO != P_ENOTCONN)
 		{
-			report_error("Failed to accept new client %s :%s", client);
+			unreal_log(ULOG_ERROR, "listen", "ACCEPT_ERROR", NULL,
+			           "Failed to accept new client: unable to get IP address: $socket_error",
+				   log_data_socket_error(fd),
+				   log_data_string("listen_ip", listener->ip),
+				   log_data_integer("listen_port", listener->port));
 		}
 refuse_client:
 			ircstats.is_ref++;
@@ -932,7 +793,6 @@ refuse_client:
 		if (ctx)
 		{
 			SetTLSAcceptHandshake(client);
-			Debug((DEBUG_DEBUG, "Starting TLS accept handshake for %s", client->local->sockhost));
 			if ((client->local->ssl = SSL_new(ctx)) == NULL)
 			{
 				goto refuse_client;
@@ -940,10 +800,9 @@ refuse_client:
 			SetTLS(client);
 			SSL_set_fd(client->local->ssl, fd);
 			SSL_set_nonblocking(client->local->ssl);
-			SSL_set_ex_data(client->local->ssl, ssl_client_index, client);
-			if (!ircd_SSL_accept(client, fd))
+			SSL_set_ex_data(client->local->ssl, tls_client_index, client);
+			if (!unreal_tls_accept(client, fd))
 			{
-				Debug((DEBUG_DEBUG, "Failed TLS accept handshake in instance 1: %s", client->local->sockhost));
 				SSL_set_shutdown(client->local->ssl, SSL_RECEIVED_SHUTDOWN);
 				SSL_smart_shutdown(client->local->ssl);
 				SSL_free(client->local->ssl);
@@ -956,12 +815,10 @@ refuse_client:
 	return client;
 }
 
-static int dns_special_flag = 0; /* This is for an "interesting" race condition  very ugly. */
-
 /** Start of normal client handshake - DNS and ident lookups, etc.
  * @param client	The client
  * @note This is called directly after accept() -> add_connection() for plaintext.
- *       For SSL/TLS connections this is called after the SSL/TLS handshake is completed.
+ *       For TLS connections this is called after the TLS handshake is completed.
  */
 void start_of_normal_client_handshake(Client *client)
 {
@@ -975,9 +832,7 @@ void start_of_normal_client_handshake(Client *client)
 	{
 		if (should_show_connect_info(client))
 			sendto_one(client, NULL, ":%s %s", me.name, REPORT_DO_DNS);
-		dns_special_flag = 1;
 		he = unrealdns_doclient(client);
-		dns_special_flag = 0;
 
 		if (client->local->hostp)
 			goto doauth; /* Race condition detected, DNS has been done, continue with auth */
@@ -1040,7 +895,7 @@ void read_packet(int fd, int revents, void *data)
 	fd_setselect(fd, FD_SELECT_READ, read_packet, client);
 	/* Restore handling of writes towards send_queued_cb(), since
 	 * it may be overwritten in an earlier call to read_packet(),
-	 * to handle (SSL) writes by read_packet(), see below under
+	 * to handle (TLS) writes by read_packet(), see below under
 	 * SSL_ERROR_WANT_WRITE.
 	 */
 	fd_setselect(fd, FD_SELECT_WRITE, send_queued_cb, client);
@@ -1090,16 +945,16 @@ void read_packet(int fd, int revents, void *data)
 			if (length < 0 && ((ERRNO == P_EWOULDBLOCK) || (ERRNO == P_EAGAIN) || (ERRNO == P_EINTR)))
 				return;
 
-			if (IsServer(client) || client->serv) /* server or outgoing connection */
-				lost_server_link(client, "Read error or connection closed.");
+			if (IsServer(client) || client->server) /* server or outgoing connection */
+				lost_server_link(client, NULL);
 
-			exit_client(client, NULL, "Read error");
+			exit_client(client, NULL, ERRNO ? "Read error" : "Connection closed");
 			return;
 		}
 
-		client->local->lasttime = now;
-		if (client->local->lasttime > client->local->since)
-			client->local->since = client->local->lasttime;
+		client->local->last_msg_received = now;
+		if (client->local->last_msg_received > client->local->fake_lag)
+			client->local->fake_lag = client->local->last_msg_received;
 		/* FIXME: Is this correct? I have my doubts. */
 		ClearPingSent(client);
 
@@ -1174,189 +1029,26 @@ void process_clients(void)
 	} while(&client->lclient_node != &unknown_list);
 }
 
-/** Returns 4 if 'str' is a valid IPv4 address
- * and 6 if 'str' is a valid IPv6 IP address.
- * Zero (0) is returned in any other case (eg: hostname).
+/** Check if 'ip' is a valid IP address, and if so what type.
+ * @param ip	The IP address
+ * @retval 4	Valid IPv4 address
+ * @retval 6	Valid IPv6 address
+ * @retval 0	Invalid IP address (eg: a hostname)
  */
-int is_valid_ip(char *str)
+int is_valid_ip(const char *ip)
 {
 	char scratch[64];
 	
-	if (inet_pton(AF_INET, str, scratch) == 1)
+	if (BadPtr(ip))
+		return 0;
+
+	if (inet_pton(AF_INET, ip, scratch) == 1)
 		return 4; /* IPv4 */
 	
-	if (inet_pton(AF_INET6, str, scratch) == 1)
+	if (inet_pton(AF_INET6, ip, scratch) == 1)
 		return 6; /* IPv6 */
 	
 	return 0; /* not an IP address */
-}
-
-static int connect_server_helper(ConfigItem_link *, Client *);
-
-/** Start an outgoing connection to a server, for server linking.
- * @param aconf		Configuration attached to this server
- * @param by		The user initiating the connection (can be NULL)
- * @param hp		The address to connect to.
- * @returns <0 on error, 0 on success. Rather confusing.
- */
-int connect_server(ConfigItem_link *aconf, Client *by, struct hostent *hp)
-{
-	Client *client;
-
-#ifdef DEBUGMODE
-	sendto_realops("connect_server() called with aconf %p, refcount: %d, TEMP: %s",
-		aconf, aconf->refcount, aconf->flag.temporary ? "YES" : "NO");
-#endif
-
-	if (!aconf->outgoing.hostname)
-		return -1; /* This is an incoming-only link block. Caller shouldn't call us. */
-		
-	if (!hp)
-	{
-		/* Remove "cache" */
-		safe_free(aconf->connect_ip);
-	}
-	/*
-	 * If we dont know the IP# for this host and itis a hostname and
-	 * not a ip# string, then try and find the appropriate host record.
-	 */
-	if (!aconf->connect_ip)
-	{
-		if (is_valid_ip(aconf->outgoing.hostname))
-		{
-			/* link::outgoing::hostname is an IP address. No need to resolve host. */
-			safe_strdup(aconf->connect_ip, aconf->outgoing.hostname);
-		} else
-		{
-			/* It's a hostname, let the resolver look it up. */
-			int ipv4_explicit_bind = 0;
-
-			if (aconf->outgoing.bind_ip && (is_valid_ip(aconf->outgoing.bind_ip) == 4))
-				ipv4_explicit_bind = 1;
-			
-			/* We need this 'aconf->refcount++' or else there's a race condition between
-			 * starting resolving the host and the result of the resolver (we could
-			 * REHASH in that timeframe) leading to an invalid (freed!) 'aconf'.
-			 * -- Syzop, bug #0003689.
-			 */
-			aconf->refcount++;
-			unrealdns_gethostbyname_link(aconf->outgoing.hostname, aconf, ipv4_explicit_bind);
-			return -2;
-		}
-	}
-	client = make_client(NULL, &me);
-	client->local->hostp = hp;
-	/*
-	 * Copy these in so we have something for error detection.
-	 */
-	strlcpy(client->name, aconf->servername, sizeof(client->name));
-	strlcpy(client->local->sockhost, aconf->outgoing.hostname, HOSTLEN + 1);
-
-	if (!connect_server_helper(aconf, client))
-	{
-		int errtmp = ERRNO;
-		report_error("Connect to host %s failed: %s", client);
-		if (by && IsUser(by) && !MyUser(by))
-			sendnotice(by, "*** Connect to host %s failed.", client->name);
-		fd_close(client->local->fd);
-		--OpenFiles;
-		client->local->fd = -2;
-		free_client(client);
-		SET_ERRNO(errtmp);
-		if (ERRNO == P_EINTR)
-			SET_ERRNO(P_ETIMEDOUT);
-		return -1;
-	}
-	/* The socket has been connected or connect is in progress. */
-	make_server(client);
-	client->serv->conf = aconf;
-	client->serv->conf->refcount++;
-#ifdef DEBUGMODE
-	sendto_realops("connect_server() CONTINUED (%s:%d), aconf %p, refcount: %d, TEMP: %s",
-		__FILE__, __LINE__, aconf, aconf->refcount, aconf->flag.temporary ? "YES" : "NO");
-#endif
-	Debug((DEBUG_ERROR, "reference count for %s (%s) is now %d",
-		client->name, client->serv->conf->servername, client->serv->conf->refcount));
-	if (by && IsUser(by))
-		strlcpy(client->serv->by, by->name, sizeof(client->serv->by));
-	else
-		strlcpy(client->serv->by, "AutoConn.", sizeof client->serv->by);
-	client->serv->up = me.name;
-	SetConnecting(client);
-	SetOutgoing(client);
-	irccounts.unknown++;
-	list_add(&client->lclient_node, &unknown_list);
-	set_sockhost(client, aconf->outgoing.hostname);
-	add_client_to_list(client);
-
-	if (aconf->outgoing.options & CONNECT_TLS)
-	{
-		SetTLSConnectHandshake(client);
-		fd_setselect(client->local->fd, FD_SELECT_WRITE, ircd_SSL_client_handshake, client);
-	}
-	else
-		fd_setselect(client->local->fd, FD_SELECT_WRITE, completed_connection, client);
-
-	return 0;
-}
-
-/** Helper function for connect_server() to prepare the actual bind()'ing and connect().
- * @param aconf		Configuration entry of the server.
- * @param client	The client entry that we will use and fill in.
- * @returns 1 on success, 0 on failure.
- */
-static int connect_server_helper(ConfigItem_link *aconf, Client *client)
-{
-	char *bindip;
-	char buf[BUFSIZE];
-
-	if (!aconf->connect_ip)
-		return 0; /* handled upstream or shouldn't happen */
-	
-	if (strchr(aconf->connect_ip, ':'))
-		SetIPV6(client);
-	
-	safe_strdup(client->ip, aconf->connect_ip);
-	
-	snprintf(buf, sizeof buf, "Outgoing connection: %s", get_client_name(client, TRUE));
-	client->local->fd = fd_socket(IsIPV6(client) ? AF_INET6 : AF_INET, SOCK_STREAM, 0, buf);
-	if (client->local->fd < 0)
-	{
-		if (ERRNO == P_EMFILE)
-		{
-			sendto_realops("opening stream socket to server %s: No more sockets",
-				get_client_name(client, TRUE));
-			return 0;
-		}
-		report_baderror("opening stream socket to server %s:%s", client);
-		return 0;
-	}
-	if (++OpenFiles >= maxclients)
-	{
-		sendto_ops_and_log("No more connections allowed (%s)", client->name);
-		return 0;
-	}
-
-	set_sockhost(client, aconf->outgoing.hostname);
-
-	if (!aconf->outgoing.bind_ip && iConf.link_bindip)
-		bindip = iConf.link_bindip;
-	else
-		bindip = aconf->outgoing.bind_ip;
-
-	if (bindip && strcmp("*", bindip))
-	{
-		if (!unreal_bind(client->local->fd, bindip, 0, IsIPV6(client)))
-		{
-			report_baderror("Error binding to local port for %s:%s -- "
-			                "Your link::outgoing::bind-ip is probably incorrect.", client);
-			return 0;
-		}
-	}
-
-	set_sock_opts(client->local->fd, client, IsIPV6(client));
-
-	return unreal_connect(client->local->fd, client->ip, aconf->outgoing.port, IsIPV6(client));
 }
 
 /** Checks if the system is IPv6 capable.
@@ -1375,11 +1067,11 @@ int ipv6_capable(void)
 
 /** Attempt to deliver data to a client.
  * This function is only called from send_queued() and will deal
- * with sending to the SSL/TLS or plaintext connection.
+ * with sending to the TLS or plaintext connection.
  * @param cptr The client
  * @param str  The string to send
  * @param len  The length of the string
- * @param want_read In case of SSL/TLS it may happen that SSL_write()
+ * @param want_read In case of TLS it may happen that SSL_write()
  *                  needs to READ data. If this happens then this
  *                  function will set *want_read to 1.
  *                  The upper layer should then call us again when
@@ -1399,16 +1091,10 @@ int deliver_it(Client *client, char *str, int len, int *want_read)
 
 	*want_read = 0;
 
-	if (IsDeadSocket(client) || (!IsServer(client) && !IsUser(client)
-	    && !IsHandshake(client) 
-	    && !IsTLSHandshake(client)
- 
-	    && !IsUnknown(client)))
+	if (IsDeadSocket(client) ||
+	    (!IsServer(client) && !IsUser(client) && !IsHandshake(client) &&
+	     !IsTLSHandshake(client) && !IsUnknown(client)))
 	{
-		str[len] = '\0';
-		sendto_ops
-		    ("* * * DEBUG ERROR * * * !!! Calling deliver_it() for %s, status %d %s, with message: %s",
-		    client->name, client->status, IsDeadSocket(client) ? "DEAD" : "", str);
 		return -1;
 	}
 
@@ -1459,25 +1145,15 @@ int deliver_it(Client *client, char *str, int len, int *want_read)
 
 	if (retval > 0)
 	{
-		client->local->sendB += retval;
-		me.local->sendB += retval;
-		if (client->local->sendB > 1023)
-		{
-			client->local->sendK += (client->local->sendB >> 10);
-			client->local->sendB &= 0x03ff;	/* 2^10 = 1024, 3ff = 1023 */
-		}
-		if (me.local->sendB > 1023)
-		{
-			me.local->sendK += (me.local->sendB >> 10);
-			me.local->sendB &= 0x03ff;
-		}
+		client->local->traffic.bytes_sent += retval;
+		me.local->traffic.bytes_sent += retval;
 	}
 
 	return (retval);
 }
 
 /** Initiate an outgoing connection, the actual connect() call. */
-int unreal_connect(int fd, char *ip, int port, int ipv6)
+int unreal_connect(int fd, const char *ip, int port, int ipv6)
 {
 	int n;
 	
@@ -1513,7 +1189,7 @@ int unreal_connect(int fd, char *ip, int port, int ipv6)
 /** Bind to an IP/port (port may be 0 for auto).
  * @returns 0 on failure, other on success.
  */
-int unreal_bind(int fd, char *ip, int port, int ipv6)
+int unreal_bind(int fd, const char *ip, int port, int ipv6)
 {
 	if (ipv6)
 	{

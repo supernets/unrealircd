@@ -98,9 +98,6 @@
  */
 /* #undef	DEBUGMODE */
 
-/* Similarly, DEBUG_IOENGINE can be used to debug the I/O engine. */
-/* #undef	DEBUG_IOENGINE */
-
 /*
  * Full pathnames and defaults of irc system's support files.
  */
@@ -126,7 +123,7 @@
  * Common usage for this are: a trusted bot ran by an IRCOp, that you only
  * want to give "flood access" and nothing else, and other such things.
  */
-#define FAKELAG_CONFIGURABLE
+//#undef FAKELAG_CONFIGURABLE
 
 /* The default value for class::sendq */
 #define DEFAULT_SENDQ	3000000
@@ -212,9 +209,24 @@
  * when there is no socket data waiting for us (no clients sending anything).
  * Was 2000ms in 3.2.x, 1000ms for versions below 3.4-alpha4.
  * 500ms in UnrealIRCd 4 (?)
- * 250ms in UnrealIRCd 5.
+ * 250ms in UnrealIRCd 5 and UnrealIRCd 6.
  */
 #define SOCKETLOOP_MAX_DELAY 250
+
+/* After how much time should we timeout downloads:
+ * DOWNLOAD_CONNECT_TIMEOUT: for the DNS and connect() / TLS_connect() call
+ * DOWNLOAD_TRANSFER_TIMEOUT: for the complete transfer (including connect)
+ * This can't be in the configuration file, as we need it while
+ * fetching the configuration file.. ;)
+ */
+#define DOWNLOAD_CONNECT_TIMEOUT 15
+#define DOWNLOAD_TRANSFER_TIMEOUT 45
+
+/* Maximum number of HTTP redirects to follow.
+ * Keep this reasonably low, as this may delay booting up to
+ * DOWNLOAD_TRANSFER_TIMEOUT * DOWNLOAD_MAX_REDIRECTS
+ */
+#define DOWNLOAD_MAX_REDIRECTS 2
 
 /*
  * Max time from the nickname change that still causes KILL
@@ -233,17 +245,26 @@
 #endif
 
 /* Maximum number of ModData objects that may be attached to an object */
-/* UnrealIRCd 4.0.0 - 4.0.13:  8,    8, 4, 4
- * UnrealIRCd 4.0.14+       : 12,    8, 4, 4
- * UnrealIRCd 5.0.0         : 12, 8, 8, 4, 4, 500, 500
+/* UnrealIRCd 4.0.0 - 4.0.13:  8,     8, 4, 4
+ * UnrealIRCd 4.0.14+       : 12,     8, 4, 4
+ * UnrealIRCd 5.0.0         : 12,  8, 8, 4, 4, 500, 500
+ * UnrealIRCd 6.0.0         : 24, 12, 8, 4, 4, 500, 500
  */
-#define MODDATA_MAX_CLIENT		 12
-#define MODDATA_MAX_LOCAL_CLIENT	  8
+#define MODDATA_MAX_CLIENT		 24
+#define MODDATA_MAX_LOCAL_CLIENT	 12
 #define MODDATA_MAX_CHANNEL		  8
 #define MODDATA_MAX_MEMBER		  4
 #define MODDATA_MAX_MEMBERSHIP		  4
 #define MODDATA_MAX_LOCAL_VARIABLE	500
 #define MODDATA_MAX_GLOBAL_VARIABLE	500
+
+/** Size of the member modes buffer, so can be max this-1 modes
+ * assigned to an individual user (and thus max prefixes as well).
+ * The default is 8, so 7 max modes, and is a bit tight.
+ * It allows for vhoaq (5) and then 2 additional ones from 3rd
+ * party modules.
+ */
+#define MEMBERMODESLEN	8
 
 /* If EXPERIMENTAL is #define'd then all users will receive a notice about
  * this when they connect, along with a pointer to bugs.unrealircd.org where
@@ -251,7 +272,7 @@
  */
 #undef EXPERIMENTAL
 
-/* Default SSL/TLS cipherlist (except for TLS1.3, see further down).
+/* Default TLS cipherlist (except for TLS1.3, see further down).
  * This can be changed via set::ssl::options::ciphers in the config file.
  */
 #define UNREALIRCD_DEFAULT_CIPHERS "TLS13-CHACHA20-POLY1305-SHA256 TLS13-AES-256-GCM-SHA384 TLS13-AES-128-GCM-SHA256 EECDH+CHACHA20 EECDH+AESGCM EECDH+AES AES256-GCM-SHA384 AES128-GCM-SHA256 AES256-SHA256 AES128-SHA256 AES256-SHA AES128-SHA"
@@ -261,7 +282,7 @@
  */
 #define UNREALIRCD_DEFAULT_CIPHERSUITES "TLS_CHACHA20_POLY1305_SHA256:TLS_AES_256_GCM_SHA384:TLS_AES_128_GCM_SHA256:TLS_AES_128_CCM_8_SHA256:TLS_AES_128_CCM_SHA256"
 
-/* Default SSL/TLS curves for ECDH(E)
+/* Default TLS curves for ECDH(E)
  * This can be changed via set::ssl::options::ecdh-curve in the config file.
  * NOTE: This requires openssl 1.0.2 or newer, otherwise these defaults
  *       are not applied, due to the missing openssl API call.
@@ -280,10 +301,8 @@
 #define	IRCD_PIDFILE PIDFILE
 
 #ifdef DEBUGMODE
- #define Debug(x) debug x
  #define LOGFILE LPATH
 #else
- #define Debug(x) ;
  #define LOGFILE "/dev/null"
 #endif
 

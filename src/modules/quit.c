@@ -30,7 +30,7 @@ ModuleHeader MOD_HEADER
 	"5.0", /* Version */
 	"command /quit", /* Short description of module */
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
     };
 
 /* This is called on module init, before Server Ready */
@@ -59,11 +59,17 @@ MOD_UNLOAD()
 */
 CMD_FUNC(cmd_quit)
 {
-	char *comment = (parc > 1 && parv[1]) ? parv[1] : client->name;
-	static char commentbuf[MAXQUITLEN + 1];
+	const char *comment = (parc > 1 && parv[1]) ? parv[1] : client->name;
+	char commentbuf[MAXQUITLEN + 1];
+	char commentbuf2[MAXQUITLEN + 1];
 
-	if (parv[1] && (strlen(comment) > iConf.quit_length))
-		comment[iConf.quit_length] = '\0';
+	if (parc > 1 && parv[1])
+	{
+		strlncpy(commentbuf, parv[1], sizeof(commentbuf), iConf.quit_length);
+		comment = commentbuf;
+	} else {
+		comment = client->name;
+	}
 
 	if (MyUser(client))
 	{
@@ -91,14 +97,14 @@ CMD_FUNC(cmd_quit)
 		
 		if (!ValidatePermissionsForPath("immune:anti-spam-quit-message-time",client,NULL,NULL,NULL) && ANTI_SPAM_QUIT_MSG_TIME)
 		{
-			if (client->local->firsttime+ANTI_SPAM_QUIT_MSG_TIME > TStime())
+			if (client->local->creationtime+ANTI_SPAM_QUIT_MSG_TIME > TStime())
 				comment = client->name;
 		}
 
 		if (iConf.part_instead_of_quit_on_comment_change && MyUser(client))
 		{
 			Membership *lp, *lp_next;
-			char *newcomment;
+			const char *newcomment;
 			Channel *channel;
 
 			for (lp = client->user->channel; lp; lp = lp_next)
@@ -109,7 +115,7 @@ CMD_FUNC(cmd_quit)
 
 				for (tmphook = Hooks[HOOKTYPE_PRE_LOCAL_QUIT_CHAN]; tmphook; tmphook = tmphook->next)
 				{
-					newcomment = (*(tmphook->func.pcharfunc))(client, channel, comment);
+					newcomment = (*(tmphook->func.stringfunc))(client, channel, comment);
 					if (!newcomment)
 						break;
 				}
@@ -120,13 +126,21 @@ CMD_FUNC(cmd_quit)
 				/* Comment changed? Then PART the user before we do the QUIT. */
 				if (comment != newcomment)
 				{
-					char *parx[4];
+					const char *parx[4];
+					char tmp[512];
 					int ret;
 
+
 					parx[0] = NULL;
-					parx[1] = channel->chname;
-					parx[2] = newcomment;
-					parx[3] = NULL;
+					parx[1] = channel->name;
+					if (newcomment)
+					{
+						strlcpy(tmp, newcomment, sizeof(tmp));
+						parx[2] = tmp;
+						parx[3] = NULL;
+					} else {
+						parx[2] = NULL;
+					}
 
 					do_cmd(client, recv_mtags, "PART", newcomment ? 3 : 2, parx);
 					/* This would be unusual, but possible (somewhere in the future perhaps): */
@@ -138,7 +152,7 @@ CMD_FUNC(cmd_quit)
 
 		for (tmphook = Hooks[HOOKTYPE_PRE_LOCAL_QUIT]; tmphook; tmphook = tmphook->next)
 		{
-			comment = (*(tmphook->func.pcharfunc))(client, comment);
+			comment = (*(tmphook->func.stringfunc))(client, comment);
 			if (!comment)
 			{			
 				comment = client->name;
@@ -147,11 +161,11 @@ CMD_FUNC(cmd_quit)
 		}
 
 		if (PREFIX_QUIT)
-			snprintf(commentbuf, sizeof(commentbuf), "%s: %s", PREFIX_QUIT, comment);
+			snprintf(commentbuf2, sizeof(commentbuf2), "%s: %s", PREFIX_QUIT, comment);
 		else
-			strlcpy(commentbuf, comment, sizeof(commentbuf));
+			strlcpy(commentbuf2, comment, sizeof(commentbuf2));
 
-		exit_client(client, recv_mtags, commentbuf);
+		exit_client(client, recv_mtags, commentbuf2);
 	}
 	else
 	{

@@ -33,7 +33,7 @@ ModuleHeader MOD_HEADER
 	"5.0", /* Version */
 	"command /sethost", /* Short description of module */
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
     };
 
 MOD_INIT()
@@ -61,7 +61,7 @@ MOD_UNLOAD()
 */
 CMD_FUNC(cmd_sethost)
 {
-	char *vhost;
+	const char *vhost;
 
 	if (MyUser(client) && !ValidatePermissionsForPath("self:set:host",client,NULL,NULL,NULL))
 	{
@@ -88,7 +88,7 @@ CMD_FUNC(cmd_sethost)
 		return;
 	}
 
-	if (!valid_host(vhost))
+	if (!valid_host(vhost, 0))
 	{
 		sendnotice(client, "*** /SetHost Error: A hostname may only contain a-z, A-Z, 0-9, '-' & '.'.");
 		return;

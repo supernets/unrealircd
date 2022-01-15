@@ -130,9 +130,13 @@ AC_DEFUN([CHECK_LIBCURL],
 		LIBS="$LIBS_SAVEDA"
 		CFLAGS="$CFLAGS_SAVEDA"
 
-		URL="url.o"
-		AC_SUBST(URL)
+		dnl Finally, choose the cURL implementation of url.c
+		URL="url_curl.o"
+	],[
+		dnl Choose UnrealIRCds internal implementation of url.c
+		URL="url_unreal.o"
 	]) dnl AS_IF(enable_curl) 
+	AC_SUBST(URL)
 ])
 
 dnl the following 2 macros are based on CHECK_SSL by Mark Ethan Trostler <trostler@juniper.net> 
@@ -178,7 +182,11 @@ AS_IF([test $enable_ssl != "no"],
 	else
 		CRYPTOLIB="-lssl -lcrypto";
 		if test ! "$ssldir" = "/usr" ; then
-			LDFLAGS="$LDFLAGS -L$ssldir/lib";
+			if test -d "$ssldir/lib64" ; then
+				LDFLAGS="$LDFLAGS -L$ssldir/lib64";
+			else
+				LDFLAGS="$LDFLAGS -L$ssldir/lib";
+			fi
 			dnl check if binary path exists
 			if test -f "$ssldir/bin/openssl"; then
 			    OPENSSLPATH="$ssldir/bin/openssl";
@@ -312,3 +320,94 @@ else
 	AC_MSG_RESULT([no])
 fi
 ])
+
+dnl For geoip-api-c
+AC_DEFUN([CHECK_GEOIP_CLASSIC],
+[
+	AC_ARG_ENABLE(geoip_classic,
+	[AC_HELP_STRING([--enable-geoip-classic=no/yes],[enable GeoIP Classic support])],
+	[enable_geoip_classic=$enableval],
+	[enable_geoip_classic=no])
+
+	AS_IF([test "x$enable_geoip_classic" = "xyes"],
+	[
+		dnl First see if the system provides it
+		has_system_geoip_classic="no"
+		PKG_CHECK_MODULES([GEOIP_CLASSIC], [geoip >= 1.6.0],
+		                  [has_system_geoip_classic=yes
+		                   AS_IF([test "x$PRIVATELIBDIR" != "x"], [rm -f "$PRIVATELIBDIR/"libGeoIP.*])],
+		                  [has_system_geoip_classic=no])
+
+		dnl Otherwise fallback to our own..
+		AS_IF([test "$has_system_geoip_classic" = "no"],[
+			dnl REMEMBER TO CHANGE WITH A NEW GEOIP LIBRARY RELEASE!
+			geoip_classic_version="1.6.12"
+			AC_MSG_RESULT(extracting GeoIP Classic library)
+			cur_dir=`pwd`
+			cd extras
+			dnl remove old directory to force a recompile...
+			dnl and remove its installation prefix just to clean things up.
+			rm -rf GeoIP-$geoip_classic_version geoip-classic
+			if test "x$ac_cv_path_GUNZIP" = "x" ; then
+				tar xfz geoip-classic.tar.gz
+			else
+				cp geoip-classic.tar.gz geoip-classic.tar.gz.bak
+				gunzip -f geoip-classic.tar.gz
+				cp geoip-classic.tar.gz.bak geoip-classic.tar.gz
+				tar xf geoip-classic.tar
+			fi
+			AC_MSG_RESULT(configuring GeoIP Classic library)
+			cd GeoIP-$geoip_classic_version
+			save_cflags="$CFLAGS"
+			CFLAGS="$orig_cflags"
+			export CFLAGS
+			./configure --prefix=$cur_dir/extras/geoip-classic --libdir=$PRIVATELIBDIR --enable-shared --disable-static || exit 1
+			CFLAGS="$save_cflags"
+			AC_MSG_RESULT(compiling GeoIP Classic library)
+			$ac_cv_prog_MAKER || exit 1
+			AC_MSG_RESULT(installing GeoIP Classic library)
+			$ac_cv_prog_MAKER install || exit 1
+			dnl Try pkg-config first...
+			AS_IF([test -n "$ac_cv_path_PKGCONFIG"],
+			       [GEOIP_CLASSIC_LIBS="`$ac_cv_path_PKGCONFIG --libs geoip.pc`"
+			        GEOIP_CLASSIC_CFLAGS="`$ac_cv_path_PKGCONFIG --cflags geoip.pc`"])
+			dnl In case the system does not have pkg-config, fallback to hardcoded settings...
+			AS_IF([test -z "$GEOIP_CLASSIC_LIBS"],
+			       [GEOIP_CLASSIC_LIBS="-L$PRIVATELIBDIR -lGeoIP"
+			        GEOIP_CLASSIC_CFLAGS="-I$cur_dir/extras/geoip-classic/include"])
+			cd $cur_dir
+		])
+		
+		AC_SUBST(GEOIP_CLASSIC_LIBS)
+		AC_SUBST(GEOIP_CLASSIC_CFLAGS)
+
+		GEOIP_CLASSIC_OBJECTS="geoip_classic.so"
+		AC_SUBST(GEOIP_CLASSIC_OBJECTS)
+	]) dnl AS_IF(enable_geoip_classic) 
+])
+
+AC_DEFUN([CHECK_LIBMAXMINDDB],
+[
+	AC_ARG_ENABLE(libmaxminddb,
+	[AC_HELP_STRING([--enable-libmaxminddb=no/yes],[enable GeoIP libmaxminddb support])],
+	[enable_libmaxminddb=$enableval],
+	[enable_libmaxminddb=no])
+
+	AS_IF([test "x$enable_libmaxminddb" = "xyes"],
+	[
+		dnl see if the system provides it
+		has_system_libmaxminddb="no"
+		PKG_CHECK_MODULES([LIBMAXMINDDB], [libmaxminddb >= 1.4.3],
+		                  [has_system_libmaxminddb=yes])
+		AS_IF([test "x$has_system_libmaxminddb" = "xyes"],
+		[
+
+			AC_SUBST(LIBMAXMINDDB_LIBS)
+			AC_SUBST(LIBMAXMINDDB_CFLAGS)
+
+			GEOIP_MAXMIND_OBJECTS="geoip_maxmind.so"
+			AC_SUBST(GEOIP_MAXMIND_OBJECTS)
+		])
+	])
+])
+

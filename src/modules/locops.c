@@ -32,7 +32,7 @@ ModuleHeader MOD_HEADER
 	"5.0",
 	"command /locops", 
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
     };
 
 MOD_INIT()
@@ -58,9 +58,7 @@ MOD_UNLOAD()
 */
 CMD_FUNC(cmd_locops)
 {
-	char *message;
-
-	message = parc > 1 ? parv[1] : NULL;
+	const char *message = parc > 1 ? parv[1] : NULL;
 
 	if (BadPtr(message))
 	{

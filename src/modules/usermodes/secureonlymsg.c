@@ -1,5 +1,5 @@
 /*
- * Recieve private messages only from SSL/TLS users (User mode +Z)
+ * Recieve private messages only from TLS users (User mode +Z)
  * (C) Copyright 2000-.. Bram Matthys (Syzop) and the UnrealIRCd team
  * Idea from "Stealth" <stealth@x-tab.org>
  *
@@ -29,14 +29,14 @@ ModuleHeader MOD_HEADER
 	"4.2",
 	"User Mode +Z",
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
     };
 
 /* Global variables */
 long UMODE_SECUREONLYMSG = 0L;
 
 /* Forward declarations */
-int secureonlymsg_can_send_to_user(Client *client, Client *target, char **text, char **errmsg, SendType sendtype);
+int secureonlymsg_can_send_to_user(Client *client, Client *target, const char **text, const char **errmsg, SendType sendtype);
                     
 MOD_INIT()
 {
@@ -58,27 +58,27 @@ MOD_UNLOAD()
 	return MOD_SUCCESS;
 }
 
-int secureonlymsg_can_send_to_user(Client *client, Client *target, char **text, char **errmsg, SendType sendtype)
+int secureonlymsg_can_send_to_user(Client *client, Client *target, const char **text, const char **errmsg, SendType sendtype)
 {
 	if (IsSecureOnlyMsg(target) && !IsServer(client) && !IsULine(client) && !IsSecureConnect(client))
 	{
-		if (ValidatePermissionsForPath("client:override:message:secureonlymsg",client,target,NULL,text))
+		if (ValidatePermissionsForPath("client:override:message:secureonlymsg",client,target,NULL,text?*text:NULL))
 			return HOOK_CONTINUE; /* bypass this restriction */
 
-		*errmsg = "You must be connected via SSL/TLS to message this user";
+		*errmsg = "You must be connected via TLS to message this user";
 		return HOOK_DENY;
 	} else
 	if (IsSecureOnlyMsg(client) && !IsSecureConnect(target) && !IsULine(target))
 	{
-		if (ValidatePermissionsForPath("client:override:message:secureonlymsg",client,target,NULL,text))
+		if (ValidatePermissionsForPath("client:override:message:secureonlymsg",client,target,NULL,text?*text:NULL))
 			return HOOK_CONTINUE; /* bypass this restriction */
 		
 		/* Similar to above but in this case we are +Z and are trying to message
-		 * an SSL user (who does not have +Z set, note the 'else'). This does not
+		 * a secure user (who does not have +Z set, note the 'else'). This does not
 		 * make sense since they could never message back to us. Better block the
 		 * message than leave the user confused.
 		 */
-		*errmsg = "Recipient is not connected via SSL/TLS and you are +Z";
+		*errmsg = "Recipient is not connected via TLS and you are +Z";
 		return HOOK_DENY;
 	}
 

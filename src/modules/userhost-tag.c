@@ -28,15 +28,15 @@ ModuleHeader MOD_HEADER
 	"5.0",
 	"userhost message tag",
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
 	};
 
 /* Variables */
 long CAP_ACCOUNT_TAG = 0L;
 
-int userhost_mtag_is_ok(Client *client, char *name, char *value);
-int userhost_mtag_can_send(Client *target);
-void mtag_add_userhost(Client *client, MessageTag *recv_mtags, MessageTag **mtag_list, char *signature);
+int userhost_mtag_is_ok(Client *client, const char *name, const char *value);
+int userhost_mtag_should_send_to_client(Client *target);
+void mtag_add_userhost(Client *client, MessageTag *recv_mtags, MessageTag **mtag_list, const char *signature);
 
 MOD_INIT()
 {
@@ -47,7 +47,7 @@ MOD_INIT()
 	memset(&mtag, 0, sizeof(mtag));
 	mtag.name = "unrealircd.org/userhost";
 	mtag.is_ok = userhost_mtag_is_ok;
-	mtag.can_send = userhost_mtag_can_send;
+	mtag.should_send_to_client = userhost_mtag_should_send_to_client;
 	mtag.flags = MTAG_HANDLER_FLAGS_NO_CAP_NEEDED;
 	MessageTagHandlerAdd(modinfo->handle, &mtag);
 
@@ -71,7 +71,7 @@ MOD_UNLOAD()
  * syntax.
  * We simply allow userhost-tag ONLY from servers and with any syntax.
  */
-int userhost_mtag_is_ok(Client *client, char *name, char *value)
+int userhost_mtag_is_ok(Client *client, const char *name, const char *value)
 {
 	if (IsServer(client))
 		return 1;
@@ -79,7 +79,7 @@ int userhost_mtag_is_ok(Client *client, char *name, char *value)
 	return 0;
 }
 
-void mtag_add_userhost(Client *client, MessageTag *recv_mtags, MessageTag **mtag_list, char *signature)
+void mtag_add_userhost(Client *client, MessageTag *recv_mtags, MessageTag **mtag_list, const char *signature)
 {
 	MessageTag *m;
 
@@ -103,7 +103,7 @@ void mtag_add_userhost(Client *client, MessageTag *recv_mtags, MessageTag **mtag
 }
 
 /** Outgoing filter for this message tag */
-int userhost_mtag_can_send(Client *target)
+int userhost_mtag_should_send_to_client(Client *target)
 {
 	if (IsServer(target) || IsOper(target))
 		return 1;

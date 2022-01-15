@@ -11,13 +11,13 @@ ModuleHeader MOD_HEADER
 	"1.2",
 	"Private Messages Deaf (+D) -- by Syzop",
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
 };
 
 static long UMODE_PRIVDEAF = 0;
 static Umode *UmodePrivdeaf = NULL;
 
-int privdeaf_can_send_to_user(Client *client, Client *target, char **text, char **errmsg, SendType sendtype);
+int privdeaf_can_send_to_user(Client *client, Client *target, const char **text, const char **errmsg, SendType sendtype);
 
 MOD_INIT()
 {
@@ -47,7 +47,7 @@ MOD_UNLOAD()
 	return MOD_SUCCESS;
 }
 
-int privdeaf_can_send_to_user(Client *client, Client *target, char **text, char **errmsg, SendType sendtype)
+int privdeaf_can_send_to_user(Client *client, Client *target, const char **text, const char **errmsg, SendType sendtype)
 {
 	if ((target->umodes & UMODE_PRIVDEAF) && !IsOper(client) &&
 	    !IsULine(client) && !IsServer(client) && (client != target))

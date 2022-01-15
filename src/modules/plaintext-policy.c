@@ -28,7 +28,7 @@ ModuleHeader MOD_HEADER
 	"5.0",
 	"Plaintext Policy CAP",
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
 	};
 
 MOD_INIT()
@@ -52,7 +52,7 @@ MOD_UNLOAD()
 	return MOD_SUCCESS;
 }
 
-char *plaintext_policy_capability_parameter(Client *client)
+const char *plaintext_policy_capability_parameter(Client *client)
 {
 	static char buf[128];
 	

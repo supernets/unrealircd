@@ -44,7 +44,7 @@ int mm_valid_module_name(char *name);
 void free_managed_module(ManagedModule *m);
 
 
-SSL_CTX *mm_init_ssl(void)
+SSL_CTX *mm_init_tls(void)
 {
 	SSL_CTX *ctx_client;
 	char buf1[512], buf2[512];
@@ -101,8 +101,7 @@ int parse_url(const char *url, char **host, int *port, char **document)
 	if (!p)
 		return 0;
 
-	*hostbuf = '\0';
-	strlncat(hostbuf, url, sizeof(hostbuf), p - url);
+	strlncpy(hostbuf, url, sizeof(hostbuf), p - url);
 
 	strlcpy(documentbuf, p, sizeof(documentbuf));
 
@@ -134,7 +133,7 @@ int mm_http_request(char *url, char *fname, int follow_redirects)
 
 	snprintf(hostandport, sizeof(hostandport), "%s:%d", host, port);
 
-	ctx_client = mm_init_ssl();
+	ctx_client = mm_init_tls();
 	if (!ctx_client)
 	{
 		fprintf(stderr, "ERROR: TLS initalization failure (I)\n");
@@ -163,14 +162,14 @@ int mm_http_request(char *url, char *fname, int follow_redirects)
 	if (BIO_do_connect(socket) != 1)
 	{
 		fprintf(stderr, "ERROR: Could not connect to %s\n", hostandport);
-		config_report_ssl_error();
+		//config_report_ssl_error(); FIXME?
 		goto out2;
 	}
 	
 	if (BIO_do_handshake(socket) != 1)
 	{
 		fprintf(stderr, "ERROR: Could not connect to %s (TLS handshake failed)\n", hostandport);
-		config_report_ssl_error();
+		//config_report_ssl_error(); FIXME?
 		goto out2;
 	}
 
@@ -339,63 +338,64 @@ int parse_quoted_string(char *buf, char *dest, size_t destlen)
 	return 1;
 }
 
-#define CheckNull(x) if ((!(x)->ce_vardata) || (!(*((x)->ce_vardata)))) { config_error("%s:%i: missing parameter", m->name, (x)->ce_varlinenum); return 0; }
+#undef CheckNull
+#define CheckNull(x) if ((!(x)->value) || (!(*((x)->value)))) { config_error("%s:%i: missing parameter", m->name, (x)->line_number); return 0; }
 
 /** Parse a module { } line from a module (not repo!!) */
 int mm_module_file_config(ManagedModule *m, ConfigEntry *ce)
 {
 	ConfigEntry *cep;
 
-	if (ce->ce_vardata)
+	if (ce->value)
 	{
 		config_error("%s:%d: module { } block should not have a name.",
-			m->name, ce->ce_varlinenum);
+			m->name, ce->line_number);
 		return 0;
 	}
 
-	for (cep = ce->ce_entries; cep; cep = cep->ce_next)
+	for (cep = ce->items; cep; cep = cep->next)
 	{
-		if (!strcmp(cep->ce_varname, "source") ||
-		    !strcmp(cep->ce_varname, "version") ||
-		    !strcmp(cep->ce_varname, "author") ||
-		    !strcmp(cep->ce_varname, "sha256sum") || 
-		    !strcmp(cep->ce_varname, "description")
+		if (!strcmp(cep->name, "source") ||
+		    !strcmp(cep->name, "version") ||
+		    !strcmp(cep->name, "author") ||
+		    !strcmp(cep->name, "sha256sum") || 
+		    !strcmp(cep->name, "description")
 		    )
 		{
 			config_error("%s:%d: module::%s should not be in here (it only exists in repository entries)",
-				m->name, cep->ce_varlinenum, cep->ce_varname);
+				m->name, cep->line_number, cep->name);
 			return 0;
 		}
-		else if (!strcmp(cep->ce_varname, "troubleshooting"))
+		else if (!strcmp(cep->name, "troubleshooting"))
 		{
 			CheckNull(cep);
-			safe_strdup(m->troubleshooting, cep->ce_vardata);
+			safe_strdup(m->troubleshooting, cep->value);
 		}
-		else if (!strcmp(cep->ce_varname, "documentation"))
+		else if (!strcmp(cep->name, "documentation"))
 		{
 			CheckNull(cep);
-			safe_strdup(m->documentation, cep->ce_vardata);
+			safe_strdup(m->documentation, cep->value);
 		}
-		else if (!strcmp(cep->ce_varname, "min-unrealircd-version"))
+		else if (!strcmp(cep->name, "min-unrealircd-version"))
 		{
 			CheckNull(cep);
-			safe_strdup(m->min_unrealircd_version, cep->ce_vardata);
+			safe_strdup(m->min_unrealircd_version, cep->value);
 		}
-		else if (!strcmp(cep->ce_varname, "max-unrealircd-version"))
+		else if (!strcmp(cep->name, "max-unrealircd-version"))
 		{
 			CheckNull(cep);
-			safe_strdup(m->max_unrealircd_version, cep->ce_vardata);
+			safe_strdup(m->max_unrealircd_version, cep->value);
 		}
-		else if (!strcmp(cep->ce_varname, "post-install-text"))
+		else if (!strcmp(cep->name, "post-install-text"))
 		{
-			if (cep->ce_entries)
+			if (cep->items)
 			{
 				ConfigEntry *cepp;
-				for (cepp = cep->ce_entries; cepp; cepp = cepp->ce_next)
-					addmultiline(&m->post_install_text, cepp->ce_varname);
+				for (cepp = cep->items; cepp; cepp = cepp->next)
+					addmultiline(&m->post_install_text, cepp->name);
 			} else {
 				CheckNull(cep);
-				addmultiline(&m->post_install_text, cep->ce_vardata);
+				addmultiline(&m->post_install_text, cep->value);
 			}
 		}
 		/* unknown items are silently ignored for future compatibility */
@@ -403,19 +403,19 @@ int mm_module_file_config(ManagedModule *m, ConfigEntry *ce)
 
 	if (!m->documentation)
 	{
-		config_error("%s:%d: module::documentation missing", m->name, ce->ce_varlinenum);
+		config_error("%s:%d: module::documentation missing", m->name, ce->line_number);
 		return 0;
 	}
 
 	if (!m->troubleshooting)
 	{
-		config_error("%s:%d: module::troubleshooting missing", m->name, ce->ce_varlinenum);
+		config_error("%s:%d: module::troubleshooting missing", m->name, ce->line_number);
 		return 0;
 	}
 
 	if (!m->min_unrealircd_version)
 	{
-		config_error("%s:%d: module::min-unrealircd-version missing", m->name, ce->ce_varlinenum);
+		config_error("%s:%d: module::min-unrealircd-version missing", m->name, ce->line_number);
 		return 0;
 	}
 
@@ -438,9 +438,9 @@ int mm_parse_module_file(ManagedModule *m, char *buf, unsigned int line_offset)
 		return 0; /* eg: parse errors */
 
 	/* Parse the module { } block (only one!) */
-	for (ce = cf->cf_entries; ce; ce = ce->ce_next)
+	for (ce = cf->items; ce; ce = ce->next)
 	{
-		if (!strcmp(ce->ce_varname, "module"))
+		if (!strcmp(ce->name, "module"))
 		{
 			int n = mm_module_file_config(m, ce);
 			config_free(cf);
@@ -652,7 +652,8 @@ int mm_valid_module_name(char *name)
 	return 1;
 }
 
-#define CheckNull(x) if ((!(x)->ce_vardata) || (!(*((x)->ce_vardata)))) { config_error("%s:%i: missing parameter", repo_url, (x)->ce_varlinenum); goto fail_mm_repo_module_config; }
+#undef CheckNull
+#define CheckNull(x) if ((!(x)->value) || (!(*((x)->value)))) { config_error("%s:%i: missing parameter", repo_url, (x)->line_number); goto fail_mm_repo_module_config; }
 
 /** Parse a module { } line from a repository */
 ManagedModule *mm_repo_module_config(char *repo_url, ConfigEntry *ce)
@@ -660,84 +661,84 @@ ManagedModule *mm_repo_module_config(char *repo_url, ConfigEntry *ce)
 	ConfigEntry *cep;
 	ManagedModule *m = safe_alloc(sizeof(ManagedModule));
 
-	if (!ce->ce_vardata)
+	if (!ce->value)
 	{
 		config_error("%s:%d: module { } with no name",
-			repo_url, ce->ce_varlinenum);
+			repo_url, ce->line_number);
 		goto fail_mm_repo_module_config;
 	}
-	if (strncmp(ce->ce_vardata, "third/", 6))
+	if (strncmp(ce->value, "third/", 6))
 	{
 		config_error("%s:%d: module { } name must start with: third/",
-			repo_url, ce->ce_varlinenum);
+			repo_url, ce->line_number);
 		goto fail_mm_repo_module_config;
 	}
-	if (!mm_valid_module_name(ce->ce_vardata))
+	if (!mm_valid_module_name(ce->value))
 	{
 		config_error("%s:%d: module { } with illegal name: %s",
-			repo_url, ce->ce_varlinenum, ce->ce_vardata);
+			repo_url, ce->line_number, ce->value);
 		goto fail_mm_repo_module_config;
 	}
-	safe_strdup(m->name, ce->ce_vardata);
+	safe_strdup(m->name, ce->value);
 	safe_strdup(m->repo_url, repo_url);
 
-	for (cep = ce->ce_entries; cep; cep = cep->ce_next)
+	for (cep = ce->items; cep; cep = cep->next)
 	{
-		if (!strcmp(cep->ce_varname, "source"))
+		if (!strcmp(cep->name, "source"))
 		{
 			CheckNull(cep);
-			safe_strdup(m->source, cep->ce_vardata);
+			safe_strdup(m->source, cep->value);
 		}
-		else if (!strcmp(cep->ce_varname, "sha256sum"))
+		else if (!strcmp(cep->name, "sha256sum"))
 		{
 			CheckNull(cep);
-			safe_strdup(m->sha256sum, cep->ce_vardata);
+			safe_strdup(m->sha256sum, cep->value);
 		}
-		else if (!strcmp(cep->ce_varname, "version"))
+		else if (!strcmp(cep->name, "version"))
 		{
 			CheckNull(cep);
-			safe_strdup(m->version, cep->ce_vardata);
+			safe_strdup(m->version, cep->value);
 		}
-		else if (!strcmp(cep->ce_varname, "author"))
+		else if (!strcmp(cep->name, "author"))
 		{
 			CheckNull(cep);
-			safe_strdup(m->author, cep->ce_vardata);
+			safe_strdup(m->author, cep->value);
 		}
-		else if (!strcmp(cep->ce_varname, "troubleshooting"))
+		else if (!strcmp(cep->name, "troubleshooting"))
 		{
 			CheckNull(cep);
-			safe_strdup(m->troubleshooting, cep->ce_vardata);
+			safe_strdup(m->troubleshooting, cep->value);
 		}
-		else if (!strcmp(cep->ce_varname, "documentation"))
+		else if (!strcmp(cep->name, "documentation"))
 		{
 			CheckNull(cep);
-			safe_strdup(m->documentation, cep->ce_vardata);
+			safe_strdup(m->documentation, cep->value);
 		}
-		else if (!strcmp(cep->ce_varname, "min-unrealircd-version"))
+		else if (!strcmp(cep->name, "min-unrealircd-version"))
 		{
 			CheckNull(cep);
-			safe_strdup(m->min_unrealircd_version, cep->ce_vardata);
+			safe_strdup(m->min_unrealircd_version, cep->value);
 		}
-		else if (!strcmp(cep->ce_varname, "max-unrealircd-version"))
+		else if (!strcmp(cep->name, "max-unrealircd-version"))
 		{
 			CheckNull(cep);
-			safe_strdup(m->max_unrealircd_version, cep->ce_vardata);
+			safe_strdup(m->max_unrealircd_version, cep->value);
 		}
-		else if (!strcmp(cep->ce_varname, "description"))
+		else if (!strcmp(cep->name, "description"))
 		{
 			CheckNull(cep);
-			safe_strdup(m->description, cep->ce_vardata);
+			safe_strdup(m->description, cep->value);
 		}
-		else if (!strcmp(cep->ce_varname, "post-install-text"))
+		else if (!strcmp(cep->name, "post-install-text"))
 		{
-			if (cep->ce_entries)
+			if (cep->items)
 			{
 				ConfigEntry *cepp;
-				for (cepp = cep->ce_entries; cepp; cepp = cepp->ce_next)
-					addmultiline(&m->post_install_text, cepp->ce_varname);
+				for (cepp = cep->items; cepp; cepp = cepp->next)
+					addmultiline(&m->post_install_text, cepp->name);
 			} else {
 				CheckNull(cep);
-				addmultiline(&m->post_install_text, cep->ce_vardata);
+				addmultiline(&m->post_install_text, cep->value);
 			}
 		}
 		/* unknown items are silently ignored for future compatibility */
@@ -745,43 +746,43 @@ ManagedModule *mm_repo_module_config(char *repo_url, ConfigEntry *ce)
 
 	if (!m->source)
 	{
-		config_error("%s:%d: module::source missing", repo_url, ce->ce_varlinenum);
+		config_error("%s:%d: module::source missing", repo_url, ce->line_number);
 		goto fail_mm_repo_module_config;
 	}
 	if (!m->sha256sum)
 	{
-		config_error("%s:%d: module::sha256sum missing", repo_url, ce->ce_varlinenum);
+		config_error("%s:%d: module::sha256sum missing", repo_url, ce->line_number);
 		goto fail_mm_repo_module_config;
 	}
 	if (!m->version)
 	{
-		config_error("%s:%d: module::version missing", repo_url, ce->ce_varlinenum);
+		config_error("%s:%d: module::version missing", repo_url, ce->line_number);
 		goto fail_mm_repo_module_config;
 	}
 	if (!m->author)
 	{
-		config_error("%s:%d: module::author missing", repo_url, ce->ce_varlinenum);
+		config_error("%s:%d: module::author missing", repo_url, ce->line_number);
 		goto fail_mm_repo_module_config;
 	}
 	if (!m->documentation)
 	{
-		config_error("%s:%d: module::documentation missing", repo_url, ce->ce_varlinenum);
+		config_error("%s:%d: module::documentation missing", repo_url, ce->line_number);
 		goto fail_mm_repo_module_config;
 	}
 	if (!m->troubleshooting)
 	{
-		config_error("%s:%d: module::troubleshooting missing", repo_url, ce->ce_varlinenum);
+		config_error("%s:%d: module::troubleshooting missing", repo_url, ce->line_number);
 		goto fail_mm_repo_module_config;
 	}
 	if (!m->min_unrealircd_version)
 	{
-		config_error("%s:%d: module::min-unrealircd-version missing", repo_url, ce->ce_varlinenum);
+		config_error("%s:%d: module::min-unrealircd-version missing", repo_url, ce->line_number);
 		goto fail_mm_repo_module_config;
 	}
 	/* max_unrealircd_version is optional */
 	if (!m->description)
 	{
-		config_error("%s:%d: module::description missing", repo_url, ce->ce_varlinenum);
+		config_error("%s:%d: module::description missing", repo_url, ce->line_number);
 		goto fail_mm_repo_module_config;
 	}
 	/* post_install_text is optional */
@@ -805,9 +806,9 @@ int mm_parse_repo_db(char *url, char *filename)
 	if (!cf)
 		return 0; /* eg: parse errors */
 
-	for (ce = cf->cf_entries; ce; ce = ce->ce_next)
+	for (ce = cf->items; ce; ce = ce->next)
 	{
-		if (!strcmp(ce->ce_varname, "module"))
+		if (!strcmp(ce->name, "module"))
 		{
 			m = mm_repo_module_config(url, ce);
 			if (!m)
@@ -957,7 +958,7 @@ int mm_get_module_status(ManagedModule *m)
 {
 	FILE *fd;
 	char fname[512];
-	char *our_sha256sum;
+	const char *our_sha256sum;
 
 	snprintf(fname, sizeof(fname), "%s/src/modules/%s.c", BUILDDIR, m->name);
 	if (!file_exists(fname))
@@ -1142,7 +1143,7 @@ int mm_compile(ManagedModule *m, char *tmpfile, int test)
 {
 	char newpath[512];
 	char cmd[512];
-	char *basename;
+	const char *basename;
 	char *p;
 	FILE *fd;
 	char buf[512];
@@ -1213,15 +1214,15 @@ int mm_compile(ManagedModule *m, char *tmpfile, int test)
  */
 void mm_install_module(ManagedModule *m)
 {
-	char *basename = unreal_getfilename(m->source);
+	const char *basename = unreal_getfilename(m->source);
 	char *tmpfile;
-	char *sha256;
+	const char *sha256;
 
 	if (!basename)
 		basename = "mod.c";
 	tmpfile = unreal_mktemp(TMPDIR, basename);
 
-	printf("Downloading %s from %s...\n", m->name, m->source);
+	printf("ConfigResourceing %s from %s...\n", m->name, m->source);
 	if (!mm_http_request(m->source, tmpfile, 1))
 	{
 		fprintf(stderr, "Repository %s seems to list a module file that cannot be retrieved (%s).\n", m->repo_url, m->source);
@@ -1535,7 +1536,7 @@ void print_md_block(FILE *fdo, ManagedModule *m)
 
 void mm_generate_repository_usage(void)
 {
-	fprintf(stderr, "Usage: ./unrealircd module generate-repository <url base path> <directory-with-modules> <name of output file>\n");
+	fprintf(stderr, "Usage: ./unrealircd module generate-repository <url base path> <directory-with-modules> <name of output file> [optional-minimum-version-filter]\n");
 	fprintf(stderr, "For example: ./unrealircd module generate-repository https://www.unrealircd.org/modules/ src/modules/third modules.lst\n");
 }
 
@@ -1547,6 +1548,7 @@ void mm_generate_repository(int argc, char *args[])
 	char *urlbasepath;
 	char *dirname;
 	char *outputfile;
+	char *minversion;
 	char modname[128];
 	char fullname[512];
 	ManagedModule *m;
@@ -1555,6 +1557,8 @@ void mm_generate_repository(int argc, char *args[])
 	urlbasepath = args[1];
 	dirname = args[2];
 	outputfile = args[3];
+	minversion = args[4];
+
 	if (!urlbasepath || !dirname || !outputfile)
 	{
 		mm_generate_repository_usage();
@@ -1587,6 +1591,7 @@ void mm_generate_repository(int argc, char *args[])
 		char *fname = dir->d_name;
 		if (filename_has_suffix(fname, ".c"))
 		{
+			int hide = 0;
 			snprintf(fullname, sizeof(fullname), "%s/%s", dirname, fname);
 			snprintf(modname, sizeof(modname), "third/%s", filename_strip_suffix(fname, ".c"));
 			printf("Processing: %s\n", modname);
@@ -1599,7 +1604,12 @@ void mm_generate_repository(int argc, char *args[])
 			m->sha256sum = strdup(sha256sum_file(fullname));
 			m->source = safe_alloc(512);
 			snprintf(m->source, 512, "%s%s.c", urlbasepath, modname + 6);
-			print_md_block(fdo, m);
+			/* filter */
+			if (minversion && m->min_unrealircd_version && strncmp(minversion, m->min_unrealircd_version, strlen(minversion)))
+				hide = 1;
+			/* /filter */
+			if (!hide)
+				print_md_block(fdo, m);
 			free_managed_module(m);
 			m = NULL;
 		}
@@ -1611,7 +1621,7 @@ void mm_generate_repository(int argc, char *args[])
 void mm_parse_c_file(int argc, char *args[])
 {
 	char *fullname = args[1];
-	char *basename;
+	const char *basename;
 	char modname[256];
 	ManagedModule *m;
 

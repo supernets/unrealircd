@@ -22,24 +22,13 @@
 
 #include "unrealircd.h"
 
-/* You can change this '//#undef' into '#define' if you want to see quite
- * a flood for every user that connects (and on-load if cfg.fullstatus_on_load).
- * Obviously only recommended for testing, use with care!
- */
-#undef  DEBUGMODE
-
-/** Change this 'undef' to 'define' to get performance information.
- * This really only meant for debugging purposes.
- */
-#undef TIMING
-
 ModuleHeader MOD_HEADER
   = {
 	"antirandom",
 	"1.4",
 	"Detect and ban users with random names",
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
     };
 
 #ifndef MAX
@@ -515,7 +504,6 @@ struct {
 	long ban_time;
 	int convert_to_lowercase;
 	int show_failedconnects;
-	int fullstatus_on_load;
 	ConfigItem_mask *except_hosts;
 	int except_webirc;
 } cfg;
@@ -553,19 +541,14 @@ MOD_INIT()
 	HookAdd(modinfo->handle, HOOKTYPE_CONFIGRUN, 0, antirandom_config_run);
 
 	/* Some default values: */
-	cfg.fullstatus_on_load = 1;
 	cfg.convert_to_lowercase = 1;
 	cfg.except_webirc = 1;
 
 	return MOD_SUCCESS;
 }
 
-void check_all_users(void);
-
 MOD_LOAD()
 {
-	if (cfg.fullstatus_on_load)
-		check_all_users();
 	return MOD_SUCCESS;
 }
 
@@ -592,67 +575,64 @@ int antirandom_config_test(ConfigFile *cf, ConfigEntry *ce, int type, int *errs)
 		return 0;
 	
 	/* We are only interrested in set::antirandom... */
-	if (!ce || !ce->ce_varname || strcmp(ce->ce_varname, "antirandom"))
+	if (!ce || !ce->name || strcmp(ce->name, "antirandom"))
 		return 0;
 	
-	for (cep = ce->ce_entries; cep; cep = cep->ce_next)
+	for (cep = ce->items; cep; cep = cep->next)
 	{
-		if (!strcmp(cep->ce_varname, "except-hosts"))
+		if (!strcmp(cep->name, "except-hosts"))
 		{
 		} else
-		if (!strcmp(cep->ce_varname, "except-webirc"))
+		if (!strcmp(cep->name, "except-webirc"))
 		{
 			/* This should normally be UNDER the generic 'set::antirandom::%s with no value'
 			 * stuff but I put it here because people may think it's a hostlist and then
 			 * the error can be a tad confusing. -- Syzop
 			 */
-			if (!cep->ce_vardata)
+			if (!cep->value)
 			{
 				config_error("%s:%i: set::antirandom::except-webirc should be 'yes' or 'no'",
-				             cep->ce_fileptr->cf_filename, cep->ce_varlinenum);
+				             cep->file->filename, cep->line_number);
 				errors++;
 			}
 		} else
-		if (!cep->ce_vardata)
+		if (!cep->value)
 		{
 			config_error("%s:%i: set::antirandom::%s with no value",
-				cep->ce_fileptr->cf_filename, cep->ce_varlinenum, cep->ce_varname);
+				cep->file->filename, cep->line_number, cep->name);
 			errors++;
 		} else
-		if (!strcmp(cep->ce_varname, "threshold"))
+		if (!strcmp(cep->name, "threshold"))
 		{
 			req.threshold = 1;
 		} else
-		if (!strcmp(cep->ce_varname, "ban-action"))
+		if (!strcmp(cep->name, "ban-action"))
 		{
-			if (!banact_stringtoval(cep->ce_vardata))
+			if (!banact_stringtoval(cep->value))
 			{
 				config_error("%s:%i: set::antirandom::ban-action: unknown action '%s'",
-					cep->ce_fileptr->cf_filename, cep->ce_varlinenum, cep->ce_vardata);
+					cep->file->filename, cep->line_number, cep->value);
 				errors++;
 			} else
 				req.ban_action = 1;
 		} else
-		if (!strcmp(cep->ce_varname, "ban-reason"))
+		if (!strcmp(cep->name, "ban-reason"))
 		{
 			req.ban_reason = 1;
 		} else
-		if (!strcmp(cep->ce_varname, "ban-time"))
+		if (!strcmp(cep->name, "ban-time"))
 		{
 			req.ban_time = 1;
 		} else
-		if (!strcmp(cep->ce_varname, "convert-to-lowercase"))
+		if (!strcmp(cep->name, "convert-to-lowercase"))
 		{
 		} else
-		if (!strcmp(cep->ce_varname, "fullstatus-on-load"))
-		{
-		} else
-		if (!strcmp(cep->ce_varname, "show-failedconnects"))
+		if (!strcmp(cep->name, "show-failedconnects"))
 		{
 		} else
 		{
 			config_error("%s:%i: unknown directive set::antirandom::%s",
-				cep->ce_fileptr->cf_filename, cep->ce_varlinenum, cep->ce_varname);
+				cep->file->filename, cep->line_number, cep->name);
 			errors++;
 		}
 	}
@@ -668,47 +648,43 @@ int antirandom_config_run(ConfigFile *cf, ConfigEntry *ce, int type)
 		return 0;
 	
 	/* We are only interrested in set::antirandom... */
-	if (!ce || !ce->ce_varname || strcmp(ce->ce_varname, "antirandom"))
+	if (!ce || !ce->name || strcmp(ce->name, "antirandom"))
 		return 0;
 	
-	for (cep = ce->ce_entries; cep; cep = cep->ce_next)
+	for (cep = ce->items; cep; cep = cep->next)
 	{
-		if (!strcmp(cep->ce_varname, "except-hosts"))
+		if (!strcmp(cep->name, "except-hosts"))
 		{
-			for (cep2 = cep->ce_entries; cep2; cep2 = cep2->ce_next)
+			for (cep2 = cep->items; cep2; cep2 = cep2->next)
 				unreal_add_masks(&cfg.except_hosts, cep2);
 		} else
-		if (!strcmp(cep->ce_varname, "except-webirc"))
+		if (!strcmp(cep->name, "except-webirc"))
 		{
-			cfg.except_webirc = config_checkval(cep->ce_vardata, CFG_YESNO);
+			cfg.except_webirc = config_checkval(cep->value, CFG_YESNO);
 		} else
-		if (!strcmp(cep->ce_varname, "threshold"))
+		if (!strcmp(cep->name, "threshold"))
 		{
-			cfg.threshold = atoi(cep->ce_vardata);
+			cfg.threshold = atoi(cep->value);
 		} else
-		if (!strcmp(cep->ce_varname, "ban-action"))
+		if (!strcmp(cep->name, "ban-action"))
 		{
-			cfg.ban_action = banact_stringtoval(cep->ce_vardata);
+			cfg.ban_action = banact_stringtoval(cep->value);
 		} else
-		if (!strcmp(cep->ce_varname, "ban-reason"))
+		if (!strcmp(cep->name, "ban-reason"))
 		{
-			safe_strdup(cfg.ban_reason, cep->ce_vardata);
+			safe_strdup(cfg.ban_reason, cep->value);
 		} else
-		if (!strcmp(cep->ce_varname, "ban-time"))
+		if (!strcmp(cep->name, "ban-time"))
 		{
-			cfg.ban_time = config_checkval(cep->ce_vardata, CFG_TIME);
+			cfg.ban_time = config_checkval(cep->value, CFG_TIME);
 		} else
-		if (!strcmp(cep->ce_varname, "convert-to-lowercase"))
+		if (!strcmp(cep->name, "convert-to-lowercase"))
 		{
-			cfg.convert_to_lowercase = config_checkval(cep->ce_vardata, CFG_YESNO);
+			cfg.convert_to_lowercase = config_checkval(cep->value, CFG_YESNO);
 		}
-		if (!strcmp(cep->ce_varname, "show-failedconnects"))
+		if (!strcmp(cep->name, "show-failedconnects"))
 		{
-			cfg.show_failedconnects = config_checkval(cep->ce_vardata, CFG_YESNO);
-		} else
-		if (!strcmp(cep->ce_varname, "fullstatus-on-load"))
-		{
-			cfg.fullstatus_on_load = config_checkval(cep->ce_vardata, CFG_YESNO);
+			cfg.show_failedconnects = config_checkval(cep->value, CFG_YESNO);
 		}
 	}
 	return 1;
@@ -820,24 +796,15 @@ static int internal_getscore(char *str)
 	
 	if (digits >= 5)
 	{
-		score += 5 + (digits - 5);
-#ifdef DEBUGMODE
-		sendto_ops_and_log("score@'%s': MATCH for digits check", str);
-#endif
+		score += digits;
 	}
 	if (vowels >= 4)
 	{
-		score += 4 + (vowels - 4);
-#ifdef DEBUGMODE
-		sendto_ops_and_log("score@'%s': MATCH for vowels check", str);
-#endif
+		score += vowels;
 	}
 	if (consonants >= 4)
 	{
-		score += 4 + (consonants - 4);
-#ifdef DEBUGMODE
-		sendto_ops_and_log("score@'%s': MATCH for consonants check", str);
-#endif
+		score += consonants;
 	}
 	
 	for (t=triples; t; t=t->next)
@@ -846,10 +813,6 @@ static int internal_getscore(char *str)
 			if ((t->two[0] == s[0]) && (t->two[1] == s[1]) && s[2] && strchr(t->rest, s[2]))
 			{
 				score++; /* OK */
-#ifdef DEBUGMODE
-				sendto_ops_and_log("score@'%s': MATCH for '%s[%s]' %c/%c/%c", str, t->two, t->rest,
-					s[0], s[1], s[2]);
-#endif
 			}
 	}
 
@@ -868,11 +831,6 @@ static int get_spam_score(Client *client)
 	char *gecos = client->info;
 	char nbuf[NICKLEN+1], ubuf[USERLEN+1], rbuf[REALLEN+1];
 	int nscore, uscore, gscore, score;
-#ifdef TIMING
-	struct timeval tv_alpha, tv_beta;
-
-	gettimeofday(&tv_alpha, NULL);
-#endif
 
 	if (cfg.convert_to_lowercase)
 	{
@@ -889,44 +847,7 @@ static int get_spam_score(Client *client)
 	gscore = internal_getscore(gecos);
 	score = nscore + uscore + gscore;
 
-#ifdef TIMING
-	gettimeofday(&tv_beta, NULL);
-	ircd_log(LOG_ERROR, "AntiRandom Timing: %ld microseconds",
-		((tv_beta.tv_sec - tv_alpha.tv_sec) * 1000000) + (tv_beta.tv_usec - tv_alpha.tv_usec));
-#endif
-#ifdef DEBUGMODE
-	sendto_ops_and_log("got score: %d/%d/%d = %d",
-		nscore, uscore, gscore, score);
-#endif
-
 	return score;
-}
-
-void check_all_users(void)
-{
-	Client *client;
-	int matches=0, score;
-	
-	list_for_each_entry(client, &lclient_list, lclient_node)
-	{
-		if (IsUser(client))
-		{
-			if (is_exempt(client))
-				continue;
-
-			score = get_spam_score(client);
-			if (score > cfg.threshold)
-			{
-				if (!matches)
-					sendto_realops("[antirandom] Full status report follows:");
-				sendto_realops("%d points: %s!%s@%s:%s",
-					score, client->name, client->user->username, client->user->realhost, client->info);
-				matches++;
-			}
-		}
-	}
-	if (matches)
-		sendto_realops("[antirandom] %d match%s", matches, matches == 1 ? "" : "es");
 }
 
 int antirandom_preconnect(Client *client)
@@ -941,13 +862,17 @@ int antirandom_preconnect(Client *client)
 	{
 		if (cfg.ban_action == BAN_ACT_WARN)
 		{
-			sendto_ops_and_log("[antirandom] would have denied access to user with score %d: %s!%s@%s:%s",
-				score, client->name, client->user->username, client->user->realhost, client->info);
+			unreal_log(ULOG_INFO, "antirandom", "ANTIRANDOM_DENIED_USER", client,
+			           "[antirandom] would have denied access to user with score $score: $client:$client.info",
+			           log_data_integer("score", score));
 			return HOOK_CONTINUE;
 		}
 		if (cfg.show_failedconnects)
-			sendto_ops_and_log("[antirandom] denied access to user with score %d: %s!%s@%s:%s",
-				score, client->name, client->user->username, client->user->realhost, client->info);
+		{
+			unreal_log(ULOG_INFO, "antirandom", "ANTIRANDOM_DENIED_USER", client,
+			           "[antirandom] denied access to user with score $score: $client:$client.info",
+			           log_data_integer("score", score));
+		}
 		place_host_ban(client, cfg.ban_action, cfg.ban_reason, cfg.ban_time);
 		return HOOK_DENY;
 	}
@@ -972,7 +897,7 @@ static int is_exempt(Client *client)
 	/* WEBIRC gateway and exempt? */
 	if (cfg.except_webirc)
 	{
-		char *val = moddata_client_get(client, "webirc");
+		const char *val = moddata_client_get(client, "webirc");
 		if (val && (atoi(val)>0))
 			return 1;
 	}

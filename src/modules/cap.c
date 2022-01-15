@@ -34,7 +34,7 @@ ModuleHeader MOD_HEADER
 	"5.0", /* Version */
 	"command /cap", /* Short description of module */
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
 	};
 
 /* Forward declarations */
@@ -43,13 +43,7 @@ int cap_never_visible(Client *client);
 
 /* Variables */
 long CAP_IN_PROGRESS = 0L;
-long CAP_ACCOUNT_NOTIFY = 0L;
-long CAP_AWAY_NOTIFY = 0L;
-long CAP_MULTI_PREFIX = 0L;
-long CAP_USERHOST_IN_NAMES = 0L;
 long CAP_NOTIFY = 0L;
-long CAP_CHGHOST = 0L;
-long CAP_EXTENDED_JOIN = 0L;
 
 MOD_INIT()
 {
@@ -67,32 +61,8 @@ MOD_INIT()
 	ClientCapabilityAdd(modinfo->handle, &c, &CAP_IN_PROGRESS);
 
 	memset(&c, 0, sizeof(c));
-	c.name = "account-notify";
-	ClientCapabilityAdd(modinfo->handle, &c, &CAP_ACCOUNT_NOTIFY);
-	
-	memset(&c, 0, sizeof(c));
-	c.name = "away-notify";
-	ClientCapabilityAdd(modinfo->handle, &c, &CAP_AWAY_NOTIFY);
-
-	memset(&c, 0, sizeof(c));
-	c.name = "multi-prefix";
-	ClientCapabilityAdd(modinfo->handle, &c, &CAP_MULTI_PREFIX);
-
-	memset(&c, 0, sizeof(c));
-	c.name = "userhost-in-names";
-	ClientCapabilityAdd(modinfo->handle, &c, &CAP_USERHOST_IN_NAMES);
-
-	memset(&c, 0, sizeof(c));
 	c.name = "cap-notify";
 	ClientCapabilityAdd(modinfo->handle, &c, &CAP_NOTIFY);
-
-	memset(&c, 0, sizeof(c));
-	c.name = "chghost";
-	ClientCapabilityAdd(modinfo->handle, &c, &CAP_CHGHOST);
-
-	memset(&c, 0, sizeof(c));
-	c.name = "extended-join";
-	ClientCapabilityAdd(modinfo->handle, &c, &CAP_EXTENDED_JOIN);
 
 	HookAdd(modinfo->handle, HOOKTYPE_IS_HANDSHAKE_FINISHED, 0, cap_is_handshake_finished);
 
@@ -139,17 +109,17 @@ static ClientCapability *clicap_find(Client *client, const char *data, int *nega
 		return NULL;
 	}
 
-	if(*p == '-')
+	if (*p == '-')
 	{
 		*negate = 1;
 		p++;
 
 		/* someone sent a '-' without a parameter.. */
-		if(*p == '\0')
+		if (*p == '\0')
 			return NULL;
 	}
 
-	if((s = strchr(p, ' ')))
+	if ((s = strchr(p, ' ')))
 		*s++ = '\0';
 
 	cap = ClientCapabilityFind(p, client);
@@ -190,7 +160,7 @@ static void clicap_generate(Client *client, const char *subcmd, int flags)
 	for (cap = clicaps; cap; cap = cap->next)
 	{
 		char name[256];
-		char *param;
+		const char *param;
 
 		if (cap->visible && !cap->visible(client))
 			continue; /* hidden */
@@ -240,7 +210,7 @@ static void cap_end(Client *client, const char *arg)
 	ClearCapabilityFast(client, CAP_IN_PROGRESS);
 
 	if (*client->name && client->user && *client->user->username && IsNotSpoof(client))
-		register_user(client, client->name, client->user->username, NULL, NULL, NULL);
+		register_user(client);
 }
 
 static void cap_list(Client *client, const char *arg)
@@ -386,8 +356,8 @@ CMD_FUNC(cmd_cap)
 	 * Only add a 1 second fake lag penalty if this is the XXth command.
 	 * This will speed up connections considerably.
 	 */
-	if (client->local->receiveM > 15)
-		client->local->since++;
+	if (client->local->traffic.messages_received > 15)
+		add_fake_lag(client, 1000);
 
 	if (DISABLE_CAP)
 	{
@@ -406,7 +376,7 @@ CMD_FUNC(cmd_cap)
 		return;
 	}
 
-	if(!(cmd = bsearch(parv[1], clicap_cmdtable,
+	if (!(cmd = bsearch(parv[1], clicap_cmdtable,
 			   sizeof(clicap_cmdtable) / sizeof(struct clicap_cmd),
 			   sizeof(struct clicap_cmd), (bqcmp) clicap_cmd_search)))
 	{

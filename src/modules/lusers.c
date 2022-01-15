@@ -32,7 +32,7 @@ ModuleHeader MOD_HEADER
 	"5.0",
 	"command /lusers", 
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
     };
 
 MOD_INIT()
@@ -59,7 +59,7 @@ CMD_FUNC(cmd_lusers)
 {
 char flatmap;
 
-	if (hunt_server(client, recv_mtags, ":%s LUSERS :%s", 1, parc, parv) != HUNTED_ISME)
+	if (hunt_server(client, recv_mtags, "LUSERS", 1, parc, parv) != HUNTED_ISME)
 		return;
 
 	flatmap = (FLAT_MAP && !ValidatePermissionsForPath("server:info:lusers",client,NULL,NULL,NULL)) ? 1 : 0;
@@ -83,12 +83,14 @@ char flatmap;
 	sendnumeric(client, RPL_LUSERME, irccounts.me_clients, flatmap ? 0 : irccounts.me_servers);
 	sendnumeric(client, RPL_LOCALUSERS, irccounts.me_clients, irccounts.me_max, irccounts.me_clients, irccounts.me_max);
 	sendnumeric(client, RPL_GLOBALUSERS, irccounts.clients, irccounts.global_max, irccounts.clients, irccounts.global_max);
-	if ((irccounts.me_clients + irccounts.me_servers) > max_connection_count)
+	if (irccounts.me_clients > max_connection_count)
 	{
-		max_connection_count =
-		    irccounts.me_clients + irccounts.me_servers;
+		max_connection_count = irccounts.me_clients;
 		if (max_connection_count % 10 == 0)	/* only send on even tens */
-			sendto_ops("New record on this server: %d connections (%d clients)",
-			    max_connection_count, irccounts.me_clients);
+		{
+			unreal_log(ULOG_INFO, "client", "NEW_USER_RECORD", NULL,
+			           "New record on this server: $num_users connections",
+			           log_data_integer("num_users", max_connection_count));
+		}
 	}
 }

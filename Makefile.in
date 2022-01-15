@@ -34,11 +34,11 @@ FROMDOS=/home/cmunk/bin/4dos
 #
 
 #XCFLAGS=-O -g -export-dynamic
-IRCDLIBS=@IRCDLIBS@ @PCRE2_LIBS@ @ARGON2_LIBS@ @CARES_LIBS@ @SODIUM_LIBS@ @PTHREAD_LIBS@
+IRCDLIBS=@IRCDLIBS@ @PCRE2_LIBS@ @ARGON2_LIBS@ @CARES_LIBS@ @SODIUM_LIBS@ @JANSSON_LIBS@ @PTHREAD_LIBS@
 CRYPTOLIB=@CRYPTOLIB@
 OPENSSLINCLUDES=
 
-XCFLAGS=@PTHREAD_CFLAGS@ @PCRE2_CFLAGS@ @ARGON2_CFLAGS@ @CARES_CFLAGS@ @SODIUM_CFLAGS@ @CFLAGS@ @HARDEN_CFLAGS@ @CPPFLAGS@
+XCFLAGS=@PTHREAD_CFLAGS@ @PCRE2_CFLAGS@ @ARGON2_CFLAGS@ @CARES_CFLAGS@ @SODIUM_CFLAGS@ @JANSSON_CFLAGS@ @CFLAGS@ @HARDEN_CFLAGS@ @CPPFLAGS@
 #
 # use the following on MIPS:
 #CFLAGS= -systype bsd43 -DSYSTYPE_BSD43 -I$(INCLUDEDIR)
@@ -89,7 +89,14 @@ XCFLAGS=@PTHREAD_CFLAGS@ @PCRE2_CFLAGS@ @ARGON2_CFLAGS@ @CARES_CFLAGS@ @SODIUM_C
 #          you are not defining CMDLINE_CONFIG 
 IRCDMODE = 711
 
+# Objects that are optional due to optional libraries:
 URL=@URL@
+GEOIP_CLASSIC_OBJECTS=@GEOIP_CLASSIC_OBJECTS@
+GEOIP_CLASSIC_LIBS=@GEOIP_CLASSIC_LIBS@
+GEOIP_CLASSIC_CFLAGS=@GEOIP_CLASSIC_CFLAGS@
+GEOIP_MAXMIND_OBJECTS=@GEOIP_MAXMIND_OBJECTS@
+LIBMAXMINDDB_CFLAGS=@LIBMAXMINDDB_CFLAGS@
+LIBMAXMINDDB_LIBS=@LIBMAXMINDDB_LIBS@
 
 # Where is your openssl binary
 OPENSSLPATH=@OPENSSLPATH@
@@ -116,7 +123,13 @@ MAKEARGS =	'CFLAGS=${CFLAGS}' 'CC=${CC}' 'IRCDLIBS=${IRCDLIBS}' \
 		'SHELL=${SHELL}' \
 		'CRYPTOLIB=${CRYPTOLIB}' \
 		'CRYPTOINCLUDES=${CRYPTOINCLUDES}' \
-		'URL=${URL}'
+		'URL=${URL}' \
+		'GEOIP_CLASSIC_OBJECTS=${GEOIP_CLASSIC_OBJECTS}' \
+		'GEOIP_CLASSIC_LIBS=${GEOIP_CLASSIC_LIBS}' \
+		'GEOIP_CLASSIC_CFLAGS=${GEOIP_CLASSIC_CFLAGS}' \
+		'GEOIP_MAXMIND_OBJECTS=${GEOIP_MAXMIND_OBJECTS}' \
+		'LIBMAXMINDDB_CFLAGS=${LIBMAXMINDDB_CFLAGS}' \
+		'LIBMAXMINDDB_LIBS=${LIBMAXMINDDB_LIBS}'
 
 custommodule:
 	@if test -z "${MODULEFILE}"; then echo "Please set MODULEFILE when calling \`\`make custommodule''. For example, \`\`make custommodule MODULEFILE=callerid''." >&2; exit 1; fi
@@ -135,7 +148,7 @@ build: Makefile
 	done
 	@echo ''
 	@echo '* UnrealIRCd compiled successfully'
-	@echo '* YOU ARE NOT DONE YET! Run "make install" to install UnrealIRCd !'
+	@echo '* YOU ARE NOT DONE YET! Run "${MAKE} install" to install UnrealIRCd !'
 	@echo ''
 
 clean:
@@ -183,9 +196,6 @@ install: all
 	$(INSTALL) -m 0700 -d $(DESTDIR)@MODULESDIR@/chanmodes
 	@rm -f $(DESTDIR)@MODULESDIR@/chanmodes/*.so 1>/dev/null 2>&1
 	$(INSTALL) -m 0700 src/modules/chanmodes/*.so $(DESTDIR)@MODULESDIR@/chanmodes
-	$(INSTALL) -m 0700 -d $(DESTDIR)@MODULESDIR@/snomasks
-	@rm -f $(DESTDIR)@MODULESDIR@/snomasks/*.so 1>/dev/null 2>&1
-	$(INSTALL) -m 0700 src/modules/snomasks/*.so $(DESTDIR)@MODULESDIR@/snomasks
 	$(INSTALL) -m 0700 -d $(DESTDIR)@MODULESDIR@/extbans
 	@rm -f $(DESTDIR)@MODULESDIR@/extbans/*.so 1>/dev/null 2>&1
 	$(INSTALL) -m 0700 src/modules/extbans/*.so $(DESTDIR)@MODULESDIR@/extbans
@@ -248,7 +258,7 @@ pem:	extras/tls.cnf
               -config extras/tls.cnf -sha256 -out server.req.pem \
               -key server.key.pem -nodes
 	@echo "Generating self-signed certificate..."
-	$(OPENSSLPATH) req -x509 -days 3650 -sha256 -in server.req.pem \
+	$(OPENSSLPATH) req -x509 -days 3650 -sha256 -nodes -in server.req.pem \
                -key server.key.pem -out server.cert.pem
 	@echo "Setting permissions on server.*.pem files..."
 	chmod o-rwx server.req.pem server.key.pem server.cert.pem

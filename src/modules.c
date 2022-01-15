@@ -52,7 +52,7 @@ Module *Module_make(ModuleHeader *header,
 
 #ifdef UNDERSCORE
 /* dlsym for OpenBSD */
-void *obsd_dlsym(void *handle, char *symbol)
+void *obsd_dlsym(void *handle, const char *symbol)
 {
 	size_t buflen = strlen(symbol) + 2;
 	char *obsdsymbol = safe_alloc(buflen);
@@ -69,7 +69,7 @@ void *obsd_dlsym(void *handle, char *symbol)
 }
 #endif
 
-void deletetmp(char *path)
+void deletetmp(const char *path)
 {
 #ifndef NOREMOVETMP
 	if (!loop.config_test)
@@ -88,7 +88,7 @@ void DeleteTempModules(void)
 	{
 		config_error("Unable to open temp directory %s: %s, please create one with the appropriate permissions",
 			TMPDIR, strerror(errno));
-		if (!loop.ircd_booted)
+		if (!loop.booted)
 			exit(7);
 		return; 
 	}
@@ -131,7 +131,7 @@ void DeleteTempModules(void)
 #endif	
 }
 
-Module *Module_Find(char *name)
+Module *Module_Find(const char *name)
 {
 	Module *p;
 	
@@ -149,16 +149,16 @@ Module *Module_Find(char *name)
 	
 }
 
-int parse_modsys_version(char *version)
+int parse_modsys_version(const char *version)
 {
-	if (!strcmp(version, "unrealircd-5"))
-		return 0x500000;
+	if (!strcmp(version, "unrealircd-6"))
+		return 0x600000;
 	return 0;
 }
 
 void make_compiler_string(char *buf, size_t buflen, unsigned int ver)
 {
-unsigned int maj, min, plevel;
+	unsigned int maj, min, plevel;
 
 	if (ver == 0)
 	{
@@ -180,7 +180,7 @@ unsigned int maj, min, plevel;
  * something like "/home/xyz/unrealircd/modules/third/la.so
  * (and other tricks)
  */
-char *Module_TransformPath(char *path_)
+const char *Module_TransformPath(const char *path_)
 {
 	static char path[1024];
 
@@ -202,17 +202,18 @@ char *Module_TransformPath(char *path_)
 }
 
 /** This function is the inverse of Module_TransformPath() */
-char *Module_GetRelPath(char *fullpath)
+const char *Module_GetRelPath(const char *fullpath)
 {
 	static char buf[512];
 	char prefix[512];
-	char *s = fullpath;
+	const char *without_prefix = fullpath;
+	char *s;
 
 	/* Strip the prefix */
 	snprintf(prefix, sizeof(prefix), "%s/", MODULESDIR);
 	if (!strncasecmp(fullpath, prefix, strlen(prefix)))
-		s += strlen(prefix);
-	strlcpy(buf, s, sizeof(buf));
+		without_prefix += strlen(prefix);
+	strlcpy(buf, without_prefix, sizeof(buf));
 
 	/* Strip the suffix */
 	s = strstr(buf, MODULE_SUFFIX);
@@ -225,7 +226,7 @@ char *Module_GetRelPath(char *fullpath)
 /** Validate a modules' ModuleHeader.
  * @returns Error message is returned, or NULL if everything is OK.
  */
-static char *validate_mod_header(char *relpath, ModuleHeader *mod_header)
+static const char *validate_mod_header(const char *relpath, ModuleHeader *mod_header)
 {
 	char *p;
 	static char buf[256];
@@ -260,7 +261,7 @@ static char *validate_mod_header(char *relpath, ModuleHeader *mod_header)
 	return NULL; /* SUCCESS */
 }
 
-int module_already_in_testing(char *relpath)
+int module_already_in_testing(const char *relpath)
 {
 	Module *m;
 	for (m = Modules; m; m = m->next)
@@ -277,7 +278,7 @@ int module_already_in_testing(char *relpath)
 /*
  * Returns an error if insucessful .. yes NULL is OK! 
 */
-char  *Module_Create(char *path_)
+const char *Module_Create(const char *path_)
 {
 #ifdef _WIN32
 	HMODULE 	Mod;
@@ -291,15 +292,14 @@ char  *Module_Create(char *path_)
 	char    *Mod_Version;
 	unsigned int *compiler_version;
 	static char 	errorbuf[1024];
-	char 		*path, *relpath, *tmppath;
+	const char	*path, *relpath, *tmppath;
 	ModuleHeader    *mod_header = NULL;
 	int		ret = 0;
-	char		*reterr;
+	const char	*reterr;
 	Module          *mod = NULL, **Mod_Handle = NULL;
 	char *expectedmodversion = our_mod_version;
 	unsigned int expectedcompilerversion = our_compiler_version;
 	long modsys_ver = 0;
-	Debug((DEBUG_DEBUG, "Attempting to load module from %s", path_));
 
 	path = Module_TransformPath(path_);
 
@@ -447,7 +447,7 @@ char  *Module_Create(char *path_)
 	else
 	{
 		/* Return the error .. */
-		return ((char *)irc_dlerror());
+		return irc_dlerror();
 	}
 }
 
@@ -524,9 +524,6 @@ void FreeModObj(ModuleObject *obj, Module *m)
 	else if (obj->type == MOBJ_VERSIONFLAG) {
 		VersionflagDel(obj->object.versionflag, m);
 	}
-	else if (obj->type == MOBJ_SNOMASK) {
-		SnomaskDel(obj->object.snomask);
-	}
 	else if (obj->type == MOBJ_UMODE) {
 		UmodeDel(obj->object.umode);
 	}
@@ -565,7 +562,9 @@ void FreeModObj(ModuleObject *obj, Module *m)
 	}
 	else
 	{
-		ircd_log(LOG_ERROR, "FreeModObj() called for unknown object");
+		unreal_log(ULOG_FATAL, "module", "FREEMODOBJ_UNKNOWN_TYPE", NULL,
+		           "[BUG] FreeModObj() called for unknown object (type $type)",
+		           log_data_integer("type", obj->type));
 		abort();
 	}
 }
@@ -655,8 +654,6 @@ int    Module_free(Module *mod)
 
 	for (cp = mod->children; cp; cp = cp->next)
 	{
-		sendto_realops("Unloading child module %s",
-			      cp->child->header->name);
 		Module_Unload(cp->child->header->name);
 	}
 	for (objs = mod->objects; objs; objs = next) {
@@ -693,7 +690,7 @@ int    Module_free(Module *mod)
  *      1                Module unloaded
  *      2                Module wishes delayed unloading, has placed event
  */
-int Module_Unload(char *name)
+int Module_Unload(const char *name)
 {
 	Module *m;
 	int    (*Mod_Unload)();
@@ -734,11 +731,6 @@ void module_loadall(void)
 	iFP	fp;
 	Module *mi, *next;
 	
-	if (!loop.ircd_booted)
-	{
-		sendto_realops("Ehh, !loop.ircd_booted in module_loadall()");
-		return ;
-	}
 	/* Run through all modules and check for module load */
 	for (mi = Modules; mi; mi = next)
 	{
@@ -799,12 +791,12 @@ CMD_FUNC(cmd_module)
 		all = 1;
 
 	if (MyUser(client) && !IsOper(client) && all)
-		client->local->since += 7; /* Lag them up. Big list. */
+		add_fake_lag(client, 7000); /* Lag them up. Big list. */
 
-	if ((parc > 2) && (hunt_server(client, recv_mtags, ":%s MODULE %s :%s", 2, parc, parv) != HUNTED_ISME))
+	if ((parc > 2) && (hunt_server(client, recv_mtags, "MODULE", 2, parc, parv) != HUNTED_ISME))
 		return;
 
-	if ((parc == 2) && (parv[1][0] != '-') && (hunt_server(client, recv_mtags, ":%s MODULE :%s", 1, parc, parv) != HUNTED_ISME))
+	if ((parc == 2) && (parv[1][0] != '-') && (hunt_server(client, recv_mtags, "MODULE", 1, parc, parv) != HUNTED_ISME))
 		return;
 
 	if (all)
@@ -884,7 +876,7 @@ CMD_FUNC(cmd_module)
 	sendtxtnumeric(client, "Override: %s", tmp);
 }
 
-Hooktype *HooktypeFind(char *string) {
+Hooktype *HooktypeFind(const char *string) {
 	Hooktype *hooktype;
 	for (hooktype = Hooktypes; hooktype->string ;hooktype++) {
 		if (!strcasecmp(hooktype->string, string))
@@ -984,7 +976,7 @@ void VersionflagDel(Versionflag *vflag, Module *module)
 	}
 }
 
-Hook *HookAddMain(Module *module, int hooktype, int priority, int (*func)(), void (*vfunc)(), char *(*cfunc)())
+Hook *HookAddMain(Module *module, int hooktype, int priority, int (*func)(), void (*vfunc)(), char *(*stringfunc)(), const char *(*conststringfunc)())
 {
 	Hook *p;
 	
@@ -993,8 +985,10 @@ Hook *HookAddMain(Module *module, int hooktype, int priority, int (*func)(), voi
 		p->func.intfunc = func;
 	if (vfunc)
 		p->func.voidfunc = vfunc;
-	if (cfunc)
-		p->func.pcharfunc = cfunc;
+	if (stringfunc)
+		p->func.stringfunc = stringfunc;
+	if (conststringfunc)
+		p->func.conststringfunc = conststringfunc;
 	p->type = hooktype;
 	p->owner = module;
 	p->priority = priority;
@@ -1036,17 +1030,40 @@ Hook *HookDel(Hook *hook)
 	return NULL;
 }
 
-Callback	*CallbackAddMain(Module *module, int cbtype, int (*func)(), void (*vfunc)(), char *(*cfunc)())
+static int num_callbacks(int cbtype)
+{
+Callback *e;
+int cnt = 0;
+
+	for (e = Callbacks[cbtype]; e; e = e->next)
+		if (!e->willberemoved)
+			cnt++;
+			
+	return cnt;
+}
+
+Callback *CallbackAddMain(Module *module, int cbtype, int (*func)(), void (*vfunc)(), void *(*pvfunc)(), char *(*stringfunc)(), const char *(*conststringfunc)())
 {
 	Callback *p;
+	
+	if (num_callbacks(cbtype) > 0)
+	{
+		if (module)
+			module->errorcode = MODERR_EXISTS;
+		return NULL;
+	}
 	
 	p = safe_alloc(sizeof(Callback));
 	if (func)
 		p->func.intfunc = func;
 	if (vfunc)
 		p->func.voidfunc = vfunc;
-	if (cfunc)
-		p->func.pcharfunc = cfunc;
+	if (pvfunc)
+		p->func.pvoidfunc = pvfunc;
+	if (stringfunc)
+		p->func.stringfunc = stringfunc;
+	if (conststringfunc)
+		p->func.conststringfunc = conststringfunc;
 	p->type = cbtype;
 	p->owner = module;
 	AddListItem(p, Callbacks[cbtype]);
@@ -1086,7 +1103,7 @@ Callback *CallbackDel(Callback *cb)
 	return NULL;
 }
 
-CommandOverride *CommandOverrideAddEx(Module *module, char *name, int priority, OverrideCmdFunc function)
+CommandOverride *CommandOverrideAdd(Module *module, const char *name, int priority, OverrideCmdFunc function)
 {
 	RealCommand *p;
 	CommandOverride *ovr;
@@ -1108,7 +1125,7 @@ CommandOverride *CommandOverrideAddEx(Module *module, char *name, int priority, 
 	}
 	ovr = safe_alloc(sizeof(CommandOverride));
 	ovr->func = function;
-	ovr->owner = module; /* TODO: module objects */
+	ovr->owner = module;
 	ovr->priority = priority;
 	if (module)
 	{
@@ -1125,11 +1142,6 @@ CommandOverride *CommandOverrideAddEx(Module *module, char *name, int priority, 
 		AddListItem(ovr, p->friend->overriders);
 	}
 	return ovr;
-}
-
-CommandOverride *CommandOverrideAdd(Module *module, char *name, OverrideCmdFunc function)
-{
-	return CommandOverrideAddEx(module, name, 0, function);
 }
 
 void CommandOverrideDel(CommandOverride *cmd)
@@ -1157,7 +1169,7 @@ void CommandOverrideDel(CommandOverride *cmd)
 	safe_free(cmd);
 }
 
-void CallCommandOverride(CommandOverride *ovr, Client *client, MessageTag *mtags, int parc, char *parv[])
+void CallCommandOverride(CommandOverride *ovr, Client *client, MessageTag *mtags, int parc, const char *parv[])
 {
 	if (ovr->next)
 		ovr->next->func(ovr->next, client, mtags, parc, parv);
@@ -1171,21 +1183,27 @@ EVENT(e_unload_module_delayed)
 	int i; 
 	i = Module_Unload(name);
 	if (i == 1)
-		sendto_realops("Unloaded module %s", name);
+	{
+		unreal_log(ULOG_INFO, "module", "MODULE_UNLOADING_DELAYED", NULL,
+		           "Unloading module $module_name (was delayed earlier)",
+		           log_data_string("module_name", name));
+	}
 	safe_free(name);
 	extcmodes_check_for_changes();
 	umodes_check_for_changes();
 	return;
 }
 
-void	unload_all_modules(void)
+void unload_all_modules(void)
 {
 	Module *m;
 	int	(*Mod_Unload)();
 	for (m = Modules; m; m = m->next)
 	{
 #ifdef DEBUGMODE
-		ircd_log(LOG_ERROR, "Unloading %s...", m->header->name);
+		unreal_log(ULOG_DEBUG, "module", "MODULE_UNLOADING", NULL,
+		           "Unloading module $module_name",
+		           log_data_string("module_name", m->header->name));
 #endif
 		irc_dlsym(m->dll, "Mod_Unload", Mod_Unload);
 		if (Mod_Unload)
@@ -1237,18 +1255,6 @@ const char *ModuleGetErrorStr(Module *module)
 	return module_error_str[module->errorcode];
 }
 
-static int num_callbacks(int cbtype)
-{
-Callback *e;
-int cnt = 0;
-
-	for (e = Callbacks[cbtype]; e; e = e->next)
-		if (!e->willberemoved)
-			cnt++;
-			
-	return cnt;
-}
-
 /** Ensure that all required callbacks are in place and meet
  * all specified requirements
  */
@@ -1262,11 +1268,21 @@ int i;
 		{
 			config_error("ERROR: Multiple callbacks loaded for type %d. "
 			             "Make sure you only load 1 module of 1 type (eg: only 1 cloaking module)",
-			             i); /* TODO: make more clear? */
+			             i);
 			return -1;
 		}
 	}
-		
+
+	if (!Callbacks[CALLBACKTYPE_CLOAK_KEY_CHECKSUM])
+	{
+		unreal_log(ULOG_ERROR, "config", "NO_CLOAKING_MODULE", NULL,
+		           "No cloaking module loaded, you must load 1 of these modulese:\n"
+		           "1) cloak_sha256 - if you are a new network starting with UnrealIRCd 6\n"
+		           "2) cloak_md5 - the old one if migrating an existing network from UnrealIRCd 3.2/4/5\n"
+		           "3) cloak_none - if you don't want to use cloaking at all\n"
+		           "See also https://www.unrealircd.org/docs/FAQ#choose-a-cloaking-module");
+		return -1;
+	}
 	return 0;
 }
 
@@ -1311,7 +1327,7 @@ const char *our_dlerror(void)
  * @note  The name is checked against the module name,
  *        this can be a problem if two modules have the same name.
  */
-int is_module_loaded(char *name)
+int is_module_loaded(const char *name)
 {
 	Module *mi;
 	for (mi = Modules; mi; mi = mi->next)
@@ -1325,17 +1341,17 @@ int is_module_loaded(char *name)
 	return 0;
 }
 
-static char *mod_var_name(ModuleInfo *modinfo, char *varshortname)
+static const char *mod_var_name(ModuleInfo *modinfo, const char *varshortname)
 {
 	static char fullname[512];
 	snprintf(fullname, sizeof(fullname), "%s:%s", modinfo->handle->header->name, varshortname);
 	return fullname;
 }
 
-int LoadPersistentPointerX(ModuleInfo *modinfo, char *varshortname, void **var, void (*free_variable)(ModData *m))
+int LoadPersistentPointerX(ModuleInfo *modinfo, const char *varshortname, void **var, void (*free_variable)(ModData *m))
 {
 	ModDataInfo *m;
-	char *fullname = mod_var_name(modinfo, varshortname);
+	const char *fullname = mod_var_name(modinfo, varshortname);
 
 	m = findmoddata_byname(fullname, MODDATATYPE_LOCAL_VARIABLE);
 	if (m)
@@ -1346,27 +1362,28 @@ int LoadPersistentPointerX(ModuleInfo *modinfo, char *varshortname, void **var, 
 		ModDataInfo mreq;
 		memset(&mreq, 0, sizeof(mreq));
 		mreq.type = MODDATATYPE_LOCAL_VARIABLE;
-		mreq.name = fullname;
+		mreq.name = strdup(fullname);
 		mreq.free = free_variable;
 		m = ModDataAdd(modinfo->handle, mreq);
 		moddata_local_variable(m).ptr = NULL;
+		safe_free(mreq.name);
 		return 0;
 	}
 }
 
-void SavePersistentPointerX(ModuleInfo *modinfo, char *varshortname, void *var)
+void SavePersistentPointerX(ModuleInfo *modinfo, const char *varshortname, void *var)
 {
 	ModDataInfo *m;
-	char *fullname = mod_var_name(modinfo, varshortname);
+	const char *fullname = mod_var_name(modinfo, varshortname);
 
 	m = findmoddata_byname(fullname, MODDATATYPE_LOCAL_VARIABLE);
 	moddata_local_variable(m).ptr = var;
 }
 
-int LoadPersistentIntX(ModuleInfo *modinfo, char *varshortname, int *var)
+int LoadPersistentIntX(ModuleInfo *modinfo, const char *varshortname, int *var)
 {
 	ModDataInfo *m;
-	char *fullname = mod_var_name(modinfo, varshortname);
+	const char *fullname = mod_var_name(modinfo, varshortname);
 
 	m = findmoddata_byname(fullname, MODDATATYPE_LOCAL_VARIABLE);
 	if (m)
@@ -1377,27 +1394,28 @@ int LoadPersistentIntX(ModuleInfo *modinfo, char *varshortname, int *var)
 		ModDataInfo mreq;
 		memset(&mreq, 0, sizeof(mreq));
 		mreq.type = MODDATATYPE_LOCAL_VARIABLE;
-		mreq.name = fullname;
+		mreq.name = strdup(fullname);
 		mreq.free = NULL;
 		m = ModDataAdd(modinfo->handle, mreq);
 		moddata_local_variable(m).i = 0;
+		safe_free(mreq.name);
 		return 0;
 	}
 }
 
-void SavePersistentIntX(ModuleInfo *modinfo, char *varshortname, int var)
+void SavePersistentIntX(ModuleInfo *modinfo, const char *varshortname, int var)
 {
 	ModDataInfo *m;
-	char *fullname = mod_var_name(modinfo, varshortname);
+	const char *fullname = mod_var_name(modinfo, varshortname);
 
 	m = findmoddata_byname(fullname, MODDATATYPE_LOCAL_VARIABLE);
 	moddata_local_variable(m).i = var;
 }
 
-int LoadPersistentLongX(ModuleInfo *modinfo, char *varshortname, long *var)
+int LoadPersistentLongX(ModuleInfo *modinfo, const char *varshortname, long *var)
 {
 	ModDataInfo *m;
-	char *fullname = mod_var_name(modinfo, varshortname);
+	const char *fullname = mod_var_name(modinfo, varshortname);
 
 	m = findmoddata_byname(fullname, MODDATATYPE_LOCAL_VARIABLE);
 	if (m)
@@ -1408,18 +1426,19 @@ int LoadPersistentLongX(ModuleInfo *modinfo, char *varshortname, long *var)
 		ModDataInfo mreq;
 		memset(&mreq, 0, sizeof(mreq));
 		mreq.type = MODDATATYPE_LOCAL_VARIABLE;
-		mreq.name = fullname;
+		mreq.name = strdup(fullname);
 		mreq.free = NULL;
 		m = ModDataAdd(modinfo->handle, mreq);
 		moddata_local_variable(m).l = 0;
+		safe_free(mreq.name);
 		return 0;
 	}
 }
 
-void SavePersistentLongX(ModuleInfo *modinfo, char *varshortname, long var)
+void SavePersistentLongX(ModuleInfo *modinfo, const char *varshortname, long var)
 {
 	ModDataInfo *m;
-	char *fullname = mod_var_name(modinfo, varshortname);
+	const char *fullname = mod_var_name(modinfo, varshortname);
 
 	m = findmoddata_byname(fullname, MODDATATYPE_LOCAL_VARIABLE);
 	moddata_local_variable(m).l = var;

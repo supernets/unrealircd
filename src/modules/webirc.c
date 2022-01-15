@@ -40,7 +40,7 @@ ModuleHeader MOD_HEADER
 	"5.0",
 	"WebIRC/CGI:IRC Support",
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
 };
 
 /* Global variables */
@@ -49,14 +49,13 @@ ConfigItem_webirc *conf_webirc = NULL;
 
 /* Forward declarations */
 CMD_FUNC(cmd_webirc);
-int webirc_check_init(Client *client, char *sockn, size_t size);
-int webirc_local_pass(Client *client, char *password);
+int webirc_local_pass(Client *client, const char *password);
 int webirc_config_test(ConfigFile *, ConfigEntry *, int, int *);
 int webirc_config_run(ConfigFile *, ConfigEntry *, int);
 void webirc_free_conf(void);
 void delete_webircblock(ConfigItem_webirc *e);
-char *webirc_md_serialize(ModData *m);
-void webirc_md_unserialize(char *str, ModData *m);
+const char *webirc_md_serialize(ModData *m);
+void webirc_md_unserialize(const char *str, ModData *m);
 void webirc_md_free(ModData *md);
 int webirc_secure_connect(Client *client);
 
@@ -87,7 +86,7 @@ MOD_INIT()
 	mreq.serialize = webirc_md_serialize;
 	mreq.unserialize = webirc_md_unserialize;
 	mreq.free = webirc_md_free;
-	mreq.sync = 1;
+	mreq.sync = MODDATA_SYNC_EARLY;
 	webirc_md = ModDataAdd(modinfo->handle, mreq);
 	if (!webirc_md)
 	{
@@ -96,7 +95,6 @@ MOD_INIT()
 	}
 
 	HookAdd(modinfo->handle, HOOKTYPE_CONFIGRUN, 0, webirc_config_run);
-	HookAdd(modinfo->handle, HOOKTYPE_CHECK_INIT, 0, webirc_check_init);
 	HookAdd(modinfo->handle, HOOKTYPE_LOCAL_PASS, 0, webirc_local_pass);
 	HookAdd(modinfo->handle, HOOKTYPE_SECURE_CONNECT, 0, webirc_secure_connect);
 
@@ -154,82 +152,81 @@ int webirc_config_test(ConfigFile *cf, ConfigEntry *ce, int type, int *errs)
 	if (!ce)
 		return 0;
 	
-	if (!strcmp(ce->ce_varname, "cgiirc"))
+	if (!strcmp(ce->name, "cgiirc"))
 	{
 		config_error("%s:%i: the cgiirc block has been renamed to webirc and "
 		             "the syntax has changed in UnrealIRCd 4",
-		             ce->ce_fileptr->cf_filename, ce->ce_varlinenum);
-		need_34_upgrade = 1;
+		             ce->file->filename, ce->line_number);
 		*errs = 1;
 		return -1;
 	}
 
-	if (strcmp(ce->ce_varname, "webirc"))
+	if (strcmp(ce->name, "webirc"))
 		return 0; /* not interested in non-webirc stuff.. */
 
 	/* Now actually go parse the webirc { } block */
-	for (cep = ce->ce_entries; cep; cep = cep->ce_next)
+	for (cep = ce->items; cep; cep = cep->next)
 	{
-		if (!cep->ce_vardata)
+		if (!cep->value)
 		{
-			config_error_empty(cep->ce_fileptr->cf_filename, cep->ce_varlinenum,
-				"webirc", cep->ce_varname);
+			config_error_empty(cep->file->filename, cep->line_number,
+				"webirc", cep->name);
 			errors++;
 			continue;
 		}
-		if (!strcmp(cep->ce_varname, "mask"))
+		if (!strcmp(cep->name, "mask"))
 		{
-			if (cep->ce_vardata || cep->ce_entries)
+			if (cep->value || cep->items)
 				has_mask = 1;
 		}
-		else if (!strcmp(cep->ce_varname, "password"))
+		else if (!strcmp(cep->name, "password"))
 		{
 			if (has_password)
 			{
-				config_warn_duplicate(cep->ce_fileptr->cf_filename, 
-					cep->ce_varlinenum, "webirc::password");
+				config_warn_duplicate(cep->file->filename, 
+					cep->line_number, "webirc::password");
 				continue;
 			}
 			has_password = 1;
 			if (Auth_CheckError(cep) < 0)
 				errors++;
 		}
-		else if (!strcmp(cep->ce_varname, "type"))
+		else if (!strcmp(cep->name, "type"))
 		{
 			if (has_type)
 			{
-				config_warn_duplicate(cep->ce_fileptr->cf_filename,
-					cep->ce_varlinenum, "webirc::type");
+				config_warn_duplicate(cep->file->filename,
+					cep->line_number, "webirc::type");
 			}
 			has_type = 1;
-			if (!strcmp(cep->ce_vardata, "webirc"))
+			if (!strcmp(cep->value, "webirc"))
 				webirc_type = WEBIRC_WEBIRC;
-			else if (!strcmp(cep->ce_vardata, "old"))
+			else if (!strcmp(cep->value, "old"))
 				webirc_type = WEBIRC_PASS;
 			else
 			{
 				config_error("%s:%i: unknown webirc::type '%s', should be either 'webirc' or 'old'",
-					cep->ce_fileptr->cf_filename, cep->ce_varlinenum, cep->ce_vardata);
+					cep->file->filename, cep->line_number, cep->value);
 				errors++;
 			}
 		}
 		else
 		{
-			config_error_unknown(cep->ce_fileptr->cf_filename, cep->ce_varlinenum,
-				"webirc", cep->ce_varname);
+			config_error_unknown(cep->file->filename, cep->line_number,
+				"webirc", cep->name);
 			errors++;
 		}
 	}
 	if (!has_mask)
 	{
-		config_error_missing(ce->ce_fileptr->cf_filename, ce->ce_varlinenum,
+		config_error_missing(ce->file->filename, ce->line_number,
 			"webirc::mask");
 		errors++;
 	}
 
 	if (!has_password && (webirc_type == WEBIRC_WEBIRC))
 	{
-		config_error_missing(ce->ce_fileptr->cf_filename, ce->ce_varlinenum,
+		config_error_missing(ce->file->filename, ce->line_number,
 			"webirc::password");
 		errors++;
 	}
@@ -239,7 +236,7 @@ int webirc_config_test(ConfigFile *cf, ConfigEntry *ce, int type, int *errs)
 		config_error("%s:%i: webirc block has type set to 'old' but has a password set. "
 		             "Passwords are not used with type 'old'. Either remove the password or "
 		             "use the 'webirc' method instead.",
-		             ce->ce_fileptr->cf_filename, ce->ce_varlinenum);
+		             ce->file->filename, ce->line_number);
 		errors++;
 	}
 
@@ -255,23 +252,23 @@ int webirc_config_run(ConfigFile *cf, ConfigEntry *ce, int type)
 	if (type != CONFIG_MAIN)
 		return 0;
 	
-	if (!ce || !ce->ce_varname || strcmp(ce->ce_varname, "webirc"))
+	if (!ce || !ce->name || strcmp(ce->name, "webirc"))
 		return 0; /* not interested */
 
 	webirc = safe_alloc(sizeof(ConfigItem_webirc));
 	webirc->type = WEBIRC_WEBIRC; /* default */
 
-	for (cep = ce->ce_entries; cep; cep = cep->ce_next)
+	for (cep = ce->items; cep; cep = cep->next)
 	{
-		if (!strcmp(cep->ce_varname, "mask"))
+		if (!strcmp(cep->name, "mask"))
 			unreal_add_masks(&webirc->mask, cep);
-		else if (!strcmp(cep->ce_varname, "password"))
+		else if (!strcmp(cep->name, "password"))
 			webirc->auth = AuthBlockToAuthConfig(cep);
-		else if (!strcmp(cep->ce_varname, "type"))
+		else if (!strcmp(cep->name, "type"))
 		{
-			if (!strcmp(cep->ce_vardata, "webirc"))
+			if (!strcmp(cep->value, "webirc"))
 				webirc->type = WEBIRC_WEBIRC;
-			else if (!strcmp(cep->ce_vardata, "old"))
+			else if (!strcmp(cep->value, "old"))
 				webirc->type = WEBIRC_PASS;
 			else
 				abort();
@@ -283,7 +280,7 @@ int webirc_config_run(ConfigFile *cf, ConfigEntry *ce, int type)
 	return 0;
 }
 
-char *webirc_md_serialize(ModData *m)
+const char *webirc_md_serialize(ModData *m)
 {
 	static char buf[32];
 	if (m->i == 0)
@@ -292,7 +289,7 @@ char *webirc_md_serialize(ModData *m)
 	return buf;
 }
 
-void webirc_md_unserialize(char *str, ModData *m)
+void webirc_md_unserialize(const char *str, ModData *m)
 {
 	m->i = atoi(str);
 }
@@ -303,7 +300,7 @@ void webirc_md_free(ModData *md)
 	md->l = 0;
 }
 
-ConfigItem_webirc *find_webirc(Client *client, char *password, WEBIRCType type, char **errorstr)
+ConfigItem_webirc *find_webirc(Client *client, const char *password, WEBIRCType type, char **errorstr)
 {
 	ConfigItem_webirc *e;
 	char *error = NULL;
@@ -337,7 +334,7 @@ ConfigItem_webirc *find_webirc(Client *client, char *password, WEBIRCType type, 
 #define WEBIRC_STRINGLEN  (sizeof(WEBIRC_STRING)-1)
 
 /* Does the CGI:IRC host spoofing work */
-void dowebirc(Client *client, char *ip, char *host, char *options)
+void dowebirc(Client *client, const char *ip, const char *host, const char *options)
 {
 	char scratch[64];
 
@@ -352,8 +349,7 @@ void dowebirc(Client *client, char *ip, char *host, char *options)
 
 	/* STEP 1: Update client->local->ip
 	   inet_pton() returns 1 on success, 0 on bad input, -1 on bad AF */
-	if ((inet_pton(AF_INET, ip, scratch) != 1) &&
-	    (inet_pton(AF_INET6, ip, scratch) != 1))
+	if (!is_valid_ip(ip))
 	{
 		/* then we have an invalid IP */
 		exit_client(client, NULL, "Invalid IP address");
@@ -371,7 +367,7 @@ void dowebirc(Client *client, char *ip, char *host, char *options)
 		client->local->hostp = NULL;
 	}
 	/* (create new) */
-	if (host && verify_hostname(host))
+	if (host && valid_host(host, 1))
 		client->local->hostp = unreal_create_hostent(host, client->ip);
 
 	/* STEP 4: Update sockhost
@@ -385,8 +381,10 @@ void dowebirc(Client *client, char *ip, char *host, char *options)
 
 	if (options)
 	{
+		char optionsbuf[BUFSIZE];
 		char *name, *p = NULL, *p2;
-		for (name = strtoken(&p, options, " "); name; name = strtoken(&p, NULL, " "))
+		strlcpy(optionsbuf, options, sizeof(optionsbuf));
+		for (name = strtoken(&p, optionsbuf, " "); name; name = strtoken(&p, NULL, " "))
 		{
 			p2 = strchr(name, '=');
 			if (p2)
@@ -413,7 +411,7 @@ void dowebirc(Client *client, char *ip, char *host, char *options)
 /* WEBIRC <pass> "cgiirc" <hostname> <ip> [:option1 [option2...]]*/
 CMD_FUNC(cmd_webirc)
 {
-	char *ip, *host, *password, *options;
+	const char *ip, *host, *password, *options;
 	ConfigItem_webirc *e;
 	char *error = NULL;
 
@@ -440,25 +438,17 @@ CMD_FUNC(cmd_webirc)
 	dowebirc(client, ip, host, options);
 }
 
-int webirc_check_init(Client *client, char *sockn, size_t size)
-{
-	if (IsWEBIRC(client))
-	{
-		strlcpy(sockn, GetIP(client), size); /* use already set value */
-		return HOOK_DENY;
-	}
-	
-	return HOOK_CONTINUE; /* nothing to do */
-}
-
-int webirc_local_pass(Client *client, char *password)
+int webirc_local_pass(Client *client, const char *password)
 {
 	if (!strncmp(password, WEBIRC_STRING, WEBIRC_STRINGLEN))
 	{
+		char buf[512];
 		char *ip, *host;
 		ConfigItem_webirc *e;
 		char *error = NULL;
 
+		/* Work on a copy as we may trash it */
+		strlcpy(buf, password, sizeof(buf));
 		e = find_webirc(client, NULL, WEBIRC_PASS, &error);
 		if (e)
 		{
@@ -467,7 +457,7 @@ int webirc_local_pass(Client *client, char *password)
 			 * The <resolvedhostname> has been checked ip->host AND host->ip by CGI:IRC itself
 			 * already so we trust it.
 			 */
-			ip = password + WEBIRC_STRINGLEN;
+			ip = buf + WEBIRC_STRINGLEN;
 			host = strchr(ip, '_');
 			if (!host)
 			{

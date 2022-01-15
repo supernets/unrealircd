@@ -48,9 +48,6 @@ MODVAR char serveropts[] = {
 	'Y',
 #endif
 	'6',
-#ifdef USE_SSL
-	'e',
-#endif
 #ifndef NO_OPEROVERRIDE
 	'O',
 #endif
@@ -150,11 +147,16 @@ void debug(int level, FORMAT_STRING(const char *form), ...)
 	SET_ERRNO(err);
 }
 
-int checkprotoflags(Client *client, int flags, char *file, int line)
+int checkprotoflags(Client *client, int flags, const char *file, int line)
 {
 	if (!MyConnect(client))
-		ircd_log(LOG_ERROR, "[Debug] [BUG] ERROR: %s:%d: IsToken(<%s>,%d) on remote client",
-		         file, line, client->name, flags);
+	{
+		unreal_log(ULOG_ERROR, "main", "BUG_ISTOKEN_REMOTE_CLIENT", client,
+		           "IsToken($token_value) used on remote client in $file:$line",
+		           log_data_integer("token_value", flags),
+		           log_data_string("file", file),
+		           log_data_integer("line", line));
+	}
 	return ((client->local->proto & flags) == flags) ? 1 : 0;
 }
 #endif

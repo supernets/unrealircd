@@ -32,7 +32,7 @@ ModuleHeader MOD_HEADER
 	"5.0",
 	"command /samode", 
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
     };
 
 MOD_INIT()
@@ -68,7 +68,7 @@ CMD_FUNC(cmd_samode)
 		return;
 	}
 
-	channel = find_channel(parv[1], NULL);
+	channel = find_channel(parv[1]);
 	if (!channel)
 	{
 		sendnumeric(client, ERR_NOSUCHCHANNEL, parv[1]);

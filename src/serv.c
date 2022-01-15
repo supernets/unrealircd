@@ -53,13 +53,16 @@ int MODVAR spamf_ugly_vchanoverride = 0;
 
 void read_motd(const char *filename, MOTDFile *motd);
 void do_read_motd(const char *filename, MOTDFile *themotd);
-#ifdef USE_LIBCURL
-void read_motd_async_downloaded(const char *url, const char *filename, const char *errorbuf, int cached, MOTDDownload *motd_download);
-#endif
 
 extern MOTDLine *find_file(char *, short);
 
 void reread_motdsandrules();
+
+#if defined(__GNUC__)
+/* Temporarily ignore for this function. FIXME later!!! */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wformat-nonliteral"
+#endif
 
 /** Send a message upstream if necessary and check if it's for us.
  * @param client	The sender
@@ -68,13 +71,24 @@ void reread_motdsandrules();
  * @param server	This indicates parv[server] contains the destination
  * @param parc		Parameter count (MAX 8!!)
  * @param parv		Parameter values (MAX 8!!)
- * @note Command can have only max 8 parameters (parv[8])
- * @note parv[server] is replaced with the name of the matched client.
+ * @note While sending parv[server] is replaced with the name of the matched client
+ *       (virtually, as parv[] is not actually written to)
  */
-int hunt_server(Client *client, MessageTag *mtags, char *command, int server, int parc, char *parv[])
+int hunt_server(Client *client, MessageTag *mtags, const char *command, int server, int parc, const char *parv[])
 {
 	Client *acptr;
-	char *saved;
+	const char *saved;
+	int i;
+	char buf[1024];
+
+	if (strchr(command, '%') || strchr(command, ' '))
+	{
+		unreal_log(ULOG_ERROR, "main", "BUG_HUNT_SERVER", client,
+		           "[BUG] hunt_server called with command '$command' but it may not contain "
+		           "spaces or percentage signs nowadays, it must be ONLY the command.",
+		           log_data_string("command", command));
+		abort();
+	}
 
 	/* This would be strange and bad. Previous version assumed "it's for me". Hmm.. okay. */
 	if (parc <= server || BadPtr(parv[server]))
@@ -102,20 +116,45 @@ int hunt_server(Client *client, MessageTag *mtags, char *command, int server, in
 		return HUNTED_NOSUCH;
 	}
 
-	/* Replace "server" part with actual servername (eg: 'User' -> 'x.y.net')
-	 * Ugly. Previous version didn't even restore the state, now we do.
+	/* This puts all parv[] arguments in 'buf'
+	 * Taken from concat_params() but this one is
+	 * with parv[server] magic replacement.
 	 */
-	saved = parv[server];
-	parv[server] = acptr->id;
+	*buf = '\0';
+	for (i = 1; i < parc; i++)
+	{
+		const char *param = parv[i];
 
-	sendto_one(acptr, mtags, command, client->id,
-	    parv[1], parv[2], parv[3], parv[4],
-	    parv[5], parv[6], parv[7], parv[8]);
+		if (!param)
+			break;
 
-	parv[server] = saved;
+		/* The magic parv[server] replacement:
+		 * this replaces eg 'User' with '001' in S2S traffic.
+		 */
+		if (i == server)
+			param = acptr->id;
+
+		if (*buf)
+			strlcat(buf, " ", sizeof(buf));
+
+		if (strchr(param, ' ') || (*param == ':'))
+		{
+			/* Last parameter, with : */
+			strlcat(buf, ":", sizeof(buf));
+			strlcat(buf, parv[i], sizeof(buf));
+			break;
+		}
+		strlcat(buf, parv[i], sizeof(buf));
+	}
+
+	sendto_one(acptr, mtags, ":%s %s %s", client->id, command, buf);
 
 	return HUNTED_PASS;
 }
+
+#if defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
 
 #ifndef _WIN32
 /** Grab operating system name on Windows (outdated) */
@@ -146,12 +185,17 @@ char *getosname(void)
 #endif
 
 /** Helper function to send version strings */
-void send_version(Client *client, int reply)
+void send_version(Client *client, int remote)
 {
 	int i;
 
 	for (i = 0; ISupportStrings[i]; i++)
-		sendnumeric(client, reply, ISupportStrings[i]);
+	{
+		if (remote)
+			sendnumeric(client, RPL_REMOTEISUPPORT, ISupportStrings[i]);
+		else
+			sendnumeric(client, RPL_ISUPPORT, ISupportStrings[i]);
+	}
 }
 
 /** VERSION command:
@@ -162,11 +206,11 @@ CMD_FUNC(cmd_version)
 	/* Only allow remote VERSIONs if registered -- Syzop */
 	if (!IsUser(client) && !IsServer(client))
 	{
-		send_version(client, RPL_ISUPPORT);
+		send_version(client, 0);
 		return;
 	}
 
-	if (hunt_server(client, recv_mtags, ":%s VERSION :%s", 1, parc, parv) == HUNTED_ISME)
+	if (hunt_server(client, recv_mtags, "VERSION", 1, parc, parv) == HUNTED_ISME)
 	{
 		sendnumeric(client, RPL_VERSION, version, debugmode, me.name,
 			    (ValidatePermissionsForPath("server:info",client,NULL,NULL,NULL) ? serveropts : "0"),
@@ -185,9 +229,9 @@ CMD_FUNC(cmd_version)
 			sendnotice(client, "%s", pcre2_version());
 		}
 		if (MyUser(client))
-			send_version(client,RPL_ISUPPORT);
+			send_version(client,0);
 		else
-			send_version(client,RPL_REMOTEISUPPORT);
+			send_version(client,1);
 	}
 }
 
@@ -206,14 +250,14 @@ void send_proto(Client *client, ConfigItem_link *aconf)
 	 */
 
 	/* First line */
-	sendto_one(client, NULL, "PROTOCTL NOQUIT NICKv2 SJOIN SJOIN2 UMODE2 VL SJ3 TKLEXT TKLEXT2 NICKIP ESVID %s %s",
+	sendto_one(client, NULL, "PROTOCTL NOQUIT NICKv2 SJOIN SJOIN2 UMODE2 VL SJ3 TKLEXT TKLEXT2 NICKIP ESVID NEXTBANS %s %s",
 	           iConf.ban_setter_sync ? "SJSBY" : "",
 	           ClientCapabilityFindReal("message-tags") ? "MTAGS" : "");
 
 	/* Second line */
-	sendto_one(client, NULL, "PROTOCTL CHANMODES=%s%s,%s%s,%s%s,%s%s USERMODES=%s BOOTED=%lld PREFIX=%s SID=%s MLOCK TS=%lld EXTSWHOIS",
-		CHPAR1, EXPAR1, CHPAR2, EXPAR2, CHPAR3, EXPAR3, CHPAR4, EXPAR4,
-		umodestring, (long long)me.local->since, prefix->value,
+	sendto_one(client, NULL, "PROTOCTL CHANMODES=%s%s,%s,%s,%s USERMODES=%s BOOTED=%lld PREFIX=%s SID=%s MLOCK TS=%lld EXTSWHOIS",
+		CHPAR1, EXPAR1, EXPAR2, EXPAR3, EXPAR4,
+		umodestring, (long long)me.local->fake_lag, prefix->value,
 		me.id, (long long)TStime());
 
 	/* Third line */
@@ -227,7 +271,7 @@ void send_proto(Client *client, ConfigItem_link *aconf)
 #endif
 
 /** Special filter for remote commands */
-int remotecmdfilter(Client *client, int parc, char *parv[])
+int remotecmdfilter(Client *client, int parc, const char *parv[])
 {
 	/* no remote requests permitted from non-ircops */
 	if (MyUser(client) && !ValidatePermissionsForPath("server:remote",client,NULL,NULL,NULL) && !BadPtr(parv[1]))
@@ -252,6 +296,7 @@ char *unrealinfo[] =
 	"* Bram Matthys (Syzop) <syzop@unrealircd.org>",
 	"",
 	"Coders:",
+	"* Krzysztof Beresztant (k4be) <k4be@unrealircd.org>",
 	"* Gottem <gottem@unrealircd.org>",
 	"* i <i@unrealircd.org>",
 	"",
@@ -286,7 +331,7 @@ void cmd_info_send(Client *client)
 	sendnumericfmt(client, RPL_INFO, ":| UnrealIRCd Homepage: https://www.unrealircd.org");
 	sendnumericfmt(client, RPL_INFO, ":============================================");
 	sendnumericfmt(client, RPL_INFO, ":Birth Date: %s, compile # %s", creation, generation);
-	sendnumericfmt(client, RPL_INFO, ":On-line since %s", myctime(me.local->firsttime));
+	sendnumericfmt(client, RPL_INFO, ":On-line since %s", myctime(me.local->creationtime));
 	sendnumericfmt(client, RPL_INFO, ":ReleaseID (%s)", buildid);
 	sendnumeric(client, RPL_ENDOFINFO);
 }
@@ -299,7 +344,7 @@ CMD_FUNC(cmd_info)
 	if (remotecmdfilter(client, parc, parv))
 		return;
 
-	if (hunt_server(client, recv_mtags, ":%s INFO :%s", 1, parc, parv) == HUNTED_ISME)
+	if (hunt_server(client, recv_mtags, "INFO", 1, parc, parv) == HUNTED_ISME)
 		cmd_info_send(client);
 }
 
@@ -313,7 +358,7 @@ CMD_FUNC(cmd_license)
 	if (remotecmdfilter(client, parc, parv))
 		return;
 
-	if (hunt_server(client, recv_mtags, ":%s LICENSE :%s", 1, parc, parv) == HUNTED_ISME)
+	if (hunt_server(client, recv_mtags, "LICENSE", 1, parc, parv) == HUNTED_ISME)
 	{
 		while (*text)
 			sendnumeric(client, RPL_INFO, *text++);
@@ -333,20 +378,20 @@ CMD_FUNC(cmd_credits)
 	if (remotecmdfilter(client, parc, parv))
 		return;
 
-	if (hunt_server(client, recv_mtags, ":%s CREDITS :%s", 1, parc, parv) == HUNTED_ISME)
+	if (hunt_server(client, recv_mtags, "CREDITS", 1, parc, parv) == HUNTED_ISME)
 	{
 		while (*text)
 			sendnumeric(client, RPL_INFO, *text++);
 
 		sendnumeric(client, RPL_INFO, "");
 		sendnumericfmt(client, RPL_INFO, ":Birth Date: %s, compile # %s", creation, generation);
-		sendnumericfmt(client, RPL_INFO, ":On-line since %s", myctime(me.local->firsttime));
+		sendnumericfmt(client, RPL_INFO, ":On-line since %s", myctime(me.local->creationtime));
 		sendnumeric(client, RPL_ENDOFINFO);
 	}
 }
 
-/** Return flags for a client (connection), eg 's' for SSL/TLS - used in STATS L/l */
-char *get_client_status(Client *client)
+/** Return flags for a client (connection), eg 's' for TLS - used in STATS L/l */
+const char *get_client_status(Client *client)
 {
 	static char buf[10];
 	char *p = buf;
@@ -371,28 +416,7 @@ char *get_client_status(Client *client)
 	}
 	*p++ = ']';
 	*p++ = '\0';
-	return (buf);
-}
-
-/** Used to blank out ports -- Barubary - only used in STATS l/L */
-char *get_client_name2(Client *client, int showports)
-{
-	char *pointer = get_client_name(client, TRUE);
-
-	if (!pointer)
-		return NULL;
-	if (showports)
-		return pointer;
-	if (!strrchr(pointer, '.'))
-		return NULL;
-	/*
-	 * This may seem like wack but remind this is only used 
-	 * in rows of get_client_name2's, so it's perfectly fair
-	 * 
-	*/
-	strcpy(strrchr(pointer, '.'), ".0]");
-
-	return pointer;
+	return buf;
 }
 
 /** ERROR command - used by servers to indicate errors.
@@ -400,29 +424,24 @@ char *get_client_name2(Client *client, int showports)
  */
 CMD_FUNC(cmd_error)
 {
-	char *para;
+	const char *para;
 
 	if (!MyConnect(client))
 		return;
 
 	para = (parc > 1 && *parv[1] != '\0') ? parv[1] : "<>";
 
-	/* Errors from untrusted sources only go to the junk snomask
-	 * (which is only for debugging issues and such).
-	 * This to prevent flooding and confusing IRCOps by
-	 * malicious users.
+	/* Errors from untrusted sources are ignored as any
+	 * malicious user can send these, confusing IRCOps etc.
+	 * One can always see the errors from the other side anyway.
 	 */
-	if (!IsServer(client) && !client->serv)
-	{
-		sendto_snomask(SNO_JUNK, "ERROR from server %s: %s",
-			get_client_name(client, FALSE), para);
+	if (!IsServer(client) && !client->server)
 		return;
-	}
 
-	sendto_umode_global(UMODE_OPER, "ERROR from server %s: %s",
-	                    get_client_name(client, FALSE), para);
-	ircd_log(LOG_ERROR, "ERROR from server %s: %s",
-	                    get_client_name(client, FALSE), para);
+	unreal_log(ULOG_ERROR, "link", "LINK_ERROR_MESSAGE", client,
+	           "Error from $client: $error_message",
+	           log_data_string("error_message", para),
+	           client->server->conf ? log_data_link_block(client->server->conf) : NULL);
 }
 
 /** Save the tunefile (such as: highest seen connection count) */
@@ -433,11 +452,11 @@ EVENT(save_tunefile)
 	tunefile = fopen(conf_files->tune_file, "w");
 	if (!tunefile)
 	{
-#if !defined(_WIN32) && !defined(_AMIGA)
-		sendto_ops("Unable to write tunefile.. %s", strerror(errno));
-#else
-		sendto_ops("Unable to write tunefile..");
-#endif
+		char *errstr = strerror(errno);
+		unreal_log(ULOG_WARNING, "config", "WRITE_TUNE_FILE_FAILED", NULL,
+		           "Unable to write tunefile '$filename': $system_error",
+		           log_data_string("filename", conf_files->tune_file),
+		           log_data_string("system_error", errstr));
 		return;
 	}
 	fprintf(tunefile, "0\n");
@@ -454,14 +473,15 @@ void load_tunefile(void)
 	tunefile = fopen(conf_files->tune_file, "r");
 	if (!tunefile)
 		return;
-	fprintf(stderr, "Loading tunefile..\n");
-	if (!fgets(buf, sizeof(buf), tunefile))
-	    fprintf(stderr, "Warning: error while reading the timestamp offset from the tunefile%s%s\n",
-		errno? ": ": "", errno? strerror(errno): "");
-
-	if (!fgets(buf, sizeof(buf), tunefile))
-	    fprintf(stderr, "Warning: error while reading the peak user count from the tunefile%s%s\n",
-		errno? ": ": "", errno? strerror(errno): "");
+	/* We ignore the first line, hence the weird looking double fgets here... */
+	if (!fgets(buf, sizeof(buf), tunefile) || !fgets(buf, sizeof(buf), tunefile))
+	{
+		char *errstr = strerror(errno);
+		unreal_log(ULOG_WARNING, "config", "READ_TUNE_FILE_FAILED", NULL,
+		           "Unable to read tunefile '$filename': $system_error",
+		           log_data_string("filename", conf_files->tune_file),
+		           log_data_string("system_error", errstr));
+	}
 	irccounts.me_max = atol(buf);
 	fclose(tunefile);
 }
@@ -501,7 +521,7 @@ extern void reinit_resolver(Client *client);
  */
 CMD_FUNC(cmd_rehash)
 {
-	int x = 0;
+	int x;
 
 	/* This is one of the (few) commands that cannot be handled
 	 * by labeled-response accurately in all circumstances.
@@ -521,13 +541,13 @@ CMD_FUNC(cmd_rehash)
 		if (parv[1] && (parv[1][0] == '-'))
 			x = HUNTED_ISME;
 		else
-			x = hunt_server(client, recv_mtags, ":%s REHASH :%s", 1, parc, parv);
+			x = hunt_server(client, recv_mtags, "REHASH", 1, parc, parv);
 	} else {
 		if (match_simple("-glob*", parv[1])) /* This is really ugly... hack to make /rehash -global -something work */
 		{
 			x = HUNTED_ISME;
 		} else {
-			x = hunt_server(client, NULL, ":%s REHASH %s :%s", 1, parc, parv);
+			x = hunt_server(client, NULL, "REHASH", 1, parc, parv);
 		}
 	}
 	if (x != HUNTED_ISME)
@@ -557,17 +577,14 @@ CMD_FUNC(cmd_rehash)
 #endif
 		if (parv[2] == NULL)
 		{
-			if (loop.ircd_rehashing)
+			if (loop.rehashing)
 			{
 				sendnotice(client, "A rehash is already in progress");
 				return;
 			}
-			sendto_umode_global(UMODE_OPER, "%s is remotely rehashing server %s config file", client->name, me.name);
+			unreal_log(ULOG_INFO, "config", "CONFIG_RELOAD", client, "Rehashing server configuration file [by: $client.details]");
 			remote_rehash_client = client;
-			reread_motdsandrules();
-			// TODO: clean this next line up, wtf man.
-			rehash(client, (parc > 1) ? ((*parv[1] == 'q') ? 2 : 0) : 0);
-			return;
+			/* fallthrough... so we deal with this the same way as local rehashes */
 		}
 		parv[1] = parv[2];
 	} else {
@@ -583,16 +600,6 @@ CMD_FUNC(cmd_rehash)
 			parv[1] = parv[2];
 			parv[2] = NULL;
 			parc--;
-			/* Only netadmins may use /REHASH -global, which is because:
-			 * a) it makes sense
-			 * b) remote servers don't support remote rehashes by non-netadmins
-			 */
-			if (!ValidatePermissionsForPath("server:rehash",client,NULL,NULL,NULL))
-			{
-				sendnumeric(client, ERR_NOPRIVILEGES);
-				sendnotice(client, "'/REHASH -global' requires you to have server::rehash permissions");
-				return;
-			}
 			if (parv[1] && *parv[1] != '-')
 			{
 				sendnotice(client, "You cannot specify a server name after /REHASH -global, for obvious reasons");
@@ -614,19 +621,12 @@ CMD_FUNC(cmd_rehash)
 
 	if (!BadPtr(parv[1]) && strcasecmp(parv[1], "-all"))
 	{
-
-		if (!ValidatePermissionsForPath("server:rehash",client,NULL,NULL,NULL))
-		{
-			sendnumeric(client, ERR_NOPRIVILEGES);
-			return;
-		}
-
 		if (*parv[1] == '-')
 		{
 			if (!strncasecmp("-gar", parv[1], 4))
 			{
 				loop.do_garbage_collect = 1;
-				RunHook2(HOOKTYPE_REHASHFLAG, client, parv[1]);
+				RunHook(HOOKTYPE_REHASHFLAG, client, parv[1]);
 				return;
 			}
 			if (!strncasecmp("-dns", parv[1], 4))
@@ -636,58 +636,27 @@ CMD_FUNC(cmd_rehash)
 			}
 			if (match_simple("-ssl*", parv[1]) || match_simple("-tls*", parv[1]))
 			{
-				reinit_ssl(client);
+				unreal_log(ULOG_INFO, "config", "CONFIG_RELOAD_TLS", client, "Reloading all TLS related data. [by: $client.details]");
+				reinit_tls();
 				return;
 			}
-			if (match_simple("-o*motd", parv[1]))
-			{
-				if (MyUser(client))
-					sendto_ops("Rehashing OPERMOTD on request of %s", client->name);
-				else
-					sendto_umode_global(UMODE_OPER, "Remotely rehashing OPERMOTD on request of %s", client->name);
-				read_motd(conf_files->opermotd_file, &opermotd);
-				RunHook2(HOOKTYPE_REHASHFLAG, client, parv[1]);
-				return;
-			}
-			if (match_simple("-b*motd", parv[1]))
-			{
-				if (MyUser(client))
-					sendto_ops("Rehashing BOTMOTD on request of %s", client->name);
-				else
-					sendto_umode_global(UMODE_OPER, "Remotely rehashing BOTMOTD on request of %s", client->name);
-				read_motd(conf_files->botmotd_file, &botmotd);
-				RunHook2(HOOKTYPE_REHASHFLAG, client, parv[1]);
-				return;
-			}
-			if (!strncasecmp("-motd", parv[1], 5) || !strncasecmp("-rules", parv[1], 6))
-			{
-				if (MyUser(client))
-					sendto_ops("Rehashing all MOTDs and RULES on request of %s", client->name);
-				else
-					sendto_umode_global(UMODE_OPER, "Remotely rehasing all MOTDs and RULES on request of %s", client->name);
-				rehash_motdrules();
-				RunHook2(HOOKTYPE_REHASHFLAG, client, parv[1]);
-				return;
-			}
-			RunHook2(HOOKTYPE_REHASHFLAG, client, parv[1]);
+			RunHook(HOOKTYPE_REHASHFLAG, client, parv[1]);
 			return;
 		}
 	}
 	else
 	{
-		if (loop.ircd_rehashing)
+		if (loop.rehashing)
 		{
-			sendnotice(client, "A rehash is already in progress");
+			sendnotice(client, "ERROR: A rehash is already in progress");
 			return;
 		}
-		sendto_ops("%s is rehashing server config file", client->name);
+		unreal_log(ULOG_INFO, "config", "CONFIG_RELOAD", client, "Rehashing server configuration file [by: $client.details]");
 	}
 
 	/* Normal rehash, rehash motds&rules too, just like the on in the tld block will :p */
 	sendnumeric(client, RPL_REHASHING, configfile);
-	// TODO: fix next line - occurence #2
-	x = rehash(client, (parc > 1) ? ((*parv[1] == 'q') ? 2 : 0) : 0);
-	reread_motdsandrules();
+	request_rehash(client);
 }
 
 /** RESTART command - restart the server (discouraged command)
@@ -696,7 +665,7 @@ CMD_FUNC(cmd_rehash)
  */
 CMD_FUNC(cmd_restart)
 {
-	char *reason = parv[1];
+	const char *reason = parv[1];
 	Client *acptr;
 
 	if (!MyUser(client))
@@ -731,7 +700,6 @@ CMD_FUNC(cmd_restart)
 			reason = parv[2];
 		}
 	}
-	sendto_ops("Server is Restarting by request of %s", client->name);
 
 	list_for_each_entry(acptr, &lclient_list, lclient_node)
 	{
@@ -806,122 +774,11 @@ void short_motd(Client *client)
        sendnumeric(client, RPL_ENDOFMOTD);
 }
 
-/*
- * A merge from ircu and bahamut, and some extra stuff added by codemastr
- * we can now use 1 function for multiple files -- codemastr
- * Merged read_motd/read_rules stuff into this -- Syzop
- */
-
 /** Read motd-like file, used for rules/motd/botmotd/opermotd/etc.
- *  Multiplexes to either directly reading the MOTD or downloading it asynchronously.
  * @param filename Filename of file to read or URL. NULL is accepted and causes the *motd to be free()d.
  * @param motd Reference to motd pointer (used for freeing if needed and for asynchronous remote MOTD support)
  */
 void read_motd(const char *filename, MOTDFile *themotd)
-{
-#ifdef USE_LIBCURL
-	time_t modtime;
-	MOTDDownload *motd_download;
-#endif
-
-	/* TODO: if themotd points to a tld's motd,
-	   could a rehash disrupt this pointer?*/
-#ifdef USE_LIBCURL
-	if(themotd->motd_download)
-	{
-		themotd->motd_download->themotd = NULL;
-		/*
-		 * It is not our job to free() motd_download, the
-		 * read_motd_async_downloaded() function will do that
-		 * when it sees that ->themod == NULL.
-		 */
-		themotd->motd_download = NULL;
-	}
-
-	/* if filename is NULL, do_read_motd will catch it */
-	if(filename && url_is_valid(filename))
-	{
-		/* prepare our payload for read_motd_async_downloaded() */
-		motd_download = safe_alloc(sizeof(MOTDDownload));
-		motd_download->themotd = themotd;
-		themotd->motd_download = motd_download;
-
-		modtime = unreal_getfilemodtime(unreal_mkcache(filename));
-
-		download_file_async(filename, modtime, (vFP)read_motd_async_downloaded, motd_download);
-		return;
-	}
-#endif /* USE_LIBCURL */
-
-	do_read_motd(filename, themotd);
-
-	return;
-}
-
-#ifdef USE_LIBCURL
-/** Callback for download_file_async() called from read_motd() below.
- * @param url the URL curl groked or NULL if the MOTD is stored locally.
- * @param filename the path to the local copy of the MOTD or NULL if either cached=1 or there's an error.
- * @param errorbuf NULL or an errorstring if there was an error while downloading the MOTD.
- * @param cached 0 if the URL was downloaded freshly or 1 if the last download was canceled and the local copy should be used.
- */
-void read_motd_async_downloaded(const char *url, const char *filename, const char *errorbuf, int cached, MOTDDownload *motd_download)
-{
-	MOTDFile *themotd;
-
-	themotd = motd_download->themotd;
-	/*
-	  check if the download was soft-canceled. See struct.h's docs on
-	  struct MOTDDownload for details.
-	*/
-	if(!themotd)
-	{
-		safe_free(motd_download);
-		return;
-	}
-
-	/* errors -- check for specialcached version if applicable */
-	if(!cached && !filename)
-	{
-		if(has_cached_version(url))
-		{
-			config_warn("Error downloading MOTD file from \"%s\": %s -- using cached version instead.", displayurl(url), errorbuf);
-			filename = unreal_mkcache(url);
-		} else {
-			config_error("Error downloading MOTD file from \"%s\": %s", displayurl(url), errorbuf);
-
-			/* remove reference to this chunk of memory about to be freed. */
-			motd_download->themotd->motd_download = NULL;
-			safe_free(motd_download);
-			return;
-		}
-	}
-
-	/*
-	 * We need to move our newly downloaded file to its cache file
-	 * if it isn't there already.
-	 */
-	if(!cached)
-	{
-		/* create specialcached version for later */
-		unreal_copyfileex(filename, unreal_mkcache(url), 1);
-	} else {
-		/*
-		 * The file is cached. Thus we must look for it at the
-		 * cache location where we placed it earlier.
-		 */
-		filename = unreal_mkcache(url);
-	}
-
-	do_read_motd(filename, themotd);
-	safe_free(motd_download);
-}
-#endif /* USE_LIBCURL */
-
-
-/** The actual reading of the MOTD - used by read_motd() and read_motd_async_downloaded()
- */
-void do_read_motd(const char *filename, MOTDFile *themotd)
 {
 	FILE *fd;
 	struct tm *tm_tmp;
@@ -934,7 +791,7 @@ void do_read_motd(const char *filename, MOTDFile *themotd)
 
 	free_motd(themotd);
 
-	if(!filename)
+	if (!filename)
 		return;
 
 	fd = fopen(filename, "r");
@@ -960,7 +817,7 @@ void do_read_motd(const char *filename, MOTDFile *themotd)
 		temp = safe_alloc(sizeof(MOTDLine));
 		safe_strdup(temp->line, line);
 
-		if(last)
+		if (last)
 			last->next = temp;
 		else
 			/* handle the special case of the first line */
@@ -969,7 +826,7 @@ void do_read_motd(const char *filename, MOTDFile *themotd)
 		last = temp;
 	}
 	/* the file could be zero bytes long? */
-	if(last)
+	if (last)
 		last->next = NULL;
 
 	fclose(fd);
@@ -986,7 +843,7 @@ void free_motd(MOTDFile *themotd)
 {
 	MOTDLine *next, *motdline;
 
-	if(!themotd)
+	if (!themotd)
 		return;
 
 	for (motdline = themotd->lines; motdline; motdline = next)
@@ -998,11 +855,6 @@ void free_motd(MOTDFile *themotd)
 
 	themotd->lines = NULL;
 	memset(&themotd->last_modified, '\0', sizeof(struct tm));
-
-#ifdef USE_LIBCURL
-	/* see struct.h for more information about motd_download */
-	themotd->motd_download = NULL;
-#endif
 }
 
 /** DIE command - terminate the server
@@ -1036,7 +888,8 @@ CMD_FUNC(cmd_die)
 	}
 
 	/* Let the +s know what is going on */
-	sendto_ops("Server Terminating by request of %s", client->name);
+	unreal_log(ULOG_INFO, "main", "UNREALIRCD_STOP", client,
+	           "Terminating server by request of $client.details");
 
 	list_for_each_entry(acptr, &lclient_list, lclient_node)
 	{
@@ -1055,23 +908,29 @@ CMD_FUNC(cmd_die)
 PendingNet *pendingnet = NULL;
 
 /** Add server list (network) from 'client' connection */
-void add_pending_net(Client *client, char *str)
+void add_pending_net(Client *client, const char *str)
 {
 	PendingNet *net;
 	PendingServer *srv;
 	char *p, *name;
+	char buf[512];
 
 	if (BadPtr(str) || !client)
 		return;
+
+	/* Skip any * at the beginning (indicating a reply),
+	 * and work on a copy.
+	 */
+	if (*str == '*')
+		strlcpy(buf, str+1, sizeof(buf));
+	else
+		strlcpy(buf, str, sizeof(buf));
 
 	/* Allocate */
 	net = safe_alloc(sizeof(PendingNet));
 	net->client = client;
 
-	/* Fill in */
-	if (*str == '*')
-		str++;
-	for (name = strtoken(&p, str, ","); name; name = strtoken(&p, NULL, ","))
+	for (name = strtoken(&p, buf, ","); name; name = strtoken(&p, NULL, ","))
 	{
 		if (!*name)
 			continue;
@@ -1108,7 +967,7 @@ void free_pending_net(Client *client)
 }
 
 /** Find SID in any server list (network) that is pending, except 'exempt' */
-PendingNet *find_pending_net_by_sid_butone(char *sid, Client *exempt)
+PendingNet *find_pending_net_by_sid_butone(const char *sid, Client *exempt)
 {
 	PendingNet *net;
 	PendingServer *srv;
@@ -1181,7 +1040,7 @@ Client *find_non_pending_net_duplicates(Client *client)
 }
 
 /** Parse CHANMODES= in PROTOCTL */
-void parse_chanmodes_protoctl(Client *client, char *str)
+void parse_chanmodes_protoctl(Client *client, const char *str)
 {
 	char *modes, *p;
 	char copy[256];
@@ -1191,19 +1050,19 @@ void parse_chanmodes_protoctl(Client *client, char *str)
 	modes = strtoken(&p, copy, ",");
 	if (modes)
 	{
-		safe_strdup(client->serv->features.chanmodes[0], modes);
+		safe_strdup(client->server->features.chanmodes[0], modes);
 		modes = strtoken(&p, NULL, ",");
 		if (modes)
 		{
-			safe_strdup(client->serv->features.chanmodes[1], modes);
+			safe_strdup(client->server->features.chanmodes[1], modes);
 			modes = strtoken(&p, NULL, ",");
 			if (modes)
 			{
-				safe_strdup(client->serv->features.chanmodes[2], modes);
+				safe_strdup(client->server->features.chanmodes[2], modes);
 				modes = strtoken(&p, NULL, ",");
 				if (modes)
 				{
-					safe_strdup(client->serv->features.chanmodes[3], modes);
+					safe_strdup(client->server->features.chanmodes[3], modes);
 				}
 			}
 		}
@@ -1218,9 +1077,9 @@ static int previous_langsinuse_ready = 0;
  */
 void charsys_check_for_changes(void)
 {
-	char *langsinuse = charsys_get_current_languages();
+	const char *langsinuse = charsys_get_current_languages();
 	/* already called by charsys_finish() */
-	safe_strdup(me.serv->features.nickchars, langsinuse);
+	safe_strdup(me.server->features.nickchars, langsinuse);
 
 	if (!previous_langsinuse_ready)
 	{
@@ -1231,10 +1090,10 @@ void charsys_check_for_changes(void)
 
 	if (strcmp(langsinuse, previous_langsinuse))
 	{
-		ircd_log(LOG_ERROR, "Permitted nick characters changed at runtime: %s -> %s",
-			previous_langsinuse, langsinuse);
-		sendto_realops("Permitted nick characters changed at runtime: %s -> %s",
-			previous_langsinuse, langsinuse);
+		unreal_log(ULOG_INFO, "charsys", "NICKCHARS_CHANGED", NULL,
+		           "Permitted nick characters changed at runtime: $old_nickchars -> $new_nickchars",
+		           log_data_string("old_nickchars", previous_langsinuse),
+		           log_data_string("new_nickchars", langsinuse));
 		/* Broadcast change to all (locally connected) servers */
 		sendto_server(NULL, 0, 0, NULL, "PROTOCTL NICKCHARS=%s", langsinuse);
 	}
@@ -1243,25 +1102,21 @@ void charsys_check_for_changes(void)
 }
 
 /** Check if supplied server name is valid, that is: does not contain forbidden characters etc */
-int valid_server_name(char *name)
+int valid_server_name(const char *name)
 {
-	char *p;
+	const char *p;
 
-	if (strlen(name) >= HOSTLEN)
-		return 0;
-
-	for (p = name; *p; p++)
-		if ((*p <= ' ') || (*p > '~'))
-			return 0;
+	if (!valid_host(name, 0))
+		return 0; /* invalid hostname */
 
 	if (!strchr(name, '.'))
-		return 0;
+		return 0; /* no dot */
 
 	return 1;
 }
 
 /** Check if the supplied name is a valid SID, as in: syntax. */
-int valid_sid(char *name)
+int valid_sid(const char *name)
 {
 	if (strlen(name) != 3)
 		return 0;
@@ -1271,6 +1126,31 @@ int valid_sid(char *name)
 		return 0;
 	if (!isdigit(name[2]) && !isupper(name[2]))
 		return 0;
+	return 1;
+}
+
+/** Check if the supplied name is a valid UID, as in: syntax. */
+int valid_uid(const char *name)
+{
+	const char *p;
+
+	/* Enforce at least some minimum length */
+	if (strlen(name) < 6)
+		return 0;
+
+	/* UID cannot be larger than IDLEN or it would be cut off later */
+	if (strlen(name) > IDLEN)
+		return 0;
+
+	/* Must start with a digit */
+	if (!isdigit(*name))
+		return 0;
+
+	/* For all the remaining characters: digit or uppercase character */
+	for (p = name+1; *p; p++)
+		if (!isdigit(*p) && !isupper(*p))
+			return 0;
+
 	return 1;
 }
 
@@ -1284,28 +1164,96 @@ void tkl_init(void)
 /** Called when a server link is lost.
  * Used for logging only, API users can use the HOOKTYPE_SERVER_QUIT hook.
  */
-void lost_server_link(Client *serv, FORMAT_STRING(const char *fmt), ...)
+void lost_server_link(Client *client, const char *tls_error_string)
 {
-	va_list vl;
-	static char buf[1024], buf2[512];
-
-	va_start(vl, fmt);
-	vsnprintf(buf2, sizeof(buf2), fmt, vl);
-	va_end(vl);
-
-	if (IsServer(serv))
+	if (IsServer(client))
 	{
-		/* An already established link is now lost. Broadcast this to all opers. */
-		snprintf(buf, sizeof(buf), "Lost server link to %s: %s",
-			get_client_name(serv, FALSE), buf2);
-		sendto_umode_global(UMODE_OPER, "%s", buf);
+		/* An already established link is now lost. */
+		// FIXME: we used to broadcast this GLOBALLY.. not anymore since the U6 rewrite.. is that what we want?
+		if (tls_error_string)
+		{
+			/* TLS */
+			unreal_log(ULOG_ERROR, "link", "LINK_DISCONNECTED", client,
+				   "Lost server link to $client [$client.ip]: $tls_error_string",
+				   log_data_string("tls_error_string", tls_error_string),
+				   client->server->conf ? log_data_link_block(client->server->conf) : NULL);
+		} else {
+			/* NON-TLS */
+			unreal_log(ULOG_ERROR, "link", "LINK_DISCONNECTED", client,
+				   "Lost server link to $client [$client.ip]: $socket_error",
+				   log_data_socket_error(client->local->fd),
+				   client->server->conf ? log_data_link_block(client->server->conf) : NULL);
+		}
 	} else {
-		/* A link attempt failed. Only send this to local opers (can be noisy every xx seconds). */
-		snprintf(buf, sizeof(buf), "Unable to link with server %s: %s",
-			get_client_name(serv, FALSE), buf2);
-		sendto_umode(UMODE_OPER, "%s", buf);
+		/* A link attempt failed (it was never a fully connected server) */
+		/* We send these to local ops only */
+		if (tls_error_string)
+		{
+			/* TLS */
+			if (client->server->conf)
+			{
+				unreal_log(ULOG_ERROR, "link", "LINK_ERROR_CONNECT", client,
+					   "Unable to link with server $client [$link_block.ip:$link_block.port]: $tls_error_string",
+					   log_data_string("tls_error_string", tls_error_string),
+					   log_data_link_block(client->server->conf));
+			} else {
+				unreal_log(ULOG_ERROR, "link", "LINK_ERROR_CONNECT", client,
+					   "Unable to link with server $client: $tls_error_string",
+					   log_data_string("tls_error_string", tls_error_string));
+			}
+		} else {
+			/* non-TLS */
+			if (client->server->conf)
+			{
+				unreal_log(ULOG_ERROR, "link", "LINK_ERROR_CONNECT", client,
+					   "Unable to link with server $client [$link_block.ip:$link_block.port]: $socket_error",
+					   log_data_socket_error(client->local->fd),
+					   log_data_link_block(client->server->conf));
+			} else {
+				unreal_log(ULOG_ERROR, "link", "LINK_ERROR_CONNECT", client,
+					   "Unable to link with server $client: $socket_error",
+					   log_data_socket_error(client->local->fd));
+			}
+		}
+	}
+	SetServerDisconnectLogged(client);
+}
+
+/** Reject an insecure (outgoing) server link that isn't TLS.
+ * This function is void and not int because it can be called from other void functions
+ */
+void reject_insecure_server(Client *client)
+{
+	unreal_log(ULOG_ERROR, "link", "SERVER_STARTTLS_FAILED", client,
+	           "Could not link with server $client with TLS enabled. "
+	           "Please check logs on the other side of the link. "
+	           "If you insist with insecure linking then you can set link::options::outgoing::insecure "
+	           "(NOT recommended!).");
+	dead_socket(client, "Rejected server link without TLS");
+}
+
+/** Start server handshake - called after the outgoing connection has been established.
+ * @param client	The remote server
+ */
+void start_server_handshake(Client *client)
+{
+	ConfigItem_link *aconf = client->server ? client->server->conf : NULL;
+
+	if (!aconf)
+	{
+		/* Should be impossible. */
+		unreal_log(ULOG_ERROR, "link", "BUG_LOST_CONFIGURATION_ON_HANDSHAKE", client,
+		           "Lost configuration while connecting to $client.details");
+		return;
 	}
 
-	/* Always log! */
-	ircd_log(LOG_ERROR, "%s", buf);
+	RunHook(HOOKTYPE_SERVER_HANDSHAKE_OUT, client);
+
+	sendto_one(client, NULL, "PASS :%s", (aconf->auth->type == AUTHTYPE_PLAINTEXT) ? aconf->auth->data : "*");
+
+	send_protoctl_servers(client, 0);
+	send_proto(client, aconf);
+	/* Sending SERVER message moved to cmd_protoctl, so it's send after the first PROTOCTL
+	 * that we receive from the remote server. -- Syzop
+	 */
 }

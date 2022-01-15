@@ -24,23 +24,26 @@ ModuleHeader MOD_HEADER
 	"4.2",
 	"ExtBan ~c - banned when in specified channel",
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
 };
 
 /* Forward declarations */
-int extban_inchannel_is_ok(Client *client, Channel *channel, char *para, int checkt, int what, int what2);
-char *extban_inchannel_conv_param(char *para);
-int extban_inchannel_is_banned(Client *client, Channel *channel, char *banin, int type, char **msg, char **errmsg);
+int extban_inchannel_is_ok(BanContext *b);
+const char *extban_inchannel_conv_param(BanContext *b, Extban *extban);
+int extban_inchannel_is_banned(BanContext *b);
 
 /** Called upon module init */
 MOD_INIT()
 {
 	ExtbanInfo req;
 	
-	req.flag = 'c';
+	memset(&req, 0, sizeof(req));
+	req.letter = 'c';
+	req.name = "channel";
 	req.is_ok = extban_inchannel_is_ok;
 	req.conv_param = extban_inchannel_conv_param;
 	req.is_banned = extban_inchannel_is_banned;
+	req.is_banned_events = BANCHK_ALL|BANCHK_TKL;
 	req.options = EXTBOPT_INVEX; /* for +I too */
 	if (!ExtbanAdd(modinfo->handle, req))
 	{
@@ -65,13 +68,13 @@ MOD_UNLOAD()
 	return MOD_SUCCESS;
 }
 
-char *extban_inchannel_conv_param(char *para)
+const char *extban_inchannel_conv_param(BanContext *b, Extban *extban)
 {
 	static char retbuf[CHANNELLEN+6];
 	char *chan, *p, symbol='\0';
 
-	strlcpy(retbuf, para, sizeof(retbuf));
-	chan = retbuf+3;
+	strlcpy(retbuf, b->banstr, sizeof(retbuf));
+	chan = retbuf;
 
 	if ((*chan == '+') || (*chan == '%') || (*chan == '%') ||
 	    (*chan == '@') || (*chan == '&') || (*chan == '~'))
@@ -92,51 +95,53 @@ char *extban_inchannel_conv_param(char *para)
 }
 
 /* The only purpose of this function is a temporary workaround to prevent a desync.. pfff */
-int extban_inchannel_is_ok(Client *client, Channel *channel, char *para, int checkt, int what, int what2)
+int extban_inchannel_is_ok(BanContext *b)
 {
-	char *p;
+	const char *p = b->banstr;
 
-	if ((checkt == EXBCHK_PARAM) && MyUser(client) && (what == MODE_ADD) && (strlen(para) > 3))
+	if ((b->is_ok_check == EXBCHK_PARAM) && MyUser(b->client) && (b->what == MODE_ADD) && (strlen(b->banstr) > 3))
 	{
-		p = para + 3;
 		if ((*p == '+') || (*p == '%') || (*p == '%') ||
 		    (*p == '@') || (*p == '&') || (*p == '~'))
 		    p++;
 
 		if (*p != '#')
 		{
-			sendnotice(client, "Please use a # in the channelname (eg: ~c:#*blah*)");
+			sendnotice(b->client, "Please use a # in the channelname (eg: ~c:#*blah*)");
 			return 0;
 		}
 	}
 	return 1;
 }
 
-static int extban_inchannel_compareflags(char symbol, int flags)
+static int extban_inchannel_compareflags(char symbol, const char *member_modes)
 {
-	int require=0;
+	const char *required_modes = NULL;
 
 	if (symbol == '+')
-		require = CHFL_VOICE|CHFL_HALFOP|CHFL_CHANOP|CHFL_CHANADMIN|CHFL_CHANOWNER;
+		required_modes = "vhoaq";
 	else if (symbol == '%')
-		require = CHFL_HALFOP|CHFL_CHANOP|CHFL_CHANADMIN|CHFL_CHANOWNER;
+		required_modes = "hoaq";
 	else if (symbol == '@')
-		require = CHFL_CHANOP|CHFL_CHANADMIN|CHFL_CHANOWNER;
+		required_modes = "oaq";
 	else if (symbol == '&')
-		require = CHFL_CHANADMIN|CHFL_CHANOWNER;
+		required_modes = "aq";
 	else if (symbol == '~')
-		require = CHFL_CHANOWNER;
+		required_modes = "q";
+	else
+		return 0; /* unknown prefix character */
 
-	if (flags & require)
+	if (check_channel_access_string(member_modes, required_modes))
 		return 1;
 
 	return 0;
 }
 
-int extban_inchannel_is_banned(Client *client, Channel *channel, char *ban, int type, char **msg, char **errmsg)
+int extban_inchannel_is_banned(BanContext *b)
 {
 	Membership *lp;
-	char *p = ban+3, symbol = '\0';
+	const char *p = b->banstr;
+	char symbol = '\0';
 
 	if (*p != '#')
 	{
@@ -144,14 +149,14 @@ int extban_inchannel_is_banned(Client *client, Channel *channel, char *ban, int 
 		p++;
 	}
 
-	for (lp = client->user->channel; lp; lp = lp->next)
+	for (lp = b->client->user->channel; lp; lp = lp->next)
 	{
-		if (match_esc(p, lp->channel->chname))
+		if (match_esc(p, lp->channel->name))
 		{
 			/* Channel matched, check symbol if needed (+/%/@/etc) */
 			if (symbol)
 			{
-				if (extban_inchannel_compareflags(symbol, lp->flags))
+				if (extban_inchannel_compareflags(symbol, lp->member_modes))
 					return 1;
 			} else
 				return 1;

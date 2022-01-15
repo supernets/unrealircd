@@ -59,7 +59,7 @@ MODVAR int non_utf8_nick_chars_in_use = 0;
  * @param client	The client (user)
  * @param host		The new vhost
  */
-void iNAH_host(Client *client, char *host)
+void iNAH_host(Client *client, const char *host)
 {
 	if (!client->user)
 		return;
@@ -80,45 +80,45 @@ void iNAH_host(Client *client, char *host)
  * @param umode		The user mode string
  * @returns the user mode value (long)
  */
-long set_usermode(char *umode)
+long set_usermode(const char *umode)
 {
-	int  newumode;
-	int  what;
-	char *m;
-	int i;
+	Umode *um;
+	int newumode;
+	int what;
+	const char *m;
 
 	newumode = 0;
 	what = MODE_ADD;
 	for (m = umode; *m; m++)
+	{
 		switch (*m)
 		{
-		  case '+':
-			  what = MODE_ADD;
-			  break;
-		  case '-':
-			  what = MODE_DEL;
-			  break;
-		  case ' ':
-		  case '\n':
-		  case '\r':
-		  case '\t':
-			  break;
-		  default:
-		 	 for (i = 0; i <= Usermode_highest; i++)
-		 	 {
-		 	 	if (!Usermode_Table[i].flag)
-		 	 		continue;
-		 	 	if (*m == Usermode_Table[i].flag)
-		 	 	{
-		 	 		if (what == MODE_ADD)
-			 	 		newumode |= Usermode_Table[i].mode;
-			 	 	else
-			 	 		newumode &= ~Usermode_Table[i].mode;
-		 	 	}
-		 	 } 	  
+			case '+':
+				what = MODE_ADD;
+				break;
+			case '-':
+				what = MODE_DEL;
+				break;
+			case ' ':
+			case '\n':
+			case '\r':
+			case '\t':
+				break;
+			default:
+				for (um = usermodes; um; um = um->next)
+				{
+					if (um->letter == *m)
+					{
+						if (what == MODE_ADD)
+							newumode |= um->mode;
+						else
+							newumode &= ~um->mode;
+					}
+				}
 		}
+	}
 
-	return (newumode);
+	return newumode;
 }
 
 /** Convert a target pointer to an 8 bit hash, used for target limiting. */
@@ -177,10 +177,10 @@ int target_limit_exceeded(Client *client, void *target, const char *name)
 	{
 		/* Target limit reached */
 		client->local->nexttarget += 2; /* punish them some more */
-		client->local->since += 2; /* lag them up as well */
+		add_fake_lag(client, 2000); /* lag them up as well */
 
 		flood_limit_exceeded_log(client, "max-concurrent-conversations");
-		sendnumeric(client, ERR_TARGETTOOFAST, name, client->local->nexttarget - TStime());
+		sendnumeric(client, ERR_TARGETTOOFAST, name, (long long)(client->local->nexttarget - TStime()));
 
 		return 1;
 	}
@@ -207,9 +207,10 @@ int target_limit_exceeded(Client *client, void *target, const char *name)
  * @param buffer	Input string
  * @returns The new de-duplicated buffer (temporary storage, only valid until next canonize call)
  */
-char *canonize(char *buffer)
+char *canonize(const char *buffer)
 {
 	static char cbuf[2048];
+	char tbuf[2048];
 	char *s, *t, *cp = cbuf;
 	int  l = 0;
 	char *p = NULL, *p2;
@@ -219,11 +220,8 @@ char *canonize(char *buffer)
 	if (!buffer)
 		return NULL;
 
-	/* Ohh.. so lazy. But then again, this should never happen with a 2K buffer anyway. */
-	if (strlen(buffer) >= sizeof(cbuf))
-		buffer[sizeof(cbuf)-1] = '\0';
-
-	for (s = strtoken(&p, buffer, ","); s; s = strtoken(&p, NULL, ","))
+	strlcpy(tbuf, buffer, sizeof(tbuf));
+	for (s = strtoken(&p, tbuf, ","); s; s = strtoken(&p, NULL, ","))
 	{
 		if (l)
 		{
@@ -252,99 +250,98 @@ char *canonize(char *buffer)
 	return cbuf;
 }
 
-/** Get snomasks as a string.
- * @param client	The client
- * @returns string of snomasks (temporary storage)
- */
-char *get_snomask_string(Client *client)
-{
-	int i;
-	char *m;
-
-	m = buf;
-
-	*m++ = '+';
-	for (i = 0; i <= Snomask_highest && (m - buf < BUFSIZE - 4); i++)
-		if (Snomask_Table[i].flag && client->user->snomask & Snomask_Table[i].mode)
-			*m++ = Snomask_Table[i].flag;
-	*m = 0;
-	return buf;
-}
-
 /** Get user modes as a string.
  * @param client	The client
  * @returns string of user modes (temporary storage)
  */
-char *get_usermode_string(Client *client)
+const char *get_usermode_string(Client *client)
 {
-	int  i;
-	char *m;
+	static char buf[128];
+	Umode *um;
 
-	m = buf;
-	*m++ = '+';
-	for (i = 0; (i <= Usermode_highest) && (m - buf < BUFSIZE - 4); i++)
-		if (Usermode_Table[i].flag && (client->umodes & Usermode_Table[i].mode))
-			*m++ = Usermode_Table[i].flag;
-	*m = '\0';
+	strlcpy(buf, "+", sizeof(buf));
+	for (um = usermodes; um; um = um->next)
+		if (client->umodes & um->mode)
+			strlcat_letter(buf, um->letter, sizeof(buf));
+
 	return buf;
 }
 
+/** Get user modes as a string - buffer is specified.
+ * @param client	The client
+ * @param buf		The buffer to write to
+ * @param buflen	The size of the buffer
+ * @returns string of user modes (buf)
+ */
+const char *get_usermode_string_r(Client *client, char *buf, size_t buflen)
+{
+	Umode *um;
+
+	strlcpy(buf, "+", buflen);
+	for (um = usermodes; um; um = um->next)
+		if (client->umodes & um->mode)
+			strlcat_letter(buf, um->letter, buflen);
+
+	return buf;
+}
 
 /** Get user modes as a string - this one does not work on 'client' but directly on 'umodes'.
  * @param umodes	The user modes that are set
  * @returns string of user modes (temporary storage)
  */
-char *get_usermode_string_raw(long umodes)
+const char *get_usermode_string_raw(long umodes)
 {
-	int  i;
-	char *m;
+	static char buf[128];
+	Umode *um;
 
-	m = buf;
-	*m++ = '+';
-	for (i = 0; (i <= Usermode_highest) && (m - buf < BUFSIZE - 4); i++)
-		
-		if (Usermode_Table[i].flag && (umodes & Usermode_Table[i].mode))
-			*m++ = Usermode_Table[i].flag;
-	*m = '\0';
+	strlcpy(buf, "+", sizeof(buf));
+	for (um = usermodes; um; um = um->next)
+		if (umodes & um->mode)
+			strlcat_letter(buf, um->letter, sizeof(buf));
+
 	return buf;
 }
 
-/** Get snomasks as a string - this one does not work on 'client' but directly on 'sno'.
- * @param sno	The snomasks that are set
- * @returns string of snomasks (temporary storage)
+/** Get user modes as a string - this one does not work on 'client' but directly on 'umodes'.
+ * @param umodes	The user modes that are set
+ * @param buf		The buffer to write to
+ * @param buflen	The size of the buffer
+ * @returns string of user modes (buf)
  */
-char *get_snomask_string_raw(long sno)
+const char *get_usermode_string_raw_r(long umodes, char *buf, size_t buflen)
 {
-	int i;
-	char *m;
+	Umode *um;
 
-	m = buf;
+	strlcpy(buf, "+", buflen);
+	for (um = usermodes; um; um = um->next)
+		if (umodes & um->mode)
+			strlcat_letter(buf, um->letter, buflen);
 
-	*m++ = '+';
-	for (i = 0; i <= Snomask_highest && (m - buf < BUFSIZE - 4); i++)
-		if (Snomask_Table[i].flag && sno & Snomask_Table[i].mode)
-			*m++ = Snomask_Table[i].flag;
-	*m = 0;
 	return buf;
 }
+
 
 /** Set a new snomask on the user.
  * The user is not informed of the change by this function.
  * @param client	The client
  * @param snomask	The snomask to add or delete (eg: "+k-c")
  */
-void set_snomask(Client *client, char *snomask)
+void set_snomask(Client *client, const char *snomask)
 {
 	int what = MODE_ADD; /* keep this an int. -- Syzop */
-	char *p;
+	const char *p;
 	int i;
-	if (snomask == NULL) {
-		client->user->snomask = 0;
+
+	if (snomask == NULL)
+	{
+		remove_all_snomasks(client);
 		return;
 	}
 	
-	for (p = snomask; p && *p; p++) {
-		switch (*p) {
+	for (p = snomask; p && *p; p++)
+	{
+		switch (*p)
+		{
 			case '+':
 				what = MODE_ADD;
 				break;
@@ -352,22 +349,20 @@ void set_snomask(Client *client, char *snomask)
 				what = MODE_DEL;
 				break;
 			default:
-		 	 for (i = 0; i <= Snomask_highest; i++)
-		 	 {
-		 	 	if (!Snomask_Table[i].flag)
-		 	 		continue;
-		 	 	if (*p == Snomask_Table[i].flag)
-		 	 	{
-					if (Snomask_Table[i].allowed && !Snomask_Table[i].allowed(client,what))
+				if (what == MODE_ADD)
+				{
+					if (!isalpha(*p) || !is_valid_snomask(*p))
 						continue;
-		 	 		if (what == MODE_ADD)
-			 	 		client->user->snomask |= Snomask_Table[i].mode;
-			 	 	else
-			 	 		client->user->snomask &= ~Snomask_Table[i].mode;
-		 	 	}
-		 	 }				
+					addlettertodynamicstringsorted(&client->user->snomask, *p);
+				} else {
+					delletterfromstring(client->user->snomask, *p);
+				}
+				break;
 		}
 	}
+	/* If the snomask becomes empty ("") then set it to NULL and user mode -s */
+	if (client->user->snomask && !*client->user->snomask)
+		remove_all_snomasks(client);
 }
 
 /** Build the MODE line with (modified) user modes for this user.
@@ -375,7 +370,7 @@ void set_snomask(Client *client, char *snomask)
  */
 void build_umode_string(Client *client, long old, long sendmask, char *umode_buf)
 {
-	int i;
+	Umode *um;
 	long flag;
 	char *m;
 	int what = MODE_NULL;
@@ -386,33 +381,31 @@ void build_umode_string(Client *client, long old, long sendmask, char *umode_buf
 	 */
 	m = umode_buf;
 	*m = '\0';
-	for (i = 0; i <= Usermode_highest; i++)
+	for (um = usermodes; um; um = um->next)
 	{
-		if (!Usermode_Table[i].flag)
-			continue;
-		flag = Usermode_Table[i].mode;
+		flag = um->mode;
 		if (MyUser(client) && !(flag & sendmask))
 			continue;
 		if ((flag & old) && !(client->umodes & flag))
 		{
 			if (what == MODE_DEL)
-				*m++ = Usermode_Table[i].flag;
+				*m++ = um->letter;
 			else
 			{
 				what = MODE_DEL;
 				*m++ = '-';
-				*m++ = Usermode_Table[i].flag;
+				*m++ = um->letter;
 			}
 		}
 		else if (!(flag & old) && (client->umodes & flag))
 		{
 			if (what == MODE_ADD)
-				*m++ = Usermode_Table[i].flag;
+				*m++ = um->letter;
 			else
 			{
 				what = MODE_ADD;
 				*m++ = '+';
-				*m++ = Usermode_Table[i].flag;
+				*m++ = um->letter;
 			}
 		}
 	}
@@ -485,7 +478,7 @@ static void maxtarget_add_sorted(MaxTarget *n)
 }
 
 /** Find a maxtarget structure for a cmd (internal) */
-MaxTarget *findmaxtarget(char *cmd)
+MaxTarget *findmaxtarget(const char *cmd)
 {
 	MaxTarget *m;
 
@@ -496,17 +489,14 @@ MaxTarget *findmaxtarget(char *cmd)
 }
 
 /** Set a maximum targets per command restriction */
-void setmaxtargets(char *cmd, int limit)
+void setmaxtargets(const char *cmd, int limit)
 {
 	MaxTarget *m = findmaxtarget(cmd);
 	if (!m)
 	{
-		char cmdupper[64], *i, *o;
-		if (strlen(cmd) > 63)
-			cmd[63] = '\0';
-		for (i=cmd,o=cmdupper; *i; i++)
-			*o++ = toupper(*i);
-		*o = '\0';
+		char cmdupper[64];
+		strlcpy(cmdupper, cmd, sizeof(cmdupper));
+		strtoupper(cmdupper);
 		m = safe_alloc(sizeof(MaxTarget));
 		safe_strdup(m->cmd, cmdupper);
 		maxtarget_add_sorted(m);
@@ -529,7 +519,7 @@ void freemaxtargets(void)
 }
 
 /** Return the maximum number of targets permitted for a command */
-int max_targets_for_command(char *cmd)
+int max_targets_for_command(const char *cmd)
 {
 	MaxTarget *m = findmaxtarget(cmd);
 	if (m)
@@ -626,7 +616,7 @@ int is_handshake_finished(Client *client)
 int should_show_connect_info(Client *client)
 {
 	if (SHOWCONNECTINFO &&
-	    !client->serv &&
+	    !client->server &&
 	    !IsServersOnlyListener(client->local->listener) &&
 	    !client->local->listener->websocket_options)
 	{
@@ -672,7 +662,7 @@ const char *uid_get(void)
 }
 
 /** Get cloaked host for user */
-char *getcloak(Client *client)
+const char *getcloak(Client *client)
 {
 	if (!*client->user->cloakedhost)
 	{
@@ -689,9 +679,11 @@ char *getcloak(Client *client)
  * @param buf		Buffer to store the new cloaked host in
  * @param buflen	Length of the buffer (should be HOSTLEN+1)
  */
-void make_cloakedhost(Client *client, char *curr, char *buf, size_t buflen)
+void make_cloakedhost(Client *client, const char *curr, char *buf, size_t buflen)
 {
-	char host[256], *mask, *p, *q;
+	const char *p;
+	char host[256], *q;
+	const char *mask;
 
 	/* Convert host to lowercase and cut off at 255 bytes just to be sure */
 	for (p = curr, q = host; *p && (q < host+sizeof(host)-1); p++, q++)
@@ -700,9 +692,9 @@ void make_cloakedhost(Client *client, char *curr, char *buf, size_t buflen)
 
 	/* Call the cloaking layer */
 	if (RCallbacks[CALLBACKTYPE_CLOAK_EX] != NULL)
-		mask = RCallbacks[CALLBACKTYPE_CLOAK_EX]->func.pcharfunc(client, host);
+		mask = RCallbacks[CALLBACKTYPE_CLOAK_EX]->func.stringfunc(client, host);
 	else if (RCallbacks[CALLBACKTYPE_CLOAK] != NULL)
-		mask = RCallbacks[CALLBACKTYPE_CLOAK]->func.pcharfunc(host);
+		mask = RCallbacks[CALLBACKTYPE_CLOAK]->func.stringfunc(host);
 	else
 		mask = curr;
 
@@ -718,7 +710,7 @@ void user_account_login(MessageTag *recv_mtags, Client *client)
 		if (find_tkline_match(client, 0) && IsDead(client))
 			return;
 	}
-	RunHook2(HOOKTYPE_ACCOUNT_LOGIN, client, recv_mtags);
+	RunHook(HOOKTYPE_ACCOUNT_LOGIN, client, recv_mtags);
 }
 
 /** Should we hide the idle time of 'target' to user 'client'?
@@ -751,11 +743,13 @@ int hide_idle_time(Client *client, Client *target)
  * @param name	The name of the group
  * @returns 1 if name is valid, 0 if not (eg: illegal characters)
  */
-int security_group_valid_name(char *name)
+int security_group_valid_name(const char *name)
 {
-	char *p;
+	const char *p;
+
 	if (strlen(name) > SECURITYGROUPLEN)
 		return 0; /* Too long */
+
 	for (p = name; *p; p++)
 	{
 		if (!isalnum(*p) && !strchr("_-", *p))
@@ -768,7 +762,7 @@ int security_group_valid_name(char *name)
  * @param name	The name of the security group
  * @returns A SecurityGroup struct, or NULL if not found.
  */
-SecurityGroup *find_security_group(char *name)
+SecurityGroup *find_security_group(const char *name)
 {
 	SecurityGroup *s;
 	for (s = securitygroups; s; s = s->next)
@@ -782,7 +776,7 @@ SecurityGroup *find_security_group(char *name)
  * @param name	The name of the security group
  * @returns 1 if it exists, 0 if not
  */
-int security_group_exists(char *name)
+int security_group_exists(const char *name)
 {
 	if (!strcmp(name, "unknown-users") || find_security_group(name))
 		return 1;
@@ -793,7 +787,7 @@ int security_group_exists(char *name)
  * @param name	The name of the security group
  * @returns A SecurityGroup struct (already added to the 'securitygroups' linked list)
  */
-SecurityGroup *add_security_group(char *name, int priority)
+SecurityGroup *add_security_group(const char *name, int priority)
 {
 	SecurityGroup *s = find_security_group(name);
 
@@ -812,9 +806,7 @@ SecurityGroup *add_security_group(char *name, int priority)
 /** Free a SecurityGroup struct */
 void free_security_group(SecurityGroup *s)
 {
-	/* atm there is nothing else to free,
-	 * but who knows this may change in the future
-	 */
+	unreal_delete_masks(s->include_mask);
 	safe_free(s);
 }
 
@@ -866,7 +858,9 @@ int user_allowed_by_security_group(Client *client, SecurityGroup *s)
 		return 1;
 	if (s->reputation_score && (GetReputation(client) >= s->reputation_score))
 		return 1;
-	if (s->tls && (IsSecureConnect(client) || IsSecure(client)))
+	if (s->tls && (IsSecureConnect(client) || (MyConnect(client) && IsSecure(client))))
+		return 1;
+	if (s->include_mask && unreal_mask_match(client, s->include_mask))
 		return 1;
 	return 0;
 }
@@ -876,7 +870,7 @@ int user_allowed_by_security_group(Client *client, SecurityGroup *s)
  * @param secgroupname	The name of the security-group to check against
  * @retval 1 if user is allowed by security-group, 0 if not.
  */
-int user_allowed_by_security_group_name(Client *client, char *secgroupname)
+int user_allowed_by_security_group_name(Client *client, const char *secgroupname)
 {
 	SecurityGroup *s;
 
@@ -897,33 +891,81 @@ int user_allowed_by_security_group_name(Client *client, char *secgroupname)
 	return user_allowed_by_security_group(client, s);
 }
 
+/** Get comma separated list of matching security groups for 'client'.
+ * This is usually only used for displaying purposes.
+ * @returns string like "unknown-users,tls-users" from a static buffer.
+ */
+const char *get_security_groups(Client *client)
+{
+	SecurityGroup *s;
+	static char buf[512];
+
+	*buf = '\0';
+
+	/* We put known-users or unknown-users at the beginning.
+	 * The latter is special and doesn't actually exist
+	 * in the linked list, hence the special code here,
+	 * and again later in the for loop to skip it.
+	 */
+	if (user_allowed_by_security_group_name(client, "known-users"))
+		strlcat(buf, "known-users,", sizeof(buf));
+	else
+		strlcat(buf, "unknown-users,", sizeof(buf));
+
+	for (s = securitygroups; s; s = s->next)
+	{
+		if (strcmp(s->name, "known-users") &&
+		    user_allowed_by_security_group(client, s))
+		{
+			strlcat(buf, s->name, sizeof(buf));
+			strlcat(buf, ",", sizeof(buf));
+		}
+	}
+
+	if (*buf)
+		buf[strlen(buf)-1] = '\0';
+	return buf;
+}
+
 /** Return extended information about user for the "Client connecting" line.
  * @returns A string such as "[secure] [reputation: 5]", never returns NULL.
  */
-char *get_connect_extinfo(Client *client)
+const char *get_connect_extinfo(Client *client)
 {
 	static char retbuf[512];
 	char tmp[512];
+	const char *s;
+	const char *secgroups;
 	NameValuePrioList *list = NULL, *e;
 
 	/* From modules... */
-	RunHook2(HOOKTYPE_CONNECT_EXTINFO, client, &list);
+	RunHook(HOOKTYPE_CONNECT_EXTINFO, client, &list);
 
 	/* And some built-in: */
 
-	/* "class": this should be first */
+	/* "vhost": this should be first */
+	if (IsHidden(client))
+		add_nvplist(&list, -1000000, "vhost", client->user->virthost);
+
+	/* "class": second */
 	if (MyUser(client) && client->local->class)
 		add_nvplist(&list, -100000, "class", client->local->class->name);
 
-	/* "secure": SSL/TLS */
-	if (MyUser(client) && IsSecure(client))
-		add_nvplist(&list, -1000, "secure", tls_get_cipher(client->local->ssl));
-	else if (!MyUser(client) && IsSecureConnect(client))
-		add_nvplist(&list, -1000, "secure", NULL);
+	/* "secure": TLS */
+	s = tls_get_cipher(client);
+	if (s)
+		add_nvplist(&list, -1000, "secure", s);
+	else if (IsSecure(client) || IsSecureConnect(client))
+		add_nvplist(&list, -1000, "secure", NULL); /* old server or otherwise no details (eg: fake secure) */
 
 	/* services account? */
 	if (IsLoggedIn(client))
-		add_nvplist(&list, -500, "account", client->user->svid);
+		add_nvplist(&list, -500, "account", client->user->account);
+
+	/* security groups */
+	secgroups = get_security_groups(client);
+	if (secgroups)
+		add_nvplist(&list, 100, "security-groups", secgroups);
 
 	*retbuf = '\0';
 	for (e = list; e; e = e->next)
@@ -949,18 +991,13 @@ char *get_connect_extinfo(Client *client)
  * @param client	The client to check flood for (local user)
  * @param opt		The flood option (eg FLD_AWAY)
  */
-void flood_limit_exceeded_log(Client *client, char *floodname)
+void flood_limit_exceeded_log(Client *client, const char *floodname)
 {
 	char buf[1024];
 
-	snprintf(buf, sizeof(buf), "Flood blocked (%s) from %s!%s@%s [%s]",
-		floodname,
-		client->name,
-		client->user->username,
-		client->user->realhost,
-		GetIP(client));
-	ircd_log(LOG_FLOOD, "%s", buf);
-	sendto_snomask_global(SNO_FLOOD, "%s", buf);
+	unreal_log(ULOG_INFO, "flood", "FLOOD_BLOCKED", client,
+	           "Flood blocked ($flood_type) from $client.details [$client.ip]",
+	           log_data_string("flood_type", floodname));
 }
 
 /** Is the flood limit exceeded for an option? eg for away-flood.
@@ -979,9 +1016,6 @@ int flood_limit_exceeded(Client *client, FloodOption opt)
 	f = get_floodsettings_for_user(client, opt);
 	if (f->limit[opt] <= 0)
 		return 0; /* No limit set or unlimited */
-
-	ircd_log(LOG_ERROR, "Checking flood_limit_exceeded() for '%s', type %d with max %d:%ld...",
-		client->name, (int)opt, (int)f->limit[opt], (long)f->period[opt]);
 
 	/* Ok, let's do the flood check */
 	if ((client->local->flood[opt].t + f->period[opt]) <= timeofday)
@@ -1041,12 +1075,76 @@ FloodSettings *get_floodsettings_for_user(Client *client, FloodOption opt)
 	return f;
 }
 
-MODVAR char *floodoption_names[] = {
+MODVAR const char *floodoption_names[] = {
 	"nick-flood",
 	"join-flood",
 	"away-flood",
 	"invite-flood",
 	"knock-flood",
 	"max-concurrent-conversations",
+	"lag-penalty",
 	NULL
 };
+
+/** Lookup GEO information for an IP address.
+ * @param ip	The IP to lookup
+ * @returns A struct containing all the details. Must be freed by caller!
+ */
+GeoIPResult *geoip_lookup(const char *ip)
+{
+	if (!RCallbacks[CALLBACKTYPE_GEOIP_LOOKUP])
+		return NULL;
+	return RCallbacks[CALLBACKTYPE_GEOIP_LOOKUP]->func.pvoidfunc(ip);
+}
+
+void free_geoip_result(GeoIPResult *r)
+{
+	if (!r)
+		return;
+	safe_free(r->country_code);
+	safe_free(r->country_name);
+	safe_free(r);
+}
+
+/** Grab geoip information for client */
+GeoIPResult *geoip_client(Client *client)
+{
+	ModData *m = moddata_client_get_raw(client, "geoip");
+	if (!m)
+		return NULL;
+	return m->ptr; /* can still be NULL */
+}
+
+/** Get the oper block that was used to become OPER.
+ * @param client	The client to fetch the info for
+ * @returns the oper block name (eg: "OpEr") or NULL.
+ */
+const char *get_operlogin(Client *client)
+{
+	if (client->user->operlogin)
+		return client->user->operlogin;
+	return moddata_client_get(client, "operlogin");
+}
+
+/** Get the operclass of the IRCOp.
+ * @param client	The client to fetch the info for
+ * @returns the operclass name or NULL
+ */
+const char *get_operclass(Client *client)
+{
+	const char *operlogin = NULL;
+
+	if (MyUser(client) && client->user->operlogin)
+	{
+		ConfigItem_oper *oper;
+		operlogin = client->user->operlogin;
+		oper = find_oper(operlogin);
+		if (oper && oper->operclass)
+			return oper->operclass;
+	}
+
+	/* Remote user or locally no longer available
+	 * (eg oper block removed but user is still oper)
+	 */
+	return moddata_client_get(client, "operclass");
+}

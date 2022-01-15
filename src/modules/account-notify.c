@@ -28,7 +28,7 @@ ModuleHeader MOD_HEADER
 	"5.0", 			/* Version */
 	"account-notify CAP",	/* Short description of module */
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
 	};
 
 /* Variables */
@@ -70,7 +70,7 @@ int account_notify_account_login(Client *client, MessageTag *recv_mtags)
 				     CAP_ACCOUNT_NOTIFY, mtags,
 				     ":%s ACCOUNT %s",
 				     client->name,
-				     !isdigit(*client->user->svid) ? client->user->svid : "*");
+				     IsLoggedIn(client) ? client->user->account : "*");
 	free_message_tags(mtags);
 	return 0;
 }

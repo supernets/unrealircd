@@ -32,7 +32,7 @@ ModuleHeader MOD_HEADER
 	"5.0",
 	"command /knock", 
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
     };
 
 MOD_INIT()
@@ -78,7 +78,7 @@ CMD_FUNC(cmd_knock)
 	Hook *h;
 	int i = 0;
 	MessageTag *mtags = NULL;
-	char *reason;
+	const char *reason;
 
 	if (IsServer(client))
 		return;
@@ -97,7 +97,7 @@ CMD_FUNC(cmd_knock)
 		return;
 	}
 
-	if (!(channel = find_channel(parv[1], NULL)))
+	if (!(channel = find_channel(parv[1])))
 	{
 		sendnumeric(client, ERR_CANNOTKNOCK, parv[1], "Channel does not exist!");
 		return;
@@ -106,25 +106,25 @@ CMD_FUNC(cmd_knock)
 	/* IsMember bugfix by codemastr */
 	if (IsMember(client, channel) == 1)
 	{
-		sendnumeric(client, ERR_CANNOTKNOCK, channel->chname, "You're already there!");
+		sendnumeric(client, ERR_CANNOTKNOCK, channel->name, "You're already there!");
 		return;
 	}
 
-	if (!(channel->mode.mode & MODE_INVITEONLY))
+	if (!has_channel_mode(channel, 'i'))
 	{
-		sendnumeric(client, ERR_CANNOTKNOCK, channel->chname, "Channel is not invite only!");
+		sendnumeric(client, ERR_CANNOTKNOCK, channel->name, "Channel is not invite only!");
 		return;
 	}
 
 	if (is_banned(client, channel, BANCHK_JOIN, NULL, NULL))
 	{
-		sendnumeric(client, ERR_CANNOTKNOCK, channel->chname, "You're banned!");
+		sendnumeric(client, ERR_CANNOTKNOCK, channel->name, "You're banned!");
 		return;
 	}
 
 	for (h = Hooks[HOOKTYPE_PRE_KNOCK]; h; h = h->next)
 	{
-		i = (*(h->func.intfunc))(client,channel);
+		i = (*(h->func.intfunc))(client, channel, &reason);
 		if (i == HOOK_DENY || i == HOOK_ALLOW)
 			break;
 	}
@@ -142,19 +142,19 @@ CMD_FUNC(cmd_knock)
 
 	new_message(&me, NULL, &mtags);
 
-	sendto_channel(channel, &me, NULL, PREFIX_OP|PREFIX_ADMIN|PREFIX_OWNER,
+	sendto_channel(channel, &me, NULL, "o",
 	               0, SEND_LOCAL, mtags,
 	               ":%s NOTICE @%s :[Knock] by %s!%s@%s (%s)",
-	               me.name, channel->chname,
+	               me.name, channel->name,
 	               client->name, client->user->username, GetHost(client),
 	               reason);
 
-	sendto_server(client, 0, 0, mtags, ":%s KNOCK %s :%s", client->id, channel->chname, reason);
+	sendto_server(client, 0, 0, mtags, ":%s KNOCK %s :%s", client->id, channel->name, reason);
 
 	if (MyUser(client))
-		sendnotice(client, "Knocked on %s", channel->chname);
+		sendnotice(client, "Knocked on %s", channel->name);
 
-        RunHook4(HOOKTYPE_KNOCK, client, channel, mtags, parv[2]);
+        RunHook(HOOKTYPE_KNOCK, client, channel, mtags, parv[2]);
 
 	free_message_tags(mtags);
 }

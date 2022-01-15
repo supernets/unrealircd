@@ -32,7 +32,7 @@ ModuleHeader MOD_HEADER
 	"5.0",
 	"command /pass", 
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
     };
 
 /* Forward declarations */
@@ -119,7 +119,7 @@ int _check_banned(Client *client, int exitflags)
 */
 CMD_FUNC(cmd_pass)
 {
-	char *password = parc > 1 ? parv[1] : NULL;
+	const char *password = parc > 1 ? parv[1] : NULL;
 
 	if (!MyConnect(client) || (!IsUnknown(client) && !IsHandshake(client)))
 	{
@@ -137,5 +137,5 @@ CMD_FUNC(cmd_pass)
 	safe_strldup(client->local->passwd, password, PASSWDLEN+1);
 
 	/* note: the original non-truncated password is supplied as 2nd parameter. */
-	RunHookReturn2(HOOKTYPE_LOCAL_PASS, client, password, !=0);
+	RunHookReturn(HOOKTYPE_LOCAL_PASS, !=0, client, password);
 }

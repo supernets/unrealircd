@@ -32,7 +32,7 @@ ModuleHeader MOD_HEADER
 	"5.0",
 	"command /trace", 
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
     };
 
 MOD_INIT()
@@ -61,7 +61,7 @@ CMD_FUNC(cmd_trace)
 	int  i;
 	Client *acptr;
 	ConfigItem_class *cltmp;
-	char *tname;
+	const char *tname;
 	int  doall, link_s[MAXCONNECTIONS], link_u[MAXCONNECTIONS];
 	int  cnt = 0, wilds, dow;
 	time_t now;
@@ -73,7 +73,7 @@ CMD_FUNC(cmd_trace)
 	labeled_response_inhibit = 1;
 
 	if (parc > 2)
-		if (hunt_server(client, NULL, ":%s TRACE %s :%s", 2, parc, parv))
+		if (hunt_server(client, NULL, "TRACE", 2, parc, parv))
 			return;
 
 	if (parc > 1)
@@ -98,7 +98,7 @@ CMD_FUNC(cmd_trace)
 		}
 	}
 
-	switch (hunt_server(client, NULL, ":%s TRACE :%s", 1, parc, parv))
+	switch (hunt_server(client, NULL, "TRACE", 1, parc, parv))
 	{
 	  case HUNTED_PASS:	/* note: gets here only if parv[1] exists */
 	  {
@@ -140,8 +140,8 @@ CMD_FUNC(cmd_trace)
 	now = TStime();
 	list_for_each_entry(acptr, &lclient_list, lclient_node)
 	{
-		char *name;
-		char *class;
+		const char *name;
+		const char *class;
 
 		if (!ValidatePermissionsForPath("client:see:trace:invisible-users",client,acptr,NULL,NULL) && (acptr != client))
 			continue;
@@ -182,21 +182,21 @@ CMD_FUNC(cmd_trace)
 						sendnumeric(client, RPL_TRACEOPERATOR,
 						    class, acptr->name,
 						    GetHost(acptr),
-						    now - acptr->local->lasttime);
+						    (long long)(now - acptr->local->last_msg_received));
 					else
 						sendnumeric(client, RPL_TRACEUSER,
 						    class, acptr->name,
 						    acptr->user->realhost,
-						    now - acptr->local->lasttime);
+						    (long long)(now - acptr->local->last_msg_received));
 					cnt++;
 				}
 				break;
 
 			case CLIENT_STATUS_SERVER:
 				sendnumeric(client, RPL_TRACESERVER, class, acptr->local->fd >= 0 ? link_s[acptr->local->fd] : -1,
-				    acptr->local->fd >= 0 ? link_u[acptr->local->fd] : -1, name, *(acptr->serv->by) ?
-				    acptr->serv->by : "*", "*", me.name,
-				    now - acptr->local->lasttime);
+				    acptr->local->fd >= 0 ? link_u[acptr->local->fd] : -1, name, *(acptr->server->by) ?
+				    acptr->server->by : "*", "*", me.name,
+				    (long long)(now - acptr->local->last_msg_received));
 				cnt++;
 				break;
 

@@ -32,7 +32,7 @@ ModuleHeader MOD_HEADER
 	"5.0",
 	"command /ison", 
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
     };
 
 MOD_INIT()
@@ -66,6 +66,7 @@ static char buf[BUFSIZE];
 
 CMD_FUNC(cmd_ison)
 {
+	char request[BUFSIZE];
 	char namebuf[USERLEN + HOSTLEN + 4];
 	Client *acptr;
 	char *s, *user;
@@ -82,11 +83,12 @@ CMD_FUNC(cmd_ison)
 
 	ircsnprintf(buf, sizeof(buf), ":%s %d %s :", me.name, RPL_ISON, client->name);
 
-	for (s = strtoken(&p, parv[1], " "); s; s = strtoken(&p, NULL, " "))
+	strlcpy(request, parv[1], sizeof(request));
+	for (s = strtoken(&p, request, " "); s; s = strtoken(&p, NULL, " "))
 	{
 		if ((user = strchr(s, '!')))
 			*user++ = '\0';
-		if ((acptr = find_person(s, NULL)))
+		if ((acptr = find_user(s, NULL)))
 		{
 			if (user)
 			{

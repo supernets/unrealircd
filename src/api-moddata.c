@@ -65,6 +65,8 @@ ModDataInfo *ModDataAdd(Module *module, ModDataInfo req)
 	    ((req.type == MODDATATYPE_MEMBER) && (slotav >= MODDATA_MAX_MEMBER)) ||
 	    ((req.type == MODDATATYPE_MEMBERSHIP) && (slotav >= MODDATA_MAX_MEMBERSHIP)))
 	{
+		unreal_log(ULOG_ERROR, "module", "MOD_DATA_OUT_OF_SPACE", NULL,
+		           "ModDataAdd: out of space!!!");
 		if (module)
 			module->errorcode = MODERR_NOSPACE;
 		return NULL;
@@ -80,6 +82,8 @@ moddataadd_isok:
 	m->serialize = req.serialize;
 	m->unserialize = req.unserialize;
 	m->sync = req.sync;
+	m->remote_write = req.remote_write;
+	m->self_write = req.self_write;
 	m->owner = module;
 	
 	if (new_struct)
@@ -272,7 +276,7 @@ void ModDataDel(ModDataInfo *md)
 		md->owner = NULL;
 	}
 
-	if (loop.ircd_rehashing)
+	if (loop.rehashing)
 		md->unloaded = 1;
 	else
 		unload_moddata_commit(md);
@@ -290,7 +294,7 @@ ModDataInfo *md, *md_next;
 	}
 }
 
-ModDataInfo *findmoddata_byname(char *name, ModDataType type)
+ModDataInfo *findmoddata_byname(const char *name, ModDataType type)
 {
 ModDataInfo *md;
 
@@ -313,7 +317,7 @@ int module_has_moddata(Module *mod)
 }
 
 /** Set ModData for client (via variable name, string value) */
-int moddata_client_set(Client *client, char *varname, char *value)
+int moddata_client_set(Client *client, const char *varname, const char *value)
 {
 	ModDataInfo *md;
 
@@ -344,7 +348,7 @@ int moddata_client_set(Client *client, char *varname, char *value)
 }
 
 /** Get ModData for client (via variable name) */
-char *moddata_client_get(Client *client, char *varname)
+const char *moddata_client_get(Client *client, const char *varname)
 {
 	ModDataInfo *md;
 
@@ -356,8 +360,21 @@ char *moddata_client_get(Client *client, char *varname)
 	return md->serialize(&moddata_client(client, md)); /* can be NULL */
 }
 
+/** Get ModData for client (via variable name) */
+ModData *moddata_client_get_raw(Client *client, const char *varname)
+{
+	ModDataInfo *md;
+
+	md = findmoddata_byname(varname, MODDATATYPE_CLIENT);
+
+	if (!md)
+		return NULL;
+
+	return &moddata_client(client, md); /* can be NULL */
+}
+
 /** Set ModData for LocalClient (via variable name, string value) */
-int moddata_local_client_set(Client *client, char *varname, char *value)
+int moddata_local_client_set(Client *client, const char *varname, const char *value)
 {
 	ModDataInfo *md;
 
@@ -391,7 +408,7 @@ int moddata_local_client_set(Client *client, char *varname, char *value)
 }
 
 /** Get ModData for LocalClient (via variable name) */
-char *moddata_local_client_get(Client *client, char *varname)
+const char *moddata_local_client_get(Client *client, const char *varname)
 {
 	ModDataInfo *md;
 
@@ -407,7 +424,7 @@ char *moddata_local_client_get(Client *client, char *varname)
 }
 
 /** Set local variable moddata (via variable name, string value) */
-int moddata_local_variable_set(char *varname, char *value)
+int moddata_local_variable_set(const char *varname, const char *value)
 {
 	ModDataInfo *md;
 
@@ -432,7 +449,7 @@ int moddata_local_variable_set(char *varname, char *value)
 }
 
 /** Set global variable moddata (via variable name, string value) */
-int moddata_global_variable_set(char *varname, char *value)
+int moddata_global_variable_set(const char *varname, const char *value)
 {
 	ModDataInfo *md;
 

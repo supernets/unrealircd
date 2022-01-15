@@ -115,6 +115,9 @@
 /* Define to 1 if you have the `strlncat' function. */
 #undef HAVE_STRLNCAT
 
+/* Define to 1 if you have the `strlncpy' function. */
+#undef HAVE_STRLNCPY
+
 /* Define to 1 if you have the `syslog' function. */
 #undef HAVE_SYSLOG
 
@@ -129,9 +132,6 @@
 
 /* Define to 1 if you have the <unistd.h> header file. */
 #undef HAVE_UNISTD_H
-
-/* Define if you want modes shown in /list */
-#undef LIST_SHOW_MODES
 
 /* Define the location of the log files */
 #undef LOGDIR
@@ -180,9 +180,6 @@
 
 /* Define the path of the pid file */
 #undef PIDFILE
-
-/* Define if you want +a/+q prefixes */
-#undef PREFIX_AQ
 
 /* Define the location of private libraries */
 #undef PRIVATELIBDIR

@@ -28,14 +28,14 @@ ModuleHeader MOD_HEADER
 	"5.0",
 	"account-tag CAP",
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
 	};
 
 /* Variables */
 long CAP_ACCOUNT_TAG = 0L;
 
-int account_tag_mtag_is_ok(Client *client, char *name, char *value);
-void mtag_add_account(Client *client, MessageTag *recv_mtags, MessageTag **mtag_list, char *signature);
+int account_tag_mtag_is_ok(Client *client, const char *name, const char *value);
+void mtag_add_account(Client *client, MessageTag *recv_mtags, MessageTag **mtag_list, const char *signature);
 
 MOD_INIT()
 {
@@ -75,7 +75,7 @@ MOD_UNLOAD()
  * syntax.
  * We simply allow account-tag ONLY from servers and with any syntax.
  */
-int account_tag_mtag_is_ok(Client *client, char *name, char *value)
+int account_tag_mtag_is_ok(Client *client, const char *name, const char *value)
 {
 	if (IsServer(client))
 		return 1;
@@ -83,15 +83,15 @@ int account_tag_mtag_is_ok(Client *client, char *name, char *value)
 	return 0;
 }
 
-void mtag_add_account(Client *client, MessageTag *recv_mtags, MessageTag **mtag_list, char *signature)
+void mtag_add_account(Client *client, MessageTag *recv_mtags, MessageTag **mtag_list, const char *signature)
 {
 	MessageTag *m;
 
-	if (client && client->user && (*client->user->svid != '*') && !isdigit(*client->user->svid))
+	if (IsLoggedIn(client))
 	{
 		m = safe_alloc(sizeof(MessageTag));
 		safe_strdup(m->name, "account");
-		safe_strdup(m->value, client->user->svid);
+		safe_strdup(m->value, client->user->account);
 
 		AddListItem(m, *mtag_list);
 	}

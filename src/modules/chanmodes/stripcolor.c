@@ -27,16 +27,16 @@ ModuleHeader MOD_HEADER
 	"4.2",
 	"Channel Mode +S",
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
     };
 
 Cmode_t EXTCMODE_STRIPCOLOR;
 
-#define IsStripColor(channel)    (channel->mode.extmode & EXTCMODE_STRIPCOLOR)
+#define IsStripColor(channel)    (channel->mode.mode & EXTCMODE_STRIPCOLOR)
 
-int stripcolor_can_send_to_channel(Client *client, Channel *channel, Membership *lp, char **msg, char **errmsg, SendType sendtype);
-char *stripcolor_prelocalpart(Client *client, Channel *channel, char *comment);
-char *stripcolor_prelocalquit(Client *client, char *comment);
+int stripcolor_can_send_to_channel(Client *client, Channel *channel, Membership *lp, const char **msg, const char **errmsg, SendType sendtype);
+const char *stripcolor_prelocalpart(Client *client, Channel *channel, const char *comment);
+const char *stripcolor_prelocalquit(Client *client, const char *comment);
 
 MOD_TEST()
 {
@@ -50,14 +50,14 @@ CmodeInfo req;
 	/* Channel mode */
 	memset(&req, 0, sizeof(req));
 	req.paracount = 0;
-	req.flag = 'S';
+	req.letter = 'S';
 	req.is_ok = extcmode_default_requirechop;
 	CmodeAdd(modinfo->handle, req, &EXTCMODE_STRIPCOLOR);
 	
 	HookAdd(modinfo->handle, HOOKTYPE_CAN_SEND_TO_CHANNEL, 0, stripcolor_can_send_to_channel);
-	HookAddPChar(modinfo->handle, HOOKTYPE_PRE_LOCAL_PART, 0, stripcolor_prelocalpart);
-	HookAddPChar(modinfo->handle, HOOKTYPE_PRE_LOCAL_QUIT_CHAN, 0, stripcolor_prelocalpart);
-	HookAddPChar(modinfo->handle, HOOKTYPE_PRE_LOCAL_QUIT, 0, stripcolor_prelocalquit);
+	HookAddConstString(modinfo->handle, HOOKTYPE_PRE_LOCAL_PART, 0, stripcolor_prelocalpart);
+	HookAddConstString(modinfo->handle, HOOKTYPE_PRE_LOCAL_QUIT_CHAN, 0, stripcolor_prelocalpart);
+	HookAddConstString(modinfo->handle, HOOKTYPE_PRE_LOCAL_QUIT, 0, stripcolor_prelocalquit);
 	
 	MARK_AS_OFFICIAL_MODULE(modinfo);
 	return MOD_SUCCESS;
@@ -73,7 +73,7 @@ MOD_UNLOAD()
 	return MOD_SUCCESS;
 }
 
-int stripcolor_can_send_to_channel(Client *client, Channel *channel, Membership *lp, char **msg, char **errmsg, SendType sendtype)
+int stripcolor_can_send_to_channel(Client *client, Channel *channel, Membership *lp, const char **msg, const char **errmsg, SendType sendtype)
 {
 	Hook *h;
 	int i;
@@ -95,7 +95,7 @@ int stripcolor_can_send_to_channel(Client *client, Channel *channel, Membership 
 	return HOOK_CONTINUE;
 }
 
-char *stripcolor_prelocalpart(Client *client, Channel *channel, char *comment)
+const char *stripcolor_prelocalpart(Client *client, Channel *channel, const char *comment)
 {
 	if (!comment)
 		return NULL;
@@ -118,7 +118,7 @@ static int IsAnyChannelStripColor(Client *client)
 }
 
 
-char *stripcolor_prelocalquit(Client *client, char *comment)
+const char *stripcolor_prelocalquit(Client *client, const char *comment)
 {
 	if (!comment)
 		return NULL;

@@ -24,7 +24,7 @@ ModuleHeader MOD_HEADER = {
 	"1.4",
 	"Adds /rmtkl command to easily remove *-Lines in bulk",
 	"Gottem and the UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
 };
 
 #define IsParam(x) (parc > (x) && !BadPtr(parv[(x)]))
@@ -37,10 +37,10 @@ typedef struct {
 	char *operpriv;
 } TKLType;
 
-static void dump_str(Client *client, char **buf);
+static void dump_str(Client *client, const char **buf);
 static TKLType *find_TKLType_by_flag(char flag);
-void rmtkl_check_options(char *param, int *skipperm, int *silent);
-int rmtkl_tryremove(Client *client, TKLType *tkltype, TKL *tkl, char *uhmask, char *commentmask, int skipperm, int silent);
+void rmtkl_check_options(const char *param, int *skipperm, int *silent);
+int rmtkl_tryremove(Client *client, TKLType *tkltype, TKL *tkl, const char *uhmask, const char *commentmask, int skipperm, int silent);
 CMD_FUNC(rmtkl);
 
 TKLType tkl_types[] = {
@@ -53,7 +53,7 @@ TKLType tkl_types[] = {
 	{ 0, 0, "Unknown *-Line", 0 },
 };
 
-static char *rmtkl_help[] = {
+static const char *rmtkl_help[] = {
 	"*** \002Help on /rmtkl\002 *** ",
 	"Removes all TKLs matching the given conditions from the local server, or the entire",
 	"network if it's a global-type ban.",
@@ -104,7 +104,7 @@ MOD_UNLOAD()
 	return MOD_SUCCESS;
 }
 
-static void dump_str(Client *client, char **buf)
+static void dump_str(Client *client, const char **buf)
 {
 	if (!MyUser(client))
 		return;
@@ -114,7 +114,7 @@ static void dump_str(Client *client, char **buf)
 		sendto_one(client, NULL, ":%s %03d %s :%s", me.name, RPL_TEXT, client->name, *buf);
 
 	// Let user take 8 seconds to read it
-	client->local->since += 8;
+	add_fake_lag(client, 8000);
 }
 
 static TKLType *find_TKLType_by_flag(char flag)
@@ -126,14 +126,14 @@ static TKLType *find_TKLType_by_flag(char flag)
 	return t;
 }
 
-void rmtkl_check_options(char *param, int *skipperm, int *silent) {
+void rmtkl_check_options(const char *param, int *skipperm, int *silent) {
 	if (!strcasecmp("-skipperm", param))
 		*skipperm = 1;
 	if (!strcasecmp("-silent", param))
 		*silent = 1;
 }
 
-int rmtkl_tryremove(Client *client, TKLType *tkltype, TKL *tkl, char *uhmask, char *commentmask, int skipperm, int silent)
+int rmtkl_tryremove(Client *client, TKLType *tkltype, TKL *tkl, const char *uhmask, const char *commentmask, int skipperm, int silent)
 {
 	if (tkl->type != tkltype->type)
 		return 0;
@@ -171,7 +171,7 @@ int rmtkl_tryremove(Client *client, TKLType *tkltype, TKL *tkl, char *uhmask, ch
 	if (!silent)
 		sendnotice_tkl_del(client->name, tkl);
 
-	RunHook2(HOOKTYPE_TKL_DEL, client, tkl);
+	RunHook(HOOKTYPE_TKL_DEL, client, tkl);
 
 	if (tkl->type & TKL_SHUN)
 		tkl_check_local_remove_shun(tkl);
@@ -183,7 +183,7 @@ CMD_FUNC(rmtkl)
 {
 	TKL *tkl, *next;
 	TKLType *tkltype;
-	char *types, *uhmask, *commentmask, *p;
+	const char *types, *uhmask, *commentmask, *p;
 	char tklchar;
 	int tklindex, tklindex2, skipperm, silent;
 	unsigned int count;
@@ -289,5 +289,7 @@ CMD_FUNC(rmtkl)
 		}
 	}
 
-	sendto_snomask(SNO_TKL, "*** %s removed %d TKLine(s) using /rmtkl", client->name, count);
+	unreal_log(ULOG_INFO, "tkl", "RMTKL_COMMAND", client,
+	           "[rmtkl] $client removed $tkl_removed_count TKLine(s) using /RMTKL",
+	           log_data_integer("tkl_removed_count", count));
 }

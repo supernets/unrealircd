@@ -32,7 +32,7 @@ ModuleHeader MOD_HEADER
 	"5.0",
 	"command /protoctl", 
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
     };
 
 MOD_INIT()
@@ -94,6 +94,10 @@ CMD_FUNC(cmd_protoctl)
 		{
 			SetCapability(client, "userhost-in-names");
 		}
+		else if (IsUser(client))
+		{
+			return;
+		}
 		else if (!strcmp(name, "VL"))
 		{
 			SetVL(client);
@@ -114,6 +118,10 @@ CMD_FUNC(cmd_protoctl)
 		{
 			SetMTAGS(client);
 		}
+		else if (!strcmp(name, "NEXTBANS"))
+		{
+			SetNEXTBANS(client);
+		}
 		else if (!strcmp(name, "NICKCHARS") && value)
 		{
 			if (!IsServer(client) && !IsEAuth(client) && !IsHandshake(client))
@@ -124,22 +132,23 @@ CMD_FUNC(cmd_protoctl)
 			 */
 			if (strstr(charsys_get_current_languages(), "utf8") && !strstr(value, "utf8"))
 			{
-				char buf[512];
-				snprintf(buf, sizeof(buf), "Server %s has utf8 in set::allowed-nickchars but %s does not. Link rejected.",
-					me.name, *client->name ? client->name : "other side");
-				sendto_realops("\002ERROR\001 %s", buf);
-				exit_client(client, NULL, buf);
+				unreal_log(ULOG_ERROR, "link", "LINK_DENIED_CHARSYS_INCOMPATIBLE", client,
+					   "Server link $client rejected. Server $me_name has utf8 in set::allowed-nickchars but $client does not.",
+					   log_data_string("me_name", me.name));
+				exit_client(client, NULL, "Incompatible set::allowed-nickchars setting");
 				return;
 			}
 			/* We compare the character sets to see if we should warn opers about any mismatch... */
 			if (strcmp(value, charsys_get_current_languages()))
 			{
-				sendto_realops("\002WARNING!!!!\002 Link %s does not have the same set::allowed-nickchars settings (or is "
-							"a different UnrealIRCd version), this MAY cause display issues. Our charset: '%s', theirs: '%s'",
-					get_client_name(client, FALSE), charsys_get_current_languages(), value);
+				unreal_log(ULOG_WARNING, "link", "LINK_WARNING_CHARSYS", client,
+					   "Server link $client does not have the same set::allowed-nickchars settings, "
+					   "this may possibly cause display issues. Our charset: '$our_charsys', theirs: '$their_charsys'",
+					   log_data_string("our_charsys", charsys_get_current_languages()),
+					   log_data_string("their_charsys", value));
 			}
-			if (client->serv)
-				safe_strdup(client->serv->features.nickchars, value);
+			if (client->server)
+				safe_strdup(client->server->features.nickchars, value);
 
 			/* If this is a runtime change (so post-handshake): */
 			if (IsServer(client))
@@ -155,15 +164,13 @@ CMD_FUNC(cmd_protoctl)
 			their_value = allowed_channelchars_strtoval(value);
 			if (their_value != iConf.allowed_channelchars)
 			{
-				char linkerr[256];
-				ircsnprintf(linkerr, sizeof(linkerr),
-					"Link rejected. Server %s has set::allowed-channelchars '%s' "
-					"while %s has a value of '%s'. "
-					"Please choose the same value on all servers.",
-					client->name, value,
-					me.name, allowed_channelchars_valtostr(iConf.allowed_channelchars));
-				sendto_realops("ERROR: %s", linkerr);
-				exit_client(client, NULL, linkerr);
+				unreal_log(ULOG_ERROR, "link", "LINK_DENIED_ALLOWED_CHANNELCHARS_INCOMPATIBLE", client,
+					   "Server link $client rejected. Server has set::allowed-channelchars setting "
+					   "of $their_allowed_channelchars, while we have $our_allowed_channelchars.\n"
+					   "Please set set::allowed-channelchars to the same value on all servers.",
+					   log_data_string("their_allowed_channelchars", value),
+					   log_data_string("our_allowed_channelchars", allowed_channelchars_valtostr(iConf.allowed_channelchars)));
+				exit_client(client, NULL, "Incompatible set::allowed-channelchars setting");
 				return;
 			}
 		}
@@ -198,9 +205,10 @@ CMD_FUNC(cmd_protoctl)
 
 			if ((aclient = hash_find_id(sid, NULL)) != NULL)
 			{
-				sendto_one(client, NULL, "ERROR :SID %s already exists from %s", aclient->id, aclient->name);
-				sendto_snomask(SNO_SNOTICE, "Link %s rejected - SID %s already exists from %s",
-						get_client_name(client, FALSE), aclient->id, aclient->name);
+				unreal_log(ULOG_ERROR, "link", "LINK_DENIED_SID_COLLISION", client,
+					   "Server link $client rejected. Server with SID $sid already exist via uplink $exiting_client.server.uplink.",
+					   log_data_string("sid", sid),
+					   log_data_client("existing_client", aclient));
 				exit_client(client, NULL, "SID collision");
 				return;
 			}
@@ -236,13 +244,8 @@ CMD_FUNC(cmd_protoctl)
 			}
 			
 			servername = strtoken(&p, buf, ",");
-			if (!servername || (strlen(servername) > HOSTLEN) || !strchr(servername, '.'))
+			if (!servername || !valid_server_name(servername))
 			{
-				sendto_one(client, NULL, "ERROR :Bogus server name in EAUTH (%s)", servername ? servername : "");
-				sendto_snomask
-				    (SNO_JUNK,
-				    "WARNING: Bogus server name (%s) from %s in EAUTH (maybe just a fishy client)",
-				    servername ? servername : "", get_client_name(client, TRUE));
 				exit_client(client, NULL, "Bogus server name");
 				return;
 			}
@@ -258,7 +261,12 @@ CMD_FUNC(cmd_protoctl)
 				}
 			}
 			
-			if (!verify_link(client, servername, &aconf))
+			/* Set client->name but don't add to hash list, this gives better
+			 * log messages and should be safe. See CMTSRV941 in server.c.
+			 */
+			strlcpy(client->name, servername, sizeof(client->name));
+
+			if (!verify_link(client, &aconf))
 				return;
 
 			/* note: software, protocol and flags may be NULL */
@@ -266,16 +274,11 @@ CMD_FUNC(cmd_protoctl)
 				return;
 
 			SetEAuth(client);
-			make_server(client); /* allocate and set client->serv */
-			/* Set client->name but don't add to hash list. The real work on
-			 * that is done in cmd_server. We just set it here for display
-			 * purposes of error messages (such as reject due to clock).
-			 */
-			strlcpy(client->name, servername, sizeof(client->name));
+			make_server(client); /* allocate and set client->server */
 			if (protocol)
-				client->serv->features.protocol = atoi(protocol);
+				client->server->features.protocol = atoi(protocol);
 			if (software)
-				safe_strdup(client->serv->features.software, software);
+				safe_strdup(client->server->features.software, software);
 			if (!IsHandshake(client) && aconf) /* Send PASS early... */
 				sendto_one(client, NULL, "PASS :%s", (aconf->auth->type == AUTHTYPE_PLAINTEXT) ? aconf->auth->data : "*");
 		}
@@ -287,12 +290,12 @@ CMD_FUNC(cmd_protoctl)
 			if (!IsEAuth(client))
 				continue;
 				
-			if (client->serv->features.protocol < 2351)
+			if (client->server->features.protocol < 2351)
 				continue; /* old SERVERS= version */
 			
 			/* Other side lets us know which servers are behind it.
 			 * SERVERS=<sid-of-server-1>[,<sid-of-server-2[,..etc..]]
-			 * Eg: SERVER=001,002,0AB,004,005
+			 * Eg: SERVERS=001,002,0AB,004,005
 			 */
 
 			add_pending_net(client, value);
@@ -300,10 +303,9 @@ CMD_FUNC(cmd_protoctl)
 			aclient = find_non_pending_net_duplicates(client);
 			if (aclient)
 			{
-				sendto_one(client, NULL, "ERROR :Server with SID %s (%s) already exists",
-					aclient->id, aclient->name);
-				sendto_realops("Link %s cancelled, server with SID %s (%s) already exists",
-					get_client_name(aclient, TRUE), aclient->id, aclient->name);
+				unreal_log(ULOG_ERROR, "link", "LINK_DENIED_DUPLICATE_SID", client,
+					   "Denied server $client: Server with SID $existing_client.id ($existing_client) is already linked.",
+					   log_data_client("existing_client", aclient));
 				exit_client(client, NULL, "Server Exists (or non-unique me::sid)");
 				return;
 			}
@@ -311,12 +313,13 @@ CMD_FUNC(cmd_protoctl)
 			aclient = find_pending_net_duplicates(client, &srv, &sid);
 			if (aclient)
 			{
-				sendto_one(client, NULL, "ERROR :Server with SID %s is being introduced by another server as well. "
-				                 "Just wait a moment for it to synchronize...", sid);
-				sendto_realops("Link %s cancelled, server would introduce server with SID %s, which "
-				               "server %s is also about to introduce. Just wait a moment for it to synchronize...",
-				               get_client_name(aclient, TRUE), sid, get_client_name(srv, TRUE));
-				exit_client(client, NULL, "Server Exists (just wait a moment)");
+				unreal_log(ULOG_ERROR, "link", "LINK_DENIED_DUPLICATE_SID_LINKED", client,
+					   "Denied server $client: Server would (later) introduce SID $sid, "
+					   "but we already have SID $sid linked ($existing_client)\n"
+					   "Possible race condition, just wait a moment for the network to synchronize...",
+					   log_data_string("sid", sid),
+					   log_data_client("existing_client", aclient));
+				exit_client(client, NULL, "Server Exists (just wait a moment...)");
 				return;
 			}
 
@@ -327,51 +330,34 @@ CMD_FUNC(cmd_protoctl)
 		else if (!strcmp(name, "TS") && value && (IsServer(client) || IsEAuth(client)))
 		{
 			long t = atol(value);
-			char msg[512], linkerr[512];
-			
+
 			if (t < 10000)
 				continue; /* ignore */
-			
-			*msg = *linkerr = '\0';
-			
+
 			if ((TStime() - t) > MAX_SERVER_TIME_OFFSET)
 			{
-				snprintf(linkerr, sizeof(linkerr),
-				         "Your clock is %lld seconds behind my clock. "
-				         "Please verify both your clock and mine, "
-				         "fix it and try linking again.",
-				         (long long)(TStime() - t));
-				snprintf(msg, sizeof(msg),
-				         "Rejecting link %s: our clock is %lld seconds ahead. "
-				         "Please verify the clock on both %s (them) and %s (us). "
-				         "Correct time is very important for IRC servers, "
-				         "see https://www.unrealircd.org/docs/FAQ#fix-your-clock",
-				         get_client_name(client, TRUE),
-				         (long long)(TStime() - t),
-				         client->name, me.name);
+				unreal_log(ULOG_ERROR, "link", "LINK_DENIED_CLOCK_INCORRECT", client,
+				           "Denied server $client: clock on server $client is $time_delta "
+				           "seconds behind the clock of $me_name.\n"
+				           "Correct time is very important for IRC servers, "
+				           "see https://www.unrealircd.org/docs/FAQ#fix-your-clock",
+				           log_data_integer("time_delta", TStime() - t),
+				           log_data_string("me_name", me.name));
+				exit_client_fmt(client, NULL, "Incorrect clock. Our clocks are %lld seconds apart.",
+				                (long long)(TStime() - t));
+				return;
 			} else
 			if ((t - TStime()) > MAX_SERVER_TIME_OFFSET)
 			{
-				snprintf(linkerr, sizeof(linkerr),
-				         "Your clock is %lld seconds ahead of my clock. "
-				         "Please verify both your clock and mine, fix it, "
-				         "and try linking again.",
-				         (long long)(t - TStime()));
-				snprintf(msg, sizeof(msg),
-				         "Rejecting link %s: our clock is %lld seconds behind. "
-				         "Please verify the clock on both %s (them) and %s (us). "
-				         "Correct time is very important for IRC servers, "
-				         "see https://www.unrealircd.org/docs/FAQ#fix-your-clock",
-					get_client_name(client, TRUE),
-					(long long)(t - TStime()),
-					client->name, me.name);
-			}
-			
-			if (*msg)
-			{
-				sendto_realops("%s", msg);
-				ircd_log(LOG_ERROR, "%s", msg);
-				exit_client(client, NULL, linkerr);
+				unreal_log(ULOG_ERROR, "link", "LINK_DENIED_CLOCK_INCORRECT", client,
+				           "Denied server $client: clock on server $client is $time_delta "
+				           "seconds ahead the clock of $me_name.\n"
+				           "Correct time is very important for IRC servers, "
+				           "see https://www.unrealircd.org/docs/FAQ#fix-your-clock",
+				           log_data_integer("time_delta", t - TStime()),
+				           log_data_string("me_name", me.name));
+				exit_client_fmt(client, NULL, "Incorrect clock. Our clocks are %lld seconds apart.",
+				                (long long)(t - TStime()));
 				return;
 			}
 		}
@@ -379,23 +365,23 @@ CMD_FUNC(cmd_protoctl)
 		{
 			client->local->proto |= PROTO_MLOCK;
 		}
-		else if (!strcmp(name, "CHANMODES") && value && client->serv)
+		else if (!strcmp(name, "CHANMODES") && value && client->server)
 		{
 			parse_chanmodes_protoctl(client, value);
 			/* If this is a runtime change (so post-handshake): */
 			if (IsServer(client))
 				broadcast_sinfo(client, NULL, client);
 		}
-		else if (!strcmp(name, "USERMODES") && value && client->serv)
+		else if (!strcmp(name, "USERMODES") && value && client->server)
 		{
-			safe_strdup(client->serv->features.usermodes, value);
+			safe_strdup(client->server->features.usermodes, value);
 			/* If this is a runtime change (so post-handshake): */
 			if (IsServer(client))
 				broadcast_sinfo(client, NULL, client);
 		}
-		else if (!strcmp(name, "BOOTED") && value && client->serv)
+		else if (!strcmp(name, "BOOTED") && value && client->server)
 		{
-			client->serv->boottime = atol(value);
+			client->server->boottime = atol(value);
 		}
 		else if (!strcmp(name, "EXTSWHOIS"))
 		{
@@ -409,7 +395,7 @@ CMD_FUNC(cmd_protoctl)
 		 */
 	}
 
-	if (first_protoctl && IsHandshake(client) && client->serv && !IsServerSent(client)) /* first & outgoing connection to server */
+	if (first_protoctl && IsHandshake(client) && client->server && !IsServerSent(client)) /* first & outgoing connection to server */
 	{
 		/* SERVER message moved from completed_connection() to here due to EAUTH/SERVERS PROTOCTL stuff,
 		 * which needed to be delayed until after both sides have received SERVERS=xx (..or not.. in case

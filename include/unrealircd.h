@@ -10,7 +10,6 @@
 #include "numeric.h"
 #include "msg.h"
 #include "mempool.h"
-#include "proto.h"
 #include "channel.h"
 #include <time.h>
 #include <sys/stat.h>
@@ -31,7 +30,6 @@
 #include <fcntl.h>
 #include <signal.h>
 #include "h.h"
-#include "url.h"
 #include "version.h"
 #ifdef USE_LIBCURL
  #include <curl/curl.h>

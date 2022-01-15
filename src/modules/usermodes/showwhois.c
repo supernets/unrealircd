@@ -28,14 +28,14 @@ ModuleHeader MOD_HEADER
 	"4.2",
 	"User Mode +W",
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
     };
 
 /* Global variables */
 long UMODE_SHOWWHOIS = 0L;
 
 /* Forward declarations */
-int showwhois_whois(Client *requester, Client *target);
+int showwhois_whois(Client *requester, Client *target, NameValuePrioList **list);
 
 MOD_TEST()
 {
@@ -62,7 +62,7 @@ MOD_UNLOAD()
 	return MOD_SUCCESS;
 }
 
-int showwhois_whois(Client *requester, Client *target)
+int showwhois_whois(Client *requester, Client *target, NameValuePrioList **list)
 {
 	if (IsWhois(target) && (requester != target))
 	{

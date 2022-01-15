@@ -25,17 +25,17 @@
 ModuleHeader MOD_HEADER
   = {
 	"sasl",
-	"5.0",
+	"5.2.1",
 	"SASL", 
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
     };
 
 /* Forward declarations */
 void saslmechlist_free(ModData *m);
-char *saslmechlist_serialize(ModData *m);
-void saslmechlist_unserialize(char *str, ModData *m);
-char *sasl_capability_parameter(Client *client);
+const char *saslmechlist_serialize(ModData *m);
+void saslmechlist_unserialize(const char *str, ModData *m);
+const char *sasl_capability_parameter(Client *client);
 int sasl_server_synced(Client *client);
 int sasl_account_login(Client *client, MessageTag *mtags);
 EVENT(sasl_timeout);
@@ -69,14 +69,15 @@ int sasl_account_login(Client *client, MessageTag *mtags)
 {
 	if (!MyConnect(client))
 		return 0;
+
 	/* Notify user */
-	if (client->user->svid[0] != '0')
+	if (IsLoggedIn(client))
 	{
 		sendnumeric(client, RPL_LOGGEDIN,
 			BadPtr(client->name) ? "*" : client->name,
 			BadPtr(client->user->username) ? "*" : client->user->username,
 			BadPtr(client->user->realhost) ? "*" : client->user->realhost,
-			client->user->svid, client->user->svid);
+			client->user->account, client->user->account);
 	}
 	else
 	{
@@ -93,13 +94,13 @@ int sasl_account_login(Client *client, MessageTag *mtags)
  *
  * parv[1]: propagation mask
  * parv[2]: target
- * parv[3]: ESVID
+ * parv[3]: account name (SVID)
  */
 CMD_FUNC(cmd_svslogin)
 {
 	Client *target;
 
-	if (!SASL_SERVER || MyUser(client) || (parc < 3) || !parv[3])
+	if (MyUser(client) || (parc < 3) || !parv[3])
 		return;
 
 	/* We actually ignore parv[1] since this is a broadcast message.
@@ -116,7 +117,7 @@ CMD_FUNC(cmd_svslogin)
 		if (target->user == NULL)
 			make_user(target);
 
-		strlcpy(target->user->svid, parv[3], sizeof(target->user->svid));
+		strlcpy(target->user->account, parv[3], sizeof(target->user->account));
 		user_account_login(recv_mtags, target);
 		if (MyConnect(target) && IsDead(target))
 			return; /* was killed due to *LINE on ~a probably */
@@ -169,7 +170,7 @@ CMD_FUNC(cmd_sasl)
 
 		if (*parv[3] == 'C')
 		{
-			RunHookReturn2(HOOKTYPE_SASL_CONTINUATION, target, parv[4], !=0);
+			RunHookReturn(HOOKTYPE_SASL_CONTINUATION, !=0, target, parv[4]);
 			sendto_one(target, NULL, "AUTHENTICATE %s", parv[4]);
 		}
 		else if (*parv[3] == 'D')
@@ -178,15 +179,15 @@ CMD_FUNC(cmd_sasl)
 			if (*parv[4] == 'F')
 			{
 				target->local->sasl_sent_time = 0;
-				target->local->since += 7; /* bump fakelag due to failed authentication attempt */
-				RunHookReturn2(HOOKTYPE_SASL_RESULT, target, 0, !=0);
+				add_fake_lag(target, 7000); /* bump fakelag due to failed authentication attempt */
+				RunHookReturn(HOOKTYPE_SASL_RESULT, !=0, target, 0);
 				sendnumeric(target, ERR_SASLFAIL);
 			}
 			else if (*parv[4] == 'S')
 			{
 				target->local->sasl_sent_time = 0;
 				target->local->sasl_complete++;
-				RunHookReturn2(HOOKTYPE_SASL_RESULT, target, 1, !=0);
+				RunHookReturn(HOOKTYPE_SASL_RESULT, !=0, target, 1);
 				sendnumeric(target, RPL_SASLSUCCESS);
 			}
 		}
@@ -232,7 +233,7 @@ CMD_FUNC(cmd_authenticate)
 	if (agent_p == NULL)
 	{
 		char *addr = BadPtr(client->ip) ? "0" : client->ip;
-		char *certfp = moddata_client_get(client, "certfp");
+		const char *certfp = moddata_client_get(client, "certfp");
 
 		sendto_server(NULL, 0, 0, NULL, ":%s SASL %s %s H %s %s",
 		    me.name, SASL_SERVER, client->id, addr, addr);
@@ -308,7 +309,7 @@ int sasl_connect(Client *client)
 	return abort_sasl(client);
 }
 
-int sasl_quit(Client *client, MessageTag *mtags, char *comment)
+int sasl_quit(Client *client, MessageTag *mtags, const char *comment)
 {
 	return abort_sasl(client);
 }
@@ -335,14 +336,9 @@ void auto_discover_sasl_server(int justlinked)
 			/* SASL server found */
 			if (justlinked)
 			{
-				/* Let's send this message only on link and not also on /rehash */
-				sendto_realops("Services server '%s' provides SASL authentication, good! "
-				               "I'm setting set::sasl-server to '%s' internally.",
-				               SERVICES_NAME, SERVICES_NAME);
-				/* We should really get some LOG_INFO or something... I keep abusing LOG_ERROR :) */
-				ircd_log(LOG_ERROR, "Services server '%s' provides SASL authentication, good! "
-				                    "I'm setting set::sasl-server to '%s' internally.",
-				                    SERVICES_NAME, SERVICES_NAME);
+				unreal_log(ULOG_INFO, "config", "SASL_SERVER_AUTODETECT", client,
+				           "Services server $client provides SASL authentication, good! "
+				           "I'm setting set::sasl-server to \"$client\" internally.");
 			}
 			safe_strdup(SASL_SERVER, SERVICES_NAME);
 			if (justlinked)
@@ -394,7 +390,8 @@ MOD_INIT()
 	mreq.free = saslmechlist_free;
 	mreq.serialize = saslmechlist_serialize;
 	mreq.unserialize = saslmechlist_unserialize;
-	mreq.sync = 1;
+	mreq.sync = MODDATA_SYNC_EARLY;
+	mreq.self_write = 1;
 	mreq.type = MODDATATYPE_CLIENT;
 	ModDataAdd(modinfo->handle, mreq);
 
@@ -419,19 +416,19 @@ void saslmechlist_free(ModData *m)
 	safe_free(m->str);
 }
 
-char *saslmechlist_serialize(ModData *m)
+const char *saslmechlist_serialize(ModData *m)
 {
 	if (!m->str)
 		return NULL;
 	return m->str;
 }
 
-void saslmechlist_unserialize(char *str, ModData *m)
+void saslmechlist_unserialize(const char *str, ModData *m)
 {
 	safe_strdup(m->str, str);
 }
 
-char *sasl_capability_parameter(Client *client)
+const char *sasl_capability_parameter(Client *client)
 {
 	Client *server;
 

@@ -42,11 +42,12 @@ void strrangetok(char *in, char *out, char tok, short first, short last) {
 /* cmd_alias is a special type of command, it has an extra argument 'cmd'. */
 static int recursive_alias = 0;
 
-void cmd_alias(Client *client, MessageTag *mtags, int parc, char *parv[], char *cmd)
+void cmd_alias(Client *client, MessageTag *mtags, int parc, const char *parv[], const char *cmd)
 {
 	ConfigItem_alias *alias;
 	Client *acptr;
 	int ret;
+	char request[BUFSIZE];
 
 	if (!(alias = find_alias(cmd))) 
 	{
@@ -64,7 +65,7 @@ void cmd_alias(Client *client, MessageTag *mtags, int parc, char *parv[], char *
 
 	if (alias->type == ALIAS_SERVICES) 
 	{
-		if (SERVICES_NAME && (acptr = find_person(alias->nick, NULL)))
+		if (SERVICES_NAME && (acptr = find_user(alias->nick, NULL)))
 		{
 			if (alias->spamfilter && match_spamfilter(client, parv[1], SPAMF_USERMSG, cmd, alias->nick, 0, NULL))
 				return;
@@ -76,7 +77,7 @@ void cmd_alias(Client *client, MessageTag *mtags, int parc, char *parv[], char *
 	}
 	else if (alias->type == ALIAS_STATS) 
 	{
-		if (STATS_SERVER && (acptr = find_person(alias->nick, NULL)))
+		if (STATS_SERVER && (acptr = find_user(alias->nick, NULL)))
 		{
 			if (alias->spamfilter && match_spamfilter(client, parv[1], SPAMF_USERMSG, cmd, alias->nick, 0, NULL))
 				return;
@@ -88,7 +89,7 @@ void cmd_alias(Client *client, MessageTag *mtags, int parc, char *parv[], char *
 	}
 	else if (alias->type == ALIAS_NORMAL) 
 	{
-		if ((acptr = find_person(alias->nick, NULL))) 
+		if ((acptr = find_user(alias->nick, NULL))) 
 		{
 			if (alias->spamfilter && match_spamfilter(client, parv[1], SPAMF_USERMSG, cmd, alias->nick, 0, NULL))
 				return;
@@ -106,19 +107,19 @@ void cmd_alias(Client *client, MessageTag *mtags, int parc, char *parv[], char *
 	else if (alias->type == ALIAS_CHANNEL)
 	{
 		Channel *channel;
-		if ((channel = find_channel(alias->nick, NULL)))
+		if ((channel = find_channel(alias->nick)))
 		{
-			char *msg = parv[1];
-			char *errmsg = NULL;
+			const char *msg = parv[1];
+			const char *errmsg = NULL;
 			if (can_send_to_channel(client, channel, &msg, &errmsg, 0))
 			{
-				if (alias->spamfilter && match_spamfilter(client, parv[1], SPAMF_CHANMSG, cmd, channel->chname, 0, NULL))
+				if (alias->spamfilter && match_spamfilter(client, parv[1], SPAMF_CHANMSG, cmd, channel->name, 0, NULL))
 					return;
 				new_message(client, NULL, &mtags);
 				sendto_channel(channel, client, client->direction,
-				               PREFIX_ALL, 0, SEND_ALL|SKIP_DEAF, mtags,
+				               NULL, 0, SEND_ALL|SKIP_DEAF, mtags,
 				               ":%s PRIVMSG %s :%s",
-				               client->name, channel->chname, parv[1]);
+				               client->name, channel->name, parv[1]);
 				free_message_tags(mtags);
 				return;
 			}
@@ -132,7 +133,10 @@ void cmd_alias(Client *client, MessageTag *mtags, int parc, char *parv[], char *
 		char *ptr = "";
 
 		if (!(parc < 2 || *parv[1] == '\0'))
-			ptr = parv[1]; 
+		{
+			strlcpy(request, parv[1], sizeof(request));
+			ptr = request;
+		}
 
 		for (format = alias->format; format; format = format->next)
 		{
@@ -201,7 +205,7 @@ void cmd_alias(Client *client, MessageTag *mtags, int parc, char *parv[], char *
 				
 				if (format->type == ALIAS_SERVICES) 
 				{
-					if (SERVICES_NAME && (acptr = find_person(format->nick, NULL)))
+					if (SERVICES_NAME && (acptr = find_user(format->nick, NULL)))
 					{
 						if (alias->spamfilter && match_spamfilter(client, output, SPAMF_USERMSG, cmd, format->nick, 0, NULL))
 							return;
@@ -212,7 +216,7 @@ void cmd_alias(Client *client, MessageTag *mtags, int parc, char *parv[], char *
 				}
 				else if (format->type == ALIAS_STATS) 
 				{
-					if (STATS_SERVER && (acptr = find_person(format->nick, NULL)))
+					if (STATS_SERVER && (acptr = find_user(format->nick, NULL)))
 					{
 						if (alias->spamfilter && match_spamfilter(client, output, SPAMF_USERMSG, cmd, format->nick, 0, NULL))
 							return;
@@ -223,7 +227,7 @@ void cmd_alias(Client *client, MessageTag *mtags, int parc, char *parv[], char *
 				}
 				else if (format->type == ALIAS_NORMAL) 
 				{
-					if ((acptr = find_person(format->nick, NULL))) 
+					if ((acptr = find_user(format->nick, NULL))) 
 					{
 						if (alias->spamfilter && match_spamfilter(client, output, SPAMF_USERMSG, cmd, format->nick, 0, NULL))
 							return;
@@ -241,19 +245,19 @@ void cmd_alias(Client *client, MessageTag *mtags, int parc, char *parv[], char *
 				else if (format->type == ALIAS_CHANNEL)
 				{
 					Channel *channel;
-					if ((channel = find_channel(format->nick, NULL)))
+					if ((channel = find_channel(format->nick)))
 					{
-						char *msg = output;
-						char *errmsg = NULL;
+						const char *msg = output;
+						const char *errmsg = NULL;
 						if (!can_send_to_channel(client, channel, &msg, &errmsg, 0))
 						{
-							if (alias->spamfilter && match_spamfilter(client, output, SPAMF_CHANMSG, cmd, channel->chname, 0, NULL))
+							if (alias->spamfilter && match_spamfilter(client, output, SPAMF_CHANMSG, cmd, channel->name, 0, NULL))
 								return;
 							new_message(client, NULL, &mtags);
 							sendto_channel(channel, client, client->direction,
-							               PREFIX_ALL, 0, SEND_ALL|SKIP_DEAF, mtags,
+							               NULL, 0, SEND_ALL|SKIP_DEAF, mtags,
 							               ":%s PRIVMSG %s :%s",
-							               client->name, channel->chname, parv[1]);
+							               client->name, channel->name, parv[1]);
 							free_message_tags(mtags);
 							return;
 						}

@@ -32,26 +32,12 @@ struct FloodSettings {
 	long period[MAXFLOODOPTIONS];
 };
 
-typedef struct NetworkConfiguration NetworkConfiguration;
-struct NetworkConfiguration {
-	unsigned x_inah:1;
-	char *x_ircnetwork;
-	char *x_ircnet005;
-	char *x_defserv;
-	char *x_services_name;
-	char *x_hidden_host;
-	char *x_prefix_quit;
-	char *x_helpchan;
-	char *x_stats_server;
-	char *x_sasl_server;
-};
-
 enum UHAllowed { UHALLOW_ALWAYS, UHALLOW_NOCHANS, UHALLOW_REJOIN, UHALLOW_NEVER };
 
 struct ChMode {
-        long mode;
+	long mode;
 	long extmodes;
-	char *extparams[EXTCMODETABLESZ];
+	char *extparams[256];
 };
 
 typedef struct OperStat {
@@ -70,10 +56,9 @@ typedef enum HideIdleTimePolicy { HIDE_IDLE_TIME_NEVER=1, HIDE_IDLE_TIME_ALWAYS=
 /** The set { } block configuration */
 typedef struct Configuration Configuration;
 struct Configuration {
-	unsigned som:1;
+	unsigned show_opermotd:1;
 	unsigned hide_ulines:1;
 	unsigned flat_map:1;
-	unsigned allow_chatops:1;
 	unsigned ident_check:1;
 	unsigned fail_oper_warn:1;
 	unsigned show_connect_info:1;
@@ -86,8 +71,6 @@ struct Configuration {
 	unsigned allow_part_if_shunned:1;
 	unsigned disable_cap:1;
 	unsigned check_target_nick_bans:1;
-	unsigned use_egd : 1;
-	char *dns_bindip;
 	char *link_bindip;
 	long throttle_period;
 	char throttle_count;
@@ -100,11 +83,10 @@ struct Configuration {
 	char *oper_auto_join_chans;
 	char *allow_user_stats;
 	OperStat *allow_user_stats_ext;
-	int  ping_warning;
-	int  maxchannelsperuser;
-	int  maxdccallow;
-	int  anti_spam_quit_message_time;
-	char *egd_path;
+	int ping_warning;
+	int maxchannelsperuser;
+	int maxdccallow;
+	int anti_spam_quit_message_time;
 	char *static_quit;
 	char *static_part;
 	TLSOptions *tls_options;
@@ -122,12 +104,14 @@ struct Configuration {
 	char *restrict_usermodes;
 	char *restrict_channelmodes;
 	char *restrict_extendedbans;
+	int named_extended_bans;
 	char *channel_command_prefix;
 	long handshake_data_flood_amount;
 	long handshake_data_flood_ban_time;
 	int handshake_data_flood_ban_action;
 	struct ChMode modes_on_join;
-	int level_on_join;
+	int modes_on_join_set;
+	char *level_on_join;
 	FloodSettings *floodsettings;
 	int ident_connect_timeout;
 	int ident_read_timeout;
@@ -148,7 +132,6 @@ struct Configuration {
 	int maxbanlength;
 	int watch_away_notification;
 	int uhnames;
-	NetworkConfiguration network;
 	unsigned short default_ipv6_clone_mask;
 	int ping_cookie;
 	int min_nick_length;
@@ -176,6 +159,17 @@ struct Configuration {
 	BroadcastChannelMessagesOption broadcast_channel_messages;
 	AllowedChannelChars allowed_channelchars;
 	HideIdleTimePolicy hide_idle_time;
+	unsigned inah:1;
+	char *network_name;
+	char *network_name_005;
+	char *default_server;
+	char *services_name;
+	char *cloak_prefix;
+	char *prefix_quit;
+	char *helpchan;
+	char *stats_server;
+	char *sasl_server;
+	int server_notice_colors;
 };
 
 extern MODVAR Configuration iConf;
@@ -187,7 +181,7 @@ extern MODVAR int ipv6_disabled;
 #define CONN_MODES			iConf.conn_modes
 #define OPER_MODES			iConf.oper_modes
 #define OPER_SNOMASK			iConf.oper_snomask
-#define SHOWOPERMOTD			iConf.som
+#define SHOWOPERMOTD			iConf.show_opermotd
 #define HIDE_ULINES			iConf.hide_ulines
 #define FLAT_MAP			iConf.flat_map
 #define ALLOW_CHATOPS			iConf.allow_chatops
@@ -197,7 +191,6 @@ extern MODVAR int ipv6_disabled;
 #define DONT_RESOLVE			iConf.dont_resolve
 #define AUTO_JOIN_CHANS			iConf.auto_join_chans
 #define OPER_AUTO_JOIN_CHANS		iConf.oper_auto_join_chans
-#define DNS_BINDIP			iConf.dns_bindip
 #define LINK_BINDIP			iConf.link_bindip
 #define IDENT_CHECK			iConf.ident_check
 #define FAILOPER_WARN			iConf.fail_oper_warn
@@ -205,23 +198,17 @@ extern MODVAR int ipv6_disabled;
 #define NOCONNECTTLSLINFO		iConf.no_connect_tls_info
 #define ALLOW_USER_STATS			iConf.allow_user_stats
 #define ANTI_SPAM_QUIT_MSG_TIME		iConf.anti_spam_quit_message_time
-#ifdef HAVE_RAND_EGD
-#define USE_EGD				iConf.use_egd
-#else
-#define USE_EGD				0
-#endif
-#define EGD_PATH			iConf.egd_path
 
-#define ircnetwork			iConf.network.x_ircnetwork
-#define ircnet005			iConf.network.x_ircnet005
-#define defserv				iConf.network.x_defserv
-#define SERVICES_NAME		iConf.network.x_services_name
-#define hidden_host			iConf.network.x_hidden_host
-#define helpchan			iConf.network.x_helpchan
-#define STATS_SERVER			iConf.network.x_stats_server
-#define SASL_SERVER			iConf.network.x_sasl_server
-#define iNAH				iConf.network.x_inah
-#define PREFIX_QUIT			iConf.network.x_prefix_quit
+#define NETWORK_NAME			iConf.network_name
+#define NETWORK_NAME_005		iConf.network_name_005
+#define DEFAULT_SERVER			iConf.default_server
+#define SERVICES_NAME			iConf.services_name
+#define CLOAK_PREFIX			iConf.cloak_prefix
+#define HELP_CHANNEL			iConf.helpchan
+#define STATS_SERVER			iConf.stats_server
+#define SASL_SERVER			iConf.sasl_server
+#define iNAH				iConf.inah
+#define PREFIX_QUIT			iConf.prefix_quit
 
 #define STATIC_QUIT			iConf.static_quit
 #define STATIC_PART			iConf.static_part
@@ -232,7 +219,7 @@ extern MODVAR int ipv6_disabled;
 #define THROTTLING_PERIOD		iConf.throttle_period
 #define THROTTLING_COUNT		iConf.throttle_count
 #define USE_BAN_VERSION			iConf.use_ban_version
-#define MODES_ON_JOIN			iConf.modes_on_join.mode
+#define MODES_ON_JOIN			iConf.modes_on_join.extmodes
 #define LEVEL_ON_JOIN			iConf.level_on_join
 
 #define IDENT_CONNECT_TIMEOUT	iConf.ident_connect_timeout
@@ -309,7 +296,6 @@ struct SetCheck {
 	unsigned has_maxchannelsperuser:1;
 	unsigned has_maxdccallow:1;
 	unsigned has_anti_spam_quit_message_time:1;
-	unsigned has_egd_path:1;
 	unsigned has_static_quit:1;
 	unsigned has_static_part:1;
 	unsigned has_allow_userhost_change:1;

@@ -34,7 +34,7 @@ ModuleHeader MOD_HEADER
 	"5.0", /* Version */
 	"ping, pong and nospoof", /* Short description of module */
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
     };
 /* This is called on module init, before Server Ready */
 MOD_INIT()
@@ -66,7 +66,7 @@ MOD_UNLOAD()
 CMD_FUNC(cmd_ping)
 {
 	Client *target;
-	char *origin, *destination;
+	const char *origin, *destination;
 
 	if (parc < 2 || BadPtr(parv[1]))
 	{
@@ -147,7 +147,7 @@ CMD_FUNC(cmd_nospoof)
 			   me.name, client->name);
 
 	if (is_handshake_finished(client))
-		register_user(client, client->name, client->user->username, NULL, NULL, NULL);
+		register_user(client);
 }
 
 /*
@@ -158,7 +158,7 @@ CMD_FUNC(cmd_nospoof)
 CMD_FUNC(cmd_pong)
 {
 	Client *target;
-	char *origin, *destination;
+	const char *origin, *destination;
 
 	if (!IsRegistered(client))
 	{

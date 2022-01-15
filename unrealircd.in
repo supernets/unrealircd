@@ -2,6 +2,11 @@
 
 PID_FILE="@PIDFILE@"
 PID_BACKUP="@PIDFILE@.bak"
+
+# When built with --with-asan, ASan does not dump core by default because
+# older gcc/clang might dump a 16TB core file. We explicitly enable it here.
+export ASAN_OPTIONS="abort_on_error=1:disable_coredump=0:unmap_shadow_on_exit=1:log_path=@TMPDIR@/unrealircd_asan:detect_leaks=0"
+
 if [ ! -f @BINDIR@/unrealircd ]; then
 	echo "ERROR: Could not find the IRCd binary (@BINDIR@/unrealircd)"
 	echo "This could mean two things:"
@@ -14,9 +19,6 @@ if [ "$1" = "start" ] ; then
 	if [ -r $PID_FILE ] ; then
 		mv -f $PID_FILE $PID_BACKUP
 	fi
-	# When built with --with-asan, ASan does not dump core by default because
-	# older gcc/clang might dump a 16TB core file. We explicitly enable it here.
-	export ASAN_OPTIONS="abort_on_error=1:disable_coredump=0:unmap_shadow_on_exit=1:log_path=@TMPDIR@/unrealircd_asan:detect_leaks=0"
 
 	# Check if ~/Unrealxxx/unrealircd.conf exists but the file
 	# ~/unrealircd/conf/unrealircd.conf does not.
@@ -132,8 +134,6 @@ elif [ "$1" = "version" ] ; then
 	@BINDIR@/unrealircd -v
 elif [ "$1" = "gencloak" ] ; then
 	@BINDIR@/unrealircd -k
-elif [ "$1" = "upgrade-conf" ] ; then
-	@BINDIR@/unrealircd -U
 elif [ "$1" = "backtrace" ] ; then
 	cd @TMPDIR@
 
@@ -227,9 +227,15 @@ elif [ "$1" = "spki" -o "$1" = "spkifp" ] ; then
 	CERT="@CONFDIR@/tls/server.cert.pem"
 	if [ "$2" != "" ]; then
 		CERT="$2"
+	else
+		echo "NOTE: This script uses the default certificate location (any set::tls settings"
+		echo "are ignored). If this is not what you want then specify a certificate"
+		echo "explicitly like this: ./unrealircd spkifp conf/tls/example.pem"
+		echo ""
 	fi
 	if [ ! -f "$CERT" ]; then
 		echo "Could not open certificate: $CERT"
+		echo "You can specify a certificate like this: ./unrealircd spkifp conf/tls/example.pem"
 		exit 1
 	fi
 	openssl x509 -noout -in "$CERT" -pubkey | openssl asn1parse -noout -inform pem -out @TMPDIR@/tmp.public.key
@@ -295,6 +301,7 @@ elif [ "$1" = "hot-patch" -o "$1" = "cold-patch" ] ; then
 	fi
 elif [ "$1" = "upgrade" ] ; then
 	@BINDIR@/unrealircd-upgrade-script $*
+	exit
 elif [ "$1" = "genlinkblock" ] ; then
 	@BINDIR@/unrealircd -L
 else

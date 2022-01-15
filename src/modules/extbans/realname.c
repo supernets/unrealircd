@@ -24,22 +24,25 @@ ModuleHeader MOD_HEADER
 	"4.2",
 	"ExtBan ~r - Ban based on realname/gecos field",
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
 };
 
 /* Forward declarations */
-char *extban_realname_conv_param(char *para);
-int extban_realname_is_banned(Client *client, Channel *channel, char *banin, int type, char **msg, char **errmsg);
+const char *extban_realname_conv_param(BanContext *b, Extban *extban);
+int extban_realname_is_banned(BanContext *b);
 
 /** Called upon module init */
 MOD_INIT()
 {
 	ExtbanInfo req;
 	
-	req.flag = 'r';
+	memset(&req, 0, sizeof(req));
+	req.letter = 'r';
+	req.name = "realname";
 	req.is_ok = NULL;
 	req.conv_param = extban_realname_conv_param;
 	req.is_banned = extban_realname_is_banned;
+	req.is_banned_events = BANCHK_ALL|BANCHK_TKL;
 	req.options = EXTBOPT_CHSVSMODE|EXTBOPT_INVEX|EXTBOPT_TKL;
 	if (!ExtbanAdd(modinfo->handle, req))
 	{
@@ -65,32 +68,31 @@ MOD_UNLOAD()
 }
 
 /** Realname bans - conv_param */
-char *extban_realname_conv_param(char *para)
+const char *extban_realname_conv_param(BanContext *b, Extban *extban)
 {
 	static char retbuf[REALLEN + 8];
 	char *mask;
 
-	strlcpy(retbuf, para, sizeof(retbuf));
+	strlcpy(retbuf, b->banstr, sizeof(retbuf));
 
-	mask = retbuf+3;
+	mask = retbuf;
 
 	if (!*mask)
 		return NULL; /* don't allow "~r:" */
 
-	if (strlen(mask) > REALLEN + 3)
-		mask[REALLEN + 3] = '\0';
+	if (strlen(mask) > REALLEN)
+		mask[REALLEN] = '\0';
 
+	/* Prevent otherwise confusing extban relationship */
 	if (*mask == '~')
-		*mask = '?'; /* Is this good? No ;) */
+		*mask = '?';
 
 	return retbuf;
 }
 
-int extban_realname_is_banned(Client *client, Channel *channel, char *banin, int type, char **msg, char **errmsg)
+int extban_realname_is_banned(BanContext *b)
 {
-	char *ban = banin+3;
-
-	if (match_esc(ban, client->info))
+	if (match_esc(b->banstr, b->client->info))
 		return 1;
 
 	return 0;

@@ -1,7 +1,7 @@
 #!/bin/sh
 #
 # Config script for UnrealIRCd
-# (C) 2001-2019 The UnrealIRCd Team
+# (C) 2001-2021 The UnrealIRCd Team
 #
 # This configure script is free software; the UnrealIRCd Team gives 
 # unlimited permission to copy, distribute and modify as long as the
@@ -37,9 +37,6 @@ mkdir -p $TMPDIR
 mkdir -p $PRIVATELIBDIR
 
 # Do this even if we're not in advanced mode
-if [ "$SHOWLISTMODES" = "1" ] ; then
-	ARG="$ARG--with-showlistmodes "
-fi
 if [ "$ADVANCED" = "1" ] ; then
 if [ "$NOOPEROVERRIDE" = "1" ] ; then
 	ARG="$ARG--with-no-operoverride "
@@ -53,11 +50,20 @@ ARG="$ARG--enable-ssl "
 else
 ARG="$ARG--enable-ssl=$SSLDIR "
 fi
+# Ensure we install curl even if someone does ./Config -quick...
+if [ "x$CURLDIR" = "x$UNREALCWD/extras/curl" ]; then
+	INSTALLCURL=1
+else
+	# And that the path does not refer to eg an old unrealircd-1.2.3 either ;)
+	if echo "$CURLDIR"|egrep -qi extras.*curl; then
+		echo "WARNING: Potentially old cURL directory encountered ($CURLDIR)."
+		echo "I am changing the cURL directory to $UNREALCWD/extras/curl and forcing a rebuild of cURL."
+		CURLDIR="$UNREALCWD/extras/curl"
+		INSTALLCURL=1
+	fi
+fi
 if [ "$REMOTEINC" = "1" ] ; then
 ARG="$ARG--enable-libcurl=$CURLDIR "
-fi
-if [ "$PREFIXAQ" != "1" ]; then
-ARG="$ARG--disable-prefixaq "
 fi
 if [ "$MAXCONNECTIONS_REQUEST" != "auto" ]; then
 	ARG="$ARG--with-maxconnections=$MAXCONNECTIONS_REQUEST "
@@ -77,14 +83,19 @@ ARG="$ARG--with-scriptdir=$BASEPATH "
 ARG="$ARG--with-nick-history=$NICKNAMEHISTORYLENGTH "
 ARG="$ARG--with-permissions=$DEFPERM "
 ARG="$ARG--enable-dynamic-linking "
+if [ "$GEOIP" = "classic" ]; then
+	ARG="$ARG--enable-geoip-classic "
+fi
+if [ "$GEOIP" = "libmaxminddb" ]; then
+	ARG="$ARG--enable-libmaxminddb "
+fi
+if [ "$SANITIZER" = "asan" ]; then
+	ARG="$ARG--enable-asan "
+fi
 ARG="$ARG $EXTRAPARA "
 CONF="./configure $ARG"
 # remove possibly old instances of curl in ~/unrealircd/lib/
 rm -f $PRIVATELIBDIR/*curl* 1>/dev/null 2>&1
-# Ensure we install curl even if someone does ./Config -quick...
-if [ "x$CURLDIR" = "x$UNREALCWD/extras/curl" ]; then
-	INSTALLCURL=1
-fi
 if [ "x$INSTALLCURL" = "x1" ]; then
 	extras/curlinstall "$PRIVATELIBDIR" || exit 1
 fi
@@ -127,8 +138,8 @@ if [ "$QUICK" != "1" ] ; then
 				TEST="No"
 			fi
 			echo ""
-			echo "UnrealIRCd requires an SSL certificate in order to work."
-			echo "Do you want to generate an SSL certificate for the IRCd?"
+			echo "UnrealIRCd requires a TLS certificate in order to work."
+			echo "Do you want to generate a TLS certificate for the IRCd?"
 			echo "Only answer No if you already have one."
 			echo $n "[$TEST] -> $c"
 			read cc
@@ -152,60 +163,31 @@ if [ "$QUICK" != "1" ] ; then
 		if [ "$GENCERTIFICATE" = 1 ]; then
 			echo
 			echo "*******************************************************************************"
-			echo "Next you will be asked some questions in order to generate the SSL certificate."
+			echo "Next you will be asked some questions in order to generate the TLS certificate."
 			echo "IMPORTANT: If you don't own a domain or don't know what to answer, then you can"
 			echo "           simply press ENTER or use fictional names for each question!"
 			echo "*******************************************************************************"
 			echo "Press ENTER to continue"
 			read cc
-			make pem
+			$MAKE pem
 			echo "Certificate created successfully."
 			sleep 1
 		else
-			echo "Ok, not generating SSL certificate. Make sure that the certificate and key"
+			echo "Ok, not generating TLS certificate. Make sure that the certificate and key"
 			echo "are installed in conf/tls/server.cert.pem and conf/tls/server.key.pem prior to starting the IRCd."
 		fi
 	else
-		echo "SSL certificate already exists in configuration directory, no need to regenerate."
+		echo "TLS certificate already exists in configuration directory, no need to regenerate."
 	fi
 fi
 
 # Silently force a 'make clean' as otherwise part (or whole) of the
 # compiled source could be using different settings than the user
 # just requested when re-running ./Config.
-make clean 1>/dev/null 2>&1
+$MAKE clean 1>/dev/null 2>&1
 }
 
 RUN_ADVANCED () {
-TEST=""
-while [ -z "$TEST" ] ; do
-	if [ "$SHOWLISTMODES" = "1" ] ; then
-		TEST="Yes"
-	else
-		TEST="No"
-	fi
-	echo ""
-	echo "Do you want to show the modes a channel has set in the /list output?"
-	echo $n "[$TEST] -> $c"
-	read cc
-	if [ -z "$cc" ] ; then
-		cc=$TEST
-	fi
-	case "$cc" in
-	[Yy]*)
-		SHOWLISTMODES="1"
-		;;
-	[Nn]*)
-		SHOWLISTMODES=""
-		;;
-	*)
-		echo ""
-		echo "You must enter either Yes or No"
-		TEST=""
-		;;
-	esac
-done
-
 TEST=""
 while [ -z "$TEST" ] ; do
 	if [ "$NOOPEROVERRIDE" = "1" ] ; then
@@ -271,16 +253,16 @@ UNREALCWD="`pwd`"
 BASEPATH="$HOME/unrealircd"
 DEFPERM="0600"
 SSLDIR=""
-NICKNAMEHISTORYLENGTH="100"
+NICKNAMEHISTORYLENGTH="2000"
 MAXCONNECTIONS_REQUEST="auto"
 REMOTEINC="1"
 CURLDIR=""
-PREFIXAQ="0"
-SHOWLISTMODES="0"
 NOOPEROVERRIDE=""
 OPEROVERRIDEVERIFY=""
 GENCERTIFICATE="1"
 EXTRAPARA=""
+SANITIZER=""
+GEOIP="classic"
 if [ "`eval echo -n 'a'`" = "-n a" ] ; then
 	c="\c"
 else
@@ -333,6 +315,33 @@ if [ "`id -u`" = "0" ]; then
 	exit
 fi
 
+# Check for gmake early...
+if [ "$MAKE" = "" ]; then
+	MAKE="make"
+fi
+
+if ! $MAKE --version 2>&1|grep -q "GNU Make"; then
+	# So $MAKE is not GNU make, but do we have gmake?
+	if gmake --version 2>&1|grep -q "GNU Make"; then
+		# Great, use that one!
+		MAKE="gmake"
+	else
+		# Both $MAKE and gmake are not GNU make, do we have a working $MAKE at all?
+		if $MAKE --version 1>/dev/null 2>&1; then
+			echo "Your system has 'make' but UnrealIRCd requires GNU Make ('gmake')"
+			echo "Please install 'gmake' (eg 'pkg install gmake' on BSD)."
+			exit 1
+		else
+			echo "Your system does not have the required tools installed to build UnrealIRCd."
+			echo "Please check https://www.unrealircd.org/docs/Installing_from_source"
+			echo "and install the required tools listed under 'Prerequisites'."
+			echo "After that, you can run ./Config again"
+			exit 1
+		fi
+	fi
+fi
+
+
 clear
 
 if [ -f "doc/Config.header" -a -z "$NOINTRO" ] ; then
@@ -347,7 +356,7 @@ echo "We will now ask you a number of questions. You can just press ENTER to acc
 echo ""
 
 # This needs to be updated each release so auto-upgrading works for settings, modules, etc!!:
-UNREALRELEASES="unrealircd-5.2.0 unrealircd-5.2.0-rc1 unrealircd-5.0.9.1 unrealircd-5.0.9 unrealircd-5.0.9-rc1 unrealircd-5.0.8 unrealircd-5.0.8-rc1 unrealircd-5.0.7 unrealircd-5.0.7-rc1 unrealircd-5.0.6 unrealircd-5.0.5.1 unrealircd-5.0.5 unrealircd-5.0.4 unrealircd-5.0.3.1 unrealircd-5.0.3 unrealircd-5.0.2 unrealircd-5.0.1 unrealircd-5.0.0"
+UNREALRELEASES="unrealircd-6.0.1 unrealircd-6.0.0 unrealircd-6.0.0-rc2 unrealircd-6.0.0-rc1 unrealircd-6.0.0-beta4 unrealircd-6.0.0-beta3 unrealircd-6.0.0-beta2 unrealircd-6.0.0-beta1 unrealircd-5.2.3 unrealircd-5.2.2 unrealircd-5.2.1.1 unrealircd-5.2.1 unrealircd-5.2.1-rc1 unrealircd-5.2.0.2 unrealircd-5.2.0.1 unrealircd-5.2.0 unrealircd-5.2.0-rc1 unrealircd-5.0.9.1 unrealircd-5.0.9 unrealircd-5.0.9-rc1 unrealircd-5.0.8 unrealircd-5.0.8-rc1 unrealircd-5.0.7 unrealircd-5.0.7-rc1 unrealircd-5.0.6"
 if [ -f "config.settings" ]; then
 	. ./config.settings
 else
@@ -421,7 +430,7 @@ fi
 TEST="$BASEPATH"
 echo ""
 echo "In what directory do you want to install UnrealIRCd?"
-echo "(Note: UnrealIRCd 5 will need to be installed somewhere."
+echo "(Note: UnrealIRCd 6 will need to be installed somewhere."
 echo " If this directory does not exist it will be created.)"
 echo $n "[$TEST] -> $c"
 read cc
@@ -507,9 +516,12 @@ while [ -z "$TEST" ] ; do
 		TEST="No"
 	fi
 	echo ""
-	echo "Do you want to enable remote includes?"
-	echo "This allows stuff like this in your configuration file:"
-	echo "include \"https://www.somesite.org/files/opers.conf\";"
+	echo "UnrealIRCd comes with support for 'remote includes', this allows things like:"
+	echo "include \"https://www.example.org/files/opers.conf\";"
+	echo "Do you want to compile with the libcurl library to enable additional protocols?"
+	echo "If you answer 'No' then only https:// links will work for remote includes."
+	echo "Answer 'Yes' if you need other protocols, such as plaintext http, ftp, tftp or smb."
+	echo "Most people answer 'No' here because they don't use remote includes or only need https."
 	echo $n "[$TEST] -> $c"
 	read cc
 	if [ -z "$cc" ] ; then
@@ -663,39 +675,6 @@ fi
 
 TEST=""
 while [ -z "$TEST" ] ; do
-	if [ "$PREFIXAQ" = "1" ] ; then
-		TEST="Yes"
-	else
-		TEST="No"
-	fi
-	echo ""
-	echo "Do you want to enable prefixes for chanadmin and chanowner?"
-	echo "This will give +a the & prefix and ~ for +q (just like +o is @)"
-	echo "Supported by the major clients (mIRC, xchat, epic, eggdrop, Klient,"
-	echo "PJIRC, irssi, CGI:IRC, etc.)"
-	echo "This feature should be enabled/disabled network-wide."
-	echo $n "[$TEST] -> $c"
-	read cc
-	if [ -z "$cc" ] ; then
-		cc=$TEST
-	fi
-	case "$cc" in
-	[Yy]*)
-		PREFIXAQ="1"
-		;;
-	[Nn]*)
-		PREFIXAQ=""
-		;;
-	*)
-		echo ""
-		echo "You must enter either Yes or No"
-		TEST=""
-		;;
-	esac
-done
-
-TEST=""
-while [ -z "$TEST" ] ; do
 	TEST="$NICKNAMEHISTORYLENGTH"
 	echo ""
 	echo "How far back do you want to keep the nickname history?"
@@ -712,6 +691,41 @@ while [ -z "$TEST" ] ; do
 	*)
 		echo ""
 		echo "You must enter a number"
+		TEST=""
+		;;
+	esac
+done
+
+TEST=""
+while [ -z "$TEST" ] ; do
+	TEST="$GEOIP"
+	echo ""
+	echo "GeoIP is a feature that allows converting an IP address to a location (country)"
+	echo "You have three options in UnrealIRCd:"
+	echo "     classic: This is the DEFAULT geoip engine that should work on all systems"
+	echo "libmaxminddb: This uses the libmaxminddb library. If you want to use it then"
+	echo "              you need to install the libmaxminddb library on your system first"
+	echo "        none: Don't built with any geoip feature"
+	echo "Choose one of: classic, libmaxminddb, none"
+	echo $n "[$TEST] -> $c"
+	read cc
+	if [ -z "$cc" ] ; then
+		GEOIP=$TEST
+		break
+	fi
+	case "$cc" in
+	classic)
+		GEOIP="$cc"
+		;;
+	libmaxminddb)
+		GEOIP="$cc"
+		;;
+	none)
+		GEOIP="$cc"
+		;;
+	*)
+		echo ""
+		echo "Invalid choice: $cc"
 		TEST=""
 		;;
 	esac
@@ -753,6 +767,42 @@ if [ -n "$ADVANCED" ] ; then
 	RUN_ADVANCED
 fi
 
+TEST=""
+while [ -z "$TEST" ] ; do
+	if [ "$SANITIZER" = "asan" ] ; then
+		TEST="Yes"
+	else
+		TEST="No"
+	fi
+	echo ""
+	echo "Are you running UnrealIRCd as a test, debugging a problem or developing a module?"
+	echo "Then it is possible to run with AddressSanitizer enabled. This will make it"
+	echo "catch bugs such as out-of-bounds and other memory corruption issues, which can"
+	echo "be really helpful in some cases. The downside is that it will consume a lot"
+	echo "more memory and run slower too. So, only answer 'Yes' if you are OK with this."
+	echo "Also, on some systems (notably FreeBSD), when you enable AddressSanitizer,"
+	echo "UnrealIRCd may fail to start. So when in doubt, answer 'No'."
+	echo "Do you want to enable AddressSanitizer?"
+	echo $n "[$TEST] -> $c"
+	read cc
+	if [ -z "$cc" ] ; then
+		cc=$TEST
+	fi
+	case "$cc" in
+	[Yy]*)
+		SANITIZER="asan"
+		;;
+	[Nn]*)
+		SANITIZER=""
+		;;
+	*)
+		echo ""
+		echo "You must enter either Yes or No"
+		TEST=""
+		;;
+	esac
+done
+
 TEST="$EXTRAPARA"
 echo ""
 echo "Would you like to pass any custom parameters to configure?"
@@ -784,17 +834,17 @@ CACHEDIR="$CACHEDIR"
 DOCDIR="$DOCDIR"
 TMPDIR="$TMPDIR"
 PRIVATELIBDIR="$PRIVATELIBDIR"
-PREFIXAQ="$PREFIXAQ"
 MAXCONNECTIONS_REQUEST="$MAXCONNECTIONS_REQUEST"
 NICKNAMEHISTORYLENGTH="$NICKNAMEHISTORYLENGTH"
+GEOIP="$GEOIP"
 DEFPERM="$DEFPERM"
 SSLDIR="$SSLDIR"
 REMOTEINC="$REMOTEINC"
 CURLDIR="$CURLDIR"
-SHOWLISTMODES="$SHOWLISTMODES"
 NOOPEROVERRIDE="$NOOPEROVERRIDE"
 OPEROVERRIDEVERIFY="$OPEROVERRIDEVERIFY"
 GENCERTIFICATE="$GENCERTIFICATE"
+SANITIZER="$SANITIZER"
 EXTRAPARA="$EXTRAPARA"
 ADVANCED="$ADVANCED"
 __EOF__
@@ -808,16 +858,17 @@ cat << __EOF__
 |_______________________________________________________________________|
 |_______________________________________________________________________|
 |                                                                       |
-| Now all you have to do is type 'make' and let it compile. When that's |
-| done, you will receive other instructions on what to do next.         |
-|                                                                       |
-|_______________________________________________________________________|
-|_______________________________________________________________________|
 |                        - The UnrealIRCd Team -                        |
 |                                                                       |
-| * Bram Matthys (Syzop)     syzop@unrealircd.org                       |
-| * Gottem                   gottem@unrealircd.org                      |
-| * i                        i@unrealircd.org                           |
+|              Bram Matthys (Syzop) - syzop@unrealircd.org              |
+|       Krzysztof Beresztant (k4be) - k4be@unrealircd.org               |
+|                            Gottem - gottem@unrealircd.org             |
+|                                 i - i@unrealircd.org                  |
+|_______________________________________________________________________|
+|_______________________________________________________________________|
+|                                                                       |
+| Now all you have to do is type '$MAKE' and let it compile. When that's |
+| done, you will receive other instructions on what to do next.         |
 |_______________________________________________________________________|
 __EOF__
 

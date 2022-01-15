@@ -27,7 +27,7 @@ ModuleHeader MOD_HEADER
 	"5.0", /* Version */
 	"command /svssilence", /* Short description of module */
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
     };
 
 MOD_INIT()
@@ -60,11 +60,12 @@ CMD_FUNC(cmd_svssilence)
 	Client *target;
 	int mine;
 	char *p, *cp, c;
+	char request[BUFSIZE];
 	
 	if (!IsULine(client))
 		return;
 
-	if (parc < 3 || BadPtr(parv[2]) || !(target = find_person(parv[1], NULL)))
+	if (parc < 3 || BadPtr(parv[2]) || !(target = find_user(parv[1], NULL)))
 		return;
 	
 	if (!MyUser(target))
@@ -74,7 +75,8 @@ CMD_FUNC(cmd_svssilence)
 	}
 
 	/* It's for our client */
-	for (p = strtok(parv[2], " "); p; p = strtok(NULL, " "))
+	strlcpy(request, parv[2], sizeof(request));
+	for (p = strtok(request, " "); p; p = strtok(NULL, " "))
 	{
 		c = *p;
 		if ((c == '-') || (c == '+'))

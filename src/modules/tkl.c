@@ -29,7 +29,7 @@ ModuleHeader MOD_HEADER
 	"5.0",
 	"Server ban commands such as /GLINE, /SPAMFILTER, etc.",
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
 };
 
 /* Forward declarations */
@@ -49,12 +49,13 @@ CMD_FUNC(cmd_kline);
 CMD_FUNC(cmd_zline);
 CMD_FUNC(cmd_spamfilter);
 CMD_FUNC(cmd_eline);
-void cmd_tkl_line(Client *client, int parc, char *parv[], char *type);
+void cmd_tkl_line(Client *client, int parc, const char *parv[], char *type);
 int _tkl_hash(unsigned int c);
 char _tkl_typetochar(int type);
 int _tkl_chartotype(char c);
 int tkl_banexception_chartotype(char c);
 char *_tkl_type_string(TKL *tk);
+char *_tkl_type_config_string(TKL *tk);
 char *tkl_banexception_configname_to_chars(char *name);
 TKL *_tkl_add_serverban(int type, char *usermask, char *hostmask, char *reason, char *set_by,
                             time_t expire_at, time_t set_at, int soft, int flags);
@@ -71,6 +72,7 @@ void _sendnotice_tkl_add(TKL *tkl);
 void _free_tkl(TKL *tkl);
 void _tkl_del_line(TKL *tkl);
 static void _tkl_check_local_remove_shun(TKL *tmp);
+char *_tkl_uhost(TKL *tkl, char *buf, size_t buflen, int options);
 void tkl_expire_entry(TKL * tmp);
 EVENT(tkl_check_expire);
 int _find_tkline_match(Client *client, int skip_soft);
@@ -78,18 +80,18 @@ int _find_shun(Client *client);
 int _find_spamfilter_user(Client *client, int flags);
 TKL *_find_qline(Client *client, char *nick, int *ishold);
 TKL *_find_tkline_match_zap(Client *client);
-void _tkl_stats(Client *client, int type, char *para, int *cnt);
+void _tkl_stats(Client *client, int type, const char *para, int *cnt);
 void _tkl_sync(Client *client);
 CMD_FUNC(_cmd_tkl);
 int _place_host_ban(Client *client, BanAction action, char *reason, long duration);
-int _match_spamfilter(Client *client, char *str_in, int type, char *cmd, char *target, int flags, TKL **rettk);
+int _match_spamfilter(Client *client, const char *str_in, int type, const char *cmd, const char *target, int flags, TKL **rettk);
 int _match_spamfilter_mtags(Client *client, MessageTag *mtags, char *cmd);
 int check_mtag_spamfilters_present(void);
 int _join_viruschan(Client *client, TKL *tk, int type);
 void _spamfilter_build_user_string(char *buf, char *nick, Client *client);
-int _match_user(char *rmask, Client *client, int options);
-int _match_user_extended_server_ban(char *banstr, Client *client);
-void ban_target_to_tkl_layer(BanTarget ban_target, BanAction action, Client *client, char **tkl_username, char **tkl_hostname);
+int _match_user(const char *rmask, Client *client, int options);
+int _match_user_extended_server_ban(const char *banstr, Client *client);
+void ban_target_to_tkl_layer(BanTarget ban_target, BanAction action, Client *client, const char **tkl_username, const char **tkl_hostname);
 int _tkl_ip_hash(char *ip);
 int _tkl_ip_hash_type(int type);
 TKL *_find_tkl_serverban(int type, char *usermask, char *hostmask, int softban);
@@ -98,6 +100,7 @@ TKL *_find_tkl_nameban(int type, char *name, int hold);
 TKL *_find_tkl_spamfilter(int type, char *match_string, BanAction action, unsigned short target);
 int _find_tkl_exception(int ban_type, Client *client);
 static void add_default_exempts(void);
+int parse_extended_server_ban(const char *mask_in, Client *client, char **error, int skip_checking, char *buf1, size_t buf1len, char *buf2, size_t buf2len);
 
 /* Externals (only for us :D) */
 extern int MODVAR spamf_ugly_vchanoverride;
@@ -134,8 +137,8 @@ TKLTypeTable tkl_types[] = {
 	{ "except",               'E', TKL_EXCEPTION  | TKL_GLOBAL, "Exception",            1, 0, 0 },
 	{ "shun",                 's', TKL_SHUN       | TKL_GLOBAL, "Shun",                 1, 1, 0 },
 	{ "local-qline",          'q', TKL_NAME,                    "Local Q-Line",         1, 0, 0 },
-	{ "local-spamfilter",     'e', TKL_EXCEPTION,               "Local Exception",      1, 0, 0 },
-	{ "local-exception",      'f', TKL_SPAMF,                   "Local Spamfilter",     1, 0, 0 },
+	{ "local-exception",      'e', TKL_EXCEPTION,               "Local Exception",      1, 0, 0 },
+	{ "local-spamfilter",     'f', TKL_SPAMF,                   "Local Spamfilter",     1, 0, 0 },
 	{ "blacklist",            'b', TKL_BLACKLIST,               "Blacklist",            0, 1, 1 },
 	{ "connect-flood",        'c', TKL_CONNECT_FLOOD,           "Connect flood",        0, 1, 1 },
 	{ "maxperip",             'm', TKL_MAXPERIP,                "Max-per-IP",           0, 1, 0 },
@@ -158,9 +161,17 @@ MOD_TEST()
 	HookAdd(modinfo->handle, HOOKTYPE_CONFIGTEST, 0, tkl_config_test_except);
 	HookAdd(modinfo->handle, HOOKTYPE_CONFIGTEST, 0, tkl_config_test_set);
 	EfunctionAdd(modinfo->handle, EFUNC_TKL_HASH, _tkl_hash);
+#if defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wcast-function-type"
+#endif
 	EfunctionAdd(modinfo->handle, EFUNC_TKL_TYPETOCHAR, TO_INTFUNC(_tkl_typetochar));
 	EfunctionAdd(modinfo->handle, EFUNC_TKL_CHARTOTYPE, TO_INTFUNC(_tkl_chartotype));
-	EfunctionAddPChar(modinfo->handle, EFUNC_TKL_TYPE_STRING, _tkl_type_string);
+#if defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
+	EfunctionAddString(modinfo->handle, EFUNC_TKL_TYPE_STRING, _tkl_type_string);
+	EfunctionAddString(modinfo->handle, EFUNC_TKL_TYPE_CONFIG_STRING, _tkl_type_config_string);
 	EfunctionAddPVoid(modinfo->handle, EFUNC_TKL_ADD_SERVERBAN, TO_PVOIDFUNC(_tkl_add_serverban));
 	EfunctionAddPVoid(modinfo->handle, EFUNC_TKL_ADD_BANEXCEPTION, TO_PVOIDFUNC(_tkl_add_banexception));
 	EfunctionAddPVoid(modinfo->handle, EFUNC_TKL_ADD_NAMEBAN, TO_PVOIDFUNC(_tkl_add_nameban));
@@ -191,6 +202,7 @@ MOD_TEST()
 	EfunctionAddVoid(modinfo->handle, EFUNC_SENDNOTICE_TKL_ADD, _sendnotice_tkl_add);
 	EfunctionAddVoid(modinfo->handle, EFUNC_SENDNOTICE_TKL_DEL, _sendnotice_tkl_del);
 	EfunctionAdd(modinfo->handle, EFUNC_FIND_TKL_EXCEPTION, _find_tkl_exception);
+	EfunctionAddString(modinfo->handle, EFUNC_TKL_UHOST, _tkl_uhost);
 	return MOD_SUCCESS;
 }
 
@@ -237,130 +249,130 @@ int tkl_config_test_spamfilter(ConfigFile *cf, ConfigEntry *ce, int type, int *e
 	int match_type = 0;
 
 	/* We are only interested in spamfilter { } blocks */
-	if ((type != CONFIG_MAIN) || strcmp(ce->ce_varname, "spamfilter"))
+	if ((type != CONFIG_MAIN) || strcmp(ce->name, "spamfilter"))
 		return 0;
 
-	for (cep = ce->ce_entries; cep; cep = cep->ce_next)
+	for (cep = ce->items; cep; cep = cep->next)
 	{
-		if (!strcmp(cep->ce_varname, "target"))
+		if (!strcmp(cep->name, "target"))
 		{
 			if (has_target)
 			{
-				config_warn_duplicate(cep->ce_fileptr->cf_filename,
-					cep->ce_varlinenum, "spamfilter::target");
+				config_warn_duplicate(cep->file->filename,
+					cep->line_number, "spamfilter::target");
 				continue;
 			}
 			has_target = 1;
-			if (cep->ce_vardata)
+			if (cep->value)
 			{
-				if (!spamfilter_getconftargets(cep->ce_vardata))
+				if (!spamfilter_getconftargets(cep->value))
 				{
 					config_error("%s:%i: unknown spamfiler target type '%s'",
-						cep->ce_fileptr->cf_filename, cep->ce_varlinenum, cep->ce_vardata);
+						cep->file->filename, cep->line_number, cep->value);
 					errors++;
 				}
 			}
-			else if (cep->ce_entries)
+			else if (cep->items)
 			{
-				for (cepp = cep->ce_entries; cepp; cepp = cepp->ce_next)
+				for (cepp = cep->items; cepp; cepp = cepp->next)
 				{
-					if (!spamfilter_getconftargets(cepp->ce_varname))
+					if (!spamfilter_getconftargets(cepp->name))
 					{
 						config_error("%s:%i: unknown spamfiler target type '%s'",
-							cepp->ce_fileptr->cf_filename,
-							cepp->ce_varlinenum, cepp->ce_varname);
+							cepp->file->filename,
+							cepp->line_number, cepp->name);
 						errors++;
 					}
 				}
 			}
 			else
 			{
-				config_error_empty(cep->ce_fileptr->cf_filename,
-					cep->ce_varlinenum, "spamfilter", cep->ce_varname);
+				config_error_empty(cep->file->filename,
+					cep->line_number, "spamfilter", cep->name);
 				errors++;
 			}
 			continue;
 		}
-		if (!cep->ce_vardata)
+		if (!cep->value)
 		{
-			config_error_empty(cep->ce_fileptr->cf_filename, cep->ce_varlinenum,
-				"spamfilter", cep->ce_varname);
+			config_error_empty(cep->file->filename, cep->line_number,
+				"spamfilter", cep->name);
 			errors++;
 			continue;
 		}
-		if (!strcmp(cep->ce_varname, "reason"))
+		if (!strcmp(cep->name, "reason"))
 		{
 			if (has_reason)
 			{
-				config_warn_duplicate(cep->ce_fileptr->cf_filename,
-					cep->ce_varlinenum, "spamfilter::reason");
+				config_warn_duplicate(cep->file->filename,
+					cep->line_number, "spamfilter::reason");
 				continue;
 			}
 			has_reason = 1;
-			reason = cep->ce_vardata;
+			reason = cep->value;
 		}
-		else if (!strcmp(cep->ce_varname, "match"))
+		else if (!strcmp(cep->name, "match"))
 		{
 			if (has_match)
 			{
-				config_warn_duplicate(cep->ce_fileptr->cf_filename,
-					cep->ce_varlinenum, "spamfilter::match");
+				config_warn_duplicate(cep->file->filename,
+					cep->line_number, "spamfilter::match");
 				continue;
 			}
 			has_match = 1;
-			match = cep->ce_vardata;
+			match = cep->value;
 		}
-		else if (!strcmp(cep->ce_varname, "action"))
+		else if (!strcmp(cep->name, "action"))
 		{
 			if (has_action)
 			{
-				config_warn_duplicate(cep->ce_fileptr->cf_filename,
-					cep->ce_varlinenum, "spamfilter::action");
+				config_warn_duplicate(cep->file->filename,
+					cep->line_number, "spamfilter::action");
 				continue;
 			}
 			has_action = 1;
-			if (!banact_stringtoval(cep->ce_vardata))
+			if (!banact_stringtoval(cep->value))
 			{
 				config_error("%s:%i: spamfilter::action has unknown action type '%s'",
-					cep->ce_fileptr->cf_filename, cep->ce_varlinenum, cep->ce_vardata);
+					cep->file->filename, cep->line_number, cep->value);
 				errors++;
 			}
 		}
-		else if (!strcmp(cep->ce_varname, "ban-time"))
+		else if (!strcmp(cep->name, "ban-time"))
 		{
 			if (has_bantime)
 			{
-				config_warn_duplicate(cep->ce_fileptr->cf_filename,
-					cep->ce_varlinenum, "spamfilter::ban-time");
+				config_warn_duplicate(cep->file->filename,
+					cep->line_number, "spamfilter::ban-time");
 				continue;
 			}
 			has_bantime = 1;
 		}
-		else if (!strcmp(cep->ce_varname, "match-type"))
+		else if (!strcmp(cep->name, "match-type"))
 		{
 			if (has_match_type)
 			{
-				config_warn_duplicate(cep->ce_fileptr->cf_filename,
-					cep->ce_varlinenum, "spamfilter::match-type");
+				config_warn_duplicate(cep->file->filename,
+					cep->line_number, "spamfilter::match-type");
 				continue;
 			}
-			if (!strcasecmp(cep->ce_vardata, "posix"))
+			if (!strcasecmp(cep->value, "posix"))
 			{
 				config_error("%s:%i: this spamfilter uses match-type 'posix' which is no longer supported. "
 				             "You must switch over to match-type 'regex' instead. "
 				             "See https://www.unrealircd.org/docs/FAQ#spamfilter-posix-deprecated",
-				             ce->ce_fileptr->cf_filename, ce->ce_varlinenum);
+				             ce->file->filename, ce->line_number);
 				errors++;
 				*errs = errors;
 				return -1; /* return now, otherwise there will be issues */
 			}
-			match_type = unreal_match_method_strtoval(cep->ce_vardata);
+			match_type = unreal_match_method_strtoval(cep->value);
 			if (match_type == 0)
 			{
 				config_error("%s:%i: spamfilter::match-type: unknown match type '%s', "
 				             "should be one of: 'simple', 'regex' or 'posix'",
-				             cep->ce_fileptr->cf_filename, cep->ce_varlinenum,
-				             cep->ce_vardata);
+				             cep->file->filename, cep->line_number,
+				             cep->value);
 				errors++;
 				continue;
 			}
@@ -368,8 +380,8 @@ int tkl_config_test_spamfilter(ConfigFile *cf, ConfigEntry *ce, int type, int *e
 		}
 		else
 		{
-			config_error_unknown(cep->ce_fileptr->cf_filename, cep->ce_varlinenum,
-				"spamfilter", cep->ce_varname);
+			config_error_unknown(cep->file->filename, cep->line_number,
+				"spamfilter", cep->name);
 			errors++;
 			continue;
 		}
@@ -384,8 +396,8 @@ int tkl_config_test_spamfilter(ConfigFile *cf, ConfigEntry *ce, int type, int *e
 		if (!m)
 		{
 			config_error("%s:%i: spamfilter::match contains an invalid regex: %s",
-				ce->ce_fileptr->cf_filename,
-				ce->ce_varlinenum,
+				ce->file->filename,
+				ce->line_number,
 				err);
 			errors++;
 		} else
@@ -396,19 +408,19 @@ int tkl_config_test_spamfilter(ConfigFile *cf, ConfigEntry *ce, int type, int *e
 
 	if (!has_match)
 	{
-		config_error_missing(ce->ce_fileptr->cf_filename, ce->ce_varlinenum,
+		config_error_missing(ce->file->filename, ce->line_number,
 			"spamfilter::match");
 		errors++;
 	}
 	if (!has_target)
 	{
-		config_error_missing(ce->ce_fileptr->cf_filename, ce->ce_varlinenum,
+		config_error_missing(ce->file->filename, ce->line_number,
 			"spamfilter::target");
 		errors++;
 	}
 	if (!has_action)
 	{
-		config_error_missing(ce->ce_fileptr->cf_filename, ce->ce_varlinenum,
+		config_error_missing(ce->file->filename, ce->line_number,
 			"spamfilter::action");
 		errors++;
 	}
@@ -416,19 +428,14 @@ int tkl_config_test_spamfilter(ConfigFile *cf, ConfigEntry *ce, int type, int *e
 	{
 		config_error("%s:%i: spamfilter block problem: match + reason field are together over 505 bytes, "
 		             "please choose a shorter regex or reason",
-		             ce->ce_fileptr->cf_filename, ce->ce_varlinenum);
+		             ce->file->filename, ce->line_number);
 		errors++;
 	}
 	if (!has_match_type)
 	{
-		config_error_missing(ce->ce_fileptr->cf_filename, ce->ce_varlinenum,
+		config_error_missing(ce->file->filename, ce->line_number,
 			"spamfilter::match-type");
 		errors++;
-	}
-
-	if (!has_match_type && !has_match && has_action && has_target)
-	{
-		need_34_upgrade = 1;
 	}
 
 	if (match && !strcmp(match, "^LOL! //echo -a \\$\\(\\$decode\\(.+,m\\),[0-9]\\)$"))
@@ -449,47 +456,47 @@ int tkl_config_run_spamfilter(ConfigFile *cf, ConfigEntry *ce, int type)
 	ConfigEntry *cep;
 	ConfigEntry *cepp;
 	char *word = NULL;
-	time_t bantime = (SPAMFILTER_BAN_TIME ? SPAMFILTER_BAN_TIME : 86400);
-	char *banreason = "<internally added by ircd>";
+	time_t bantime = tempiConf.spamfilter_ban_time;
+	char *banreason = tempiConf.spamfilter_ban_reason;
 	int action = 0, target = 0;
 	int match_type = 0;
 	Match *m;
 
 	/* We are only interested in spamfilter { } blocks */
-	if ((type != CONFIG_MAIN) || strcmp(ce->ce_varname, "spamfilter"))
+	if ((type != CONFIG_MAIN) || strcmp(ce->name, "spamfilter"))
 		return 0;
 
-	for (cep = ce->ce_entries; cep; cep = cep->ce_next)
+	for (cep = ce->items; cep; cep = cep->next)
 	{
-		if (!strcmp(cep->ce_varname, "match"))
+		if (!strcmp(cep->name, "match"))
 		{
-			word = cep->ce_vardata;
+			word = cep->value;
 		}
-		else if (!strcmp(cep->ce_varname, "target"))
+		else if (!strcmp(cep->name, "target"))
 		{
-			if (cep->ce_vardata)
-				target = spamfilter_getconftargets(cep->ce_vardata);
+			if (cep->value)
+				target = spamfilter_getconftargets(cep->value);
 			else
 			{
-				for (cepp = cep->ce_entries; cepp; cepp = cepp->ce_next)
-					target |= spamfilter_getconftargets(cepp->ce_varname);
+				for (cepp = cep->items; cepp; cepp = cepp->next)
+					target |= spamfilter_getconftargets(cepp->name);
 			}
 		}
-		else if (!strcmp(cep->ce_varname, "action"))
+		else if (!strcmp(cep->name, "action"))
 		{
-			action = banact_stringtoval(cep->ce_vardata);
+			action = banact_stringtoval(cep->value);
 		}
-		else if (!strcmp(cep->ce_varname, "reason"))
+		else if (!strcmp(cep->name, "reason"))
 		{
-			banreason = cep->ce_vardata;
+			banreason = cep->value;
 		}
-		else if (!strcmp(cep->ce_varname, "ban-time"))
+		else if (!strcmp(cep->name, "ban-time"))
 		{
-			bantime = config_checkval(cep->ce_vardata, CFG_TIME);
+			bantime = config_checkval(cep->value, CFG_TIME);
 		}
-		else if (!strcmp(cep->ce_varname, "match-type"))
+		else if (!strcmp(cep->name, "match-type"))
 		{
-			match_type = unreal_match_method_strtoval(cep->ce_vardata);
+			match_type = unreal_match_method_strtoval(cep->value);
 		}
 	}
 
@@ -518,35 +525,35 @@ int tkl_config_test_ban(ConfigFile *cf, ConfigEntry *ce, int type, int *errs)
 	if (type != CONFIG_BAN)
 		return 0;
 
-	if (strcmp(ce->ce_vardata, "nick") && strcmp(ce->ce_vardata, "user") &&
-	    strcmp(ce->ce_vardata, "ip"))
+	if (strcmp(ce->value, "nick") && strcmp(ce->value, "user") &&
+	    strcmp(ce->value, "ip"))
 	{
 		return 0;
 	}
 
-	for (cep = ce->ce_entries; cep; cep = cep->ce_next)
+	for (cep = ce->items; cep; cep = cep->next)
 	{
 		if (config_is_blankorempty(cep, "ban"))
 		{
 			errors++;
 			continue;
 		}
-		if (!strcmp(cep->ce_varname, "mask"))
+		if (!strcmp(cep->name, "mask"))
 		{
 			if (has_mask)
 			{
-				config_warn_duplicate(cep->ce_fileptr->cf_filename,
-					cep->ce_varlinenum, "ban::mask");
+				config_warn_duplicate(cep->file->filename,
+					cep->line_number, "ban::mask");
 				continue;
 			}
 			has_mask = 1;
 		}
-		else if (!strcmp(cep->ce_varname, "reason"))
+		else if (!strcmp(cep->name, "reason"))
 		{
 			if (has_reason)
 			{
-				config_warn_duplicate(cep->ce_fileptr->cf_filename,
-					cep->ce_varlinenum, "ban::reason");
+				config_warn_duplicate(cep->file->filename,
+					cep->line_number, "ban::reason");
 				continue;
 			}
 			has_reason = 1;
@@ -554,23 +561,23 @@ int tkl_config_test_ban(ConfigFile *cf, ConfigEntry *ce, int type, int *errs)
 		else
 		{
 			config_error("%s:%i: unknown directive ban %s::%s",
-				cep->ce_fileptr->cf_filename, cep->ce_varlinenum,
-				ce->ce_vardata,
-				cep->ce_varname);
+				cep->file->filename, cep->line_number,
+				ce->value,
+				cep->name);
 			errors++;
 		}
 	}
 
 	if (!has_mask)
 	{
-		config_error_missing(ce->ce_fileptr->cf_filename, ce->ce_varlinenum,
+		config_error_missing(ce->file->filename, ce->line_number,
 			"ban::mask");
 		errors++;
 	}
 
 	if (!has_reason)
 	{
-		config_error_missing(ce->ce_fileptr->cf_filename, ce->ce_varlinenum,
+		config_error_missing(ce->file->filename, ce->line_number,
 			"ban::reason");
 		errors++;
 	}
@@ -592,44 +599,35 @@ int tkl_config_run_ban(ConfigFile *cf, ConfigEntry *ce, int configtype)
 	if (configtype != CONFIG_BAN)
 		return 0;
 
-	if (strcmp(ce->ce_vardata, "nick") && strcmp(ce->ce_vardata, "user") &&
-	    strcmp(ce->ce_vardata, "ip"))
+	if (strcmp(ce->value, "nick") && strcmp(ce->value, "user") &&
+	    strcmp(ce->value, "ip"))
 	{
 		return 0;
 	}
 
-	for (cep = ce->ce_entries; cep; cep = cep->ce_next)
+	for (cep = ce->items; cep; cep = cep->next)
 	{
-		if (!strcmp(cep->ce_varname, "mask"))
+		if (!strcmp(cep->name, "mask"))
 		{
-			char buf[512], *p;
-			strlcpy(buf, cep->ce_vardata, sizeof(buf));
-			if (is_extended_ban(buf))
+			if (is_extended_server_ban(cep->value))
 			{
-				char *str;
-				Extban *extban;
-				char buf2[BUFSIZE];
-				extban = findmod_by_bantype(buf[1]);
-				if (!extban || !(extban->options & EXTBOPT_TKL))
+				char mask1buf[512], mask2buf[512];
+				char *err = NULL;
+
+				if (!parse_extended_server_ban(cep->value, NULL, &err, 0, mask1buf, sizeof(mask1buf), mask2buf, sizeof(mask2buf)))
 				{
-					config_warn("%s:%d: Invalid or unsupported extended server ban requested: %s",
-						cep->ce_fileptr->cf_filename, cep->ce_varlinenum, buf);
+					config_warn("%s:%d: Could not add extended server ban '%s': %s",
+						cep->file->filename, cep->line_number, cep->value, err);
 					goto tcrb_end;
 				}
-				/* is_ok() is not called, since there is no client, similar to like remote bans set */
-				str = extban->conv_param(buf);
-				if (!str || (strlen(str) <= 4))
-				{
-					config_warn("%s:%d: Extended server ban has a problem: %s",
-						cep->ce_fileptr->cf_filename, cep->ce_varlinenum, buf);
-					goto tcrb_end;
-				}
-				strlcpy(buf2, str+3, sizeof(buf2));
-				buf[3] = '\0';
-				safe_strdup(usermask, buf); /* eg ~S: */
-				safe_strdup(hostmask, buf2);
+				safe_strdup(usermask, mask1buf);
+				safe_strdup(hostmask, mask2buf);
 			} else
 			{
+				char buf[512];
+				char *p;
+
+				strlcpy(buf, cep->value, sizeof(buf));
 				p = strchr(buf, '@');
 				if (p)
 				{
@@ -637,13 +635,13 @@ int tkl_config_run_ban(ConfigFile *cf, ConfigEntry *ce, int configtype)
 					safe_strdup(usermask, buf);
 					safe_strdup(hostmask, p);
 				} else {
-					safe_strdup(hostmask, cep->ce_vardata);
+					safe_strdup(hostmask, cep->value);
 				}
 			}
 		} else
-		if (!strcmp(cep->ce_varname, "reason"))
+		if (!strcmp(cep->name, "reason"))
 		{
-			safe_strdup(reason, cep->ce_vardata);
+			safe_strdup(reason, cep->value);
 		}
 	}
 
@@ -653,11 +651,11 @@ int tkl_config_run_ban(ConfigFile *cf, ConfigEntry *ce, int configtype)
 	if (!reason)
 		safe_strdup(reason, "-");
 
-	if (!strcmp(ce->ce_vardata, "nick"))
+	if (!strcmp(ce->value, "nick"))
 		tkltype = TKL_NAME;
-	else if (!strcmp(ce->ce_vardata, "user"))
+	else if (!strcmp(ce->value, "user"))
 		tkltype = TKL_KILL;
-	else if (!strcmp(ce->ce_vardata, "ip"))
+	else if (!strcmp(ce->value, "ip"))
 		tkltype = TKL_ZAP;
 	else
 		abort(); /* impossible */
@@ -685,82 +683,82 @@ int tkl_config_test_except(ConfigFile *cf, ConfigEntry *ce, int configtype, int 
 		return 0;
 
 	/* These are the types that we handle */
-	if (strcmp(ce->ce_vardata, "ban") && strcmp(ce->ce_vardata, "throttle") &&
-	    strcmp(ce->ce_vardata, "tkl") && strcmp(ce->ce_vardata, "blacklist") &&
-	    strcmp(ce->ce_vardata, "spamfilter"))
+	if (strcmp(ce->value, "ban") && strcmp(ce->value, "throttle") &&
+	    strcmp(ce->value, "tkl") && strcmp(ce->value, "blacklist") &&
+	    strcmp(ce->value, "spamfilter"))
 	{
 		return 0;
 	}
 
-	if (!strcmp(ce->ce_vardata, "tkl"))
+	if (!strcmp(ce->value, "tkl"))
 	{
 		config_error("%s:%d: except tkl { } has been renamed to except ban { }",
-			ce->ce_fileptr->cf_filename, ce->ce_varlinenum);
+			ce->file->filename, ce->line_number);
 		config_status("Please rename your block in the configuration file.");
 		*errs = 1;
 		return -1;
 	}
 
-	for (cep = ce->ce_entries; cep; cep = cep->ce_next)
+	for (cep = ce->items; cep; cep = cep->next)
 	{
-		if (!strcmp(cep->ce_varname, "mask"))
+		if (!strcmp(cep->name, "mask"))
 		{
-			if (cep->ce_entries)
+			if (cep->items)
 			{
 				/* mask { *@1.1.1.1; *@2.2.2.2; *@3.3.3.3; }; */
-				for (cepp = cep->ce_entries; cepp; cepp = cepp->ce_next)
+				for (cepp = cep->items; cepp; cepp = cepp->next)
 				{
-					if (!cepp->ce_varname)
+					if (!cepp->name)
 					{
-						config_error_empty(cepp->ce_fileptr->cf_filename,
-							cepp->ce_varlinenum, "except ban", "mask");
+						config_error_empty(cepp->file->filename,
+							cepp->line_number, "except ban", "mask");
 						errors++;
 						continue;
 					}
 					has_mask = 1;
 				}
 			} else
-			if (cep->ce_vardata)
+			if (cep->value)
 			{
 				/* mask *@1.1.1.1; */
-				if (!cep->ce_vardata)
+				if (!cep->value)
 				{
-					config_error_empty(cep->ce_fileptr->cf_filename,
-						cep->ce_varlinenum, "except ban", "mask");
+					config_error_empty(cep->file->filename,
+						cep->line_number, "except ban", "mask");
 					errors++;
 					continue;
 				}
 				has_mask = 1;
 			}
 		} else
-		if (!strcmp(cep->ce_varname, "type"))
+		if (!strcmp(cep->name, "type"))
 		{
-			if (cep->ce_entries)
+			if (cep->items)
 			{
 				/* type { x; y; z; }; */
-				for (cepp = cep->ce_entries; cepp; cepp = cepp->ce_next)
-					if (!tkl_banexception_configname_to_chars(cepp->ce_varname))
+				for (cepp = cep->items; cepp; cepp = cepp->next)
+					if (!tkl_banexception_configname_to_chars(cepp->name))
 					{
 						config_error("%s:%d: except ban::type '%s' unknown. Must be one of: %s",
-							cepp->ce_fileptr->cf_filename, cepp->ce_varlinenum, cepp->ce_varname,
+							cepp->file->filename, cepp->line_number, cepp->name,
 							ALL_VALID_EXCEPTION_TYPES);
 						errors++;
 					}
 			} else
-			if (cep->ce_vardata)
+			if (cep->value)
 			{
 				/* type x; */
-				if (!tkl_banexception_configname_to_chars(cep->ce_vardata))
+				if (!tkl_banexception_configname_to_chars(cep->value))
 				{
 					config_error("%s:%d: except ban::type '%s' unknown. Must be one of: %s",
-						cep->ce_fileptr->cf_filename, cep->ce_varlinenum, cep->ce_vardata,
+						cep->file->filename, cep->line_number, cep->value,
 						ALL_VALID_EXCEPTION_TYPES);
 					errors++;
 				}
 			}
 		} else {
-			config_error_unknown(cep->ce_fileptr->cf_filename,
-				cep->ce_varlinenum, "except", cep->ce_varname);
+			config_error_unknown(cep->file->filename,
+				cep->line_number, "except", cep->name);
 			errors++;
 			continue;
 		}
@@ -768,7 +766,7 @@ int tkl_config_test_except(ConfigFile *cf, ConfigEntry *ce, int configtype, int 
 
 	if (!has_mask)
 	{
-		config_error_missing(ce->ce_fileptr->cf_filename, ce->ce_varlinenum,
+		config_error_missing(ce->file->filename, ce->line_number,
 			"except ban::mask");
 		errors++;
 	}
@@ -782,7 +780,10 @@ void config_create_tkl_except(char *mask, char *bantypes)
 	char *usermask = NULL;
 	char *hostmask = NULL;
 	int soft = 0;
-	char buf[256], buf2[256], *p;
+	char buf[256];
+	char mask1buf[512];
+	char mask2buf[512];
+	char *p;
 
 	if (*mask == '%')
 	{
@@ -790,27 +791,16 @@ void config_create_tkl_except(char *mask, char *bantypes)
 		mask++;
 	}
 	strlcpy(buf, mask, sizeof(buf));
-	if (is_extended_ban(buf))
+	if (is_extended_server_ban(buf))
 	{
-		char *str;
-		Extban *extban;
-		extban = findmod_by_bantype(buf[1]);
-		if (!extban || !(extban->options & EXTBOPT_TKL))
+		char *err = NULL;
+		if (!parse_extended_server_ban(buf, NULL, &err, 0, mask1buf, sizeof(mask1buf), mask2buf, sizeof(mask2buf)))
 		{
-			config_warn("Invalid or unsupported extended server ban exemption requested: %s", buf);
+			config_warn("Could not add extended server ban '%s': %s", buf, err);
 			return;
 		}
-		/* is_ok() is not called, since there is no client, similar to like remote bans set */
-		str = extban->conv_param(buf);
-		if (!str || (strlen(str) <= 4))
-		{
-			config_warn("Extended server ban exemption has a problem: %s", buf);
-			return;
-		}
-		strlcpy(buf2, str+3, sizeof(buf2));
-		buf[3] = '\0';
-		usermask = buf; /* eg ~S: */
-		hostmask = buf2;
+		usermask = mask1buf;
+		hostmask = mask2buf;
 	} else
 	{
 		p = strchr(buf, '@');
@@ -827,7 +817,7 @@ void config_create_tkl_except(char *mask, char *bantypes)
 
 	if ((*usermask == ':') || (*hostmask == ':'))
 	{
-		config_error("Cannot add illegal ban '%s': for a given user@host neither"
+		config_error("Cannot add illegal ban '%s': for a given user@host - neither "
 		             "user nor host may start with a : character (semicolon)", mask);
 		return;
 	}
@@ -846,9 +836,9 @@ int tkl_config_run_except(ConfigFile *cf, ConfigEntry *ce, int configtype)
 		return 0;
 
 	/* These are the types that we handle */
-	if (strcmp(ce->ce_vardata, "ban") && strcmp(ce->ce_vardata, "throttle") &&
-	    strcmp(ce->ce_vardata, "blacklist") &&
-	    strcmp(ce->ce_vardata, "spamfilter"))
+	if (strcmp(ce->value, "ban") && strcmp(ce->value, "throttle") &&
+	    strcmp(ce->value, "blacklist") &&
+	    strcmp(ce->value, "spamfilter"))
 	{
 		return 0;
 	}
@@ -856,23 +846,23 @@ int tkl_config_run_except(ConfigFile *cf, ConfigEntry *ce, int configtype)
 	*bantypes = '\0';
 
 	/* First configure all the types */
-	for (cep = ce->ce_entries; cep; cep = cep->ce_next)
+	for (cep = ce->items; cep; cep = cep->next)
 	{
-		if (!strcmp(cep->ce_varname, "type"))
+		if (!strcmp(cep->name, "type"))
 		{
-			if (cep->ce_entries)
+			if (cep->items)
 			{
 				/* type { x; y; z; }; */
-				for (cepp = cep->ce_entries; cepp; cepp = cepp->ce_next)
+				for (cepp = cep->items; cepp; cepp = cepp->next)
 				{
-					char *str = tkl_banexception_configname_to_chars(cepp->ce_varname);
+					char *str = tkl_banexception_configname_to_chars(cepp->name);
 					strlcat(bantypes, str, sizeof(bantypes));
 				}
 			} else
-			if (cep->ce_vardata)
+			if (cep->value)
 			{
 				/* type x; */
-				char *str = tkl_banexception_configname_to_chars(cep->ce_vardata);
+				char *str = tkl_banexception_configname_to_chars(cep->value);
 				strlcat(bantypes, str, sizeof(bantypes));
 			}
 		}
@@ -881,33 +871,33 @@ int tkl_config_run_except(ConfigFile *cf, ConfigEntry *ce, int configtype)
 	if (!*bantypes)
 	{
 		/* Default setting if no 'type' is specified: */
-		if (!strcmp(ce->ce_vardata, "ban"))
+		if (!strcmp(ce->value, "ban"))
 			strlcpy(bantypes, "kGzZs", sizeof(bantypes));
-		else if (!strcmp(ce->ce_vardata, "throttle"))
+		else if (!strcmp(ce->value, "throttle"))
 			strlcpy(bantypes, "c", sizeof(bantypes));
-		else if (!strcmp(ce->ce_vardata, "blacklist"))
+		else if (!strcmp(ce->value, "blacklist"))
 			strlcpy(bantypes, "b", sizeof(bantypes));
-		else if (!strcmp(ce->ce_vardata, "spamfilter"))
+		else if (!strcmp(ce->value, "spamfilter"))
 			strlcpy(bantypes, "f", sizeof(bantypes));
 		else
 			abort(); /* someone can't code */
 	}
 
 	/* Now walk through all mask entries */
-	for (cep = ce->ce_entries; cep; cep = cep->ce_next)
+	for (cep = ce->items; cep; cep = cep->next)
 	{
-		if (!strcmp(cep->ce_varname, "mask"))
+		if (!strcmp(cep->name, "mask"))
 		{
-			if (cep->ce_entries)
+			if (cep->items)
 			{
 				/* mask { *@1.1.1.1; *@2.2.2.2; *@3.3.3.3; }; */
-				for (cepp = cep->ce_entries; cepp; cepp = cepp->ce_next)
-					config_create_tkl_except(cepp->ce_varname, bantypes);
+				for (cepp = cep->items; cepp; cepp = cepp->next)
+					config_create_tkl_except(cepp->name, bantypes);
 			} else
-			if (cep->ce_vardata)
+			if (cep->value)
 			{
 				/* mask *@1.1.1.1; */
-				config_create_tkl_except(cep->ce_vardata, bantypes);
+				config_create_tkl_except(cep->value, bantypes);
 			}
 		}
 	}
@@ -923,12 +913,12 @@ int tkl_config_test_set(ConfigFile *cf, ConfigEntry *ce, int configtype, int *er
 	if (configtype != CONFIG_SET)
 		return 0;
 
-	if (!strcmp(ce->ce_varname, "max-stats-matches"))
+	if (!strcmp(ce->name, "max-stats-matches"))
 	{
-		if (!ce->ce_vardata)
+		if (!ce->value)
 		{
 			config_error("%s:%i: set::max-stats-matches: no value specified",
-				ce->ce_fileptr->cf_filename, ce->ce_varlinenum);
+				ce->file->filename, ce->line_number);
 			errors++;
 		}
 		// allow any other value, including 0 and negative.
@@ -944,9 +934,9 @@ int tkl_config_run_set(ConfigFile *cf, ConfigEntry *ce, int configtype)
 	if (configtype != CONFIG_SET)
 		return 0;
 
-	if (!strcmp(ce->ce_varname, "max-stats-matches"))
+	if (!strcmp(ce->name, "max-stats-matches"))
 	{
-		max_stats_matches = atoi(ce->ce_vardata);
+		max_stats_matches = atoi(ce->value);
 		return 1;
 	}
 
@@ -982,7 +972,7 @@ CMD_FUNC(cmd_gline)
 
 	if (parc == 1)
 	{
-		char *parv[3];
+		const char *parv[3];
 		parv[0] = NULL;
 		parv[1] = "gline";
 		parv[2] = NULL;
@@ -1008,7 +998,7 @@ CMD_FUNC(cmd_gzline)
 
 	if (parc == 1)
 	{
-		char *parv[3];
+		const char *parv[3];
 		parv[0] = NULL;
 		parv[1] = "gline"; /* (there's no /STATS gzline, it's included in /STATS gline output) */
 		parv[2] = NULL;
@@ -1033,7 +1023,7 @@ CMD_FUNC(cmd_shun)
 
 	if (parc == 1)
 	{
-		char *parv[3];
+		const char *parv[3];
 		parv[0] = NULL;
 		parv[1] = "shun";
 		parv[2] = NULL;
@@ -1049,8 +1039,8 @@ CMD_FUNC(cmd_shun)
 CMD_FUNC(cmd_tempshun)
 {
 	Client *target;
-	char *comment = ((parc > 2) && !BadPtr(parv[2])) ? parv[2] : "no reason";
-	char *name;
+	const char *comment = ((parc > 2) && !BadPtr(parv[2])) ? parv[2] : "no reason";
+	const char *name;
 	int remove = 0;
 
 	if (MyUser(client) && (!ValidatePermissionsForPath("server-ban:shun:temporary",client,NULL,NULL,NULL)))
@@ -1072,7 +1062,7 @@ CMD_FUNC(cmd_tempshun)
 	} else
 		name = parv[1];
 
-	target = find_person(name, NULL);
+	target = find_user(name, NULL);
 	if (!target)
 	{
 		sendnumeric(client, ERR_NOSUCHNICK, name);
@@ -1095,10 +1085,10 @@ CMD_FUNC(cmd_tempshun)
 			} else
 			{
 				SetShunned(target);
-				ircsnprintf(buf, sizeof(buf), "Temporary shun added on user %s (%s@%s) by %s [%s]",
-					target->name, target->user->username, target->user->realhost,
-					client->name, comment);
-				sendto_snomask_global(SNO_TKL, "%s", buf);
+				unreal_log(ULOG_INFO, "tkl", "TKL_ADD_TEMPSHUN", client,
+					   "Temporary shun added on user $target.details [reason: $shun_reason] [by: $client]",
+					   log_data_string("shun_reason", comment),
+					   log_data_client("target", target));
 			}
 		} else {
 			if (!IsShunned(target))
@@ -1106,10 +1096,9 @@ CMD_FUNC(cmd_tempshun)
 				sendnotice(client, "User '%s' is not shunned", target->name);
 			} else {
 				ClearShunned(target);
-				ircsnprintf(buf, sizeof(buf), "Removed temporary shun on user %s (%s@%s) by %s",
-					target->name, target->user->username, target->user->realhost,
-					client->name);
-				sendto_snomask_global(SNO_TKL, "%s", buf);
+				unreal_log(ULOG_INFO, "tkl", "TKL_DEL_TEMPSHUN", client,
+					   "Temporary shun removed from user $target.details [by: $client]",
+					   log_data_client("target", target));
 			}
 		}
 	}
@@ -1130,7 +1119,7 @@ CMD_FUNC(cmd_kline)
 
 	if (parc == 1)
 	{
-		char *parv[3];
+		const char *parv[3];
 		parv[0] = NULL;
 		parv[1] = "kline";
 		parv[2] = NULL;
@@ -1184,7 +1173,7 @@ void tkl_general_stats(Client *client)
 
 /** ZLINE - Kill a user as soon as it tries to connect to the server.
  * This happens before any DNS/ident lookups have been done and
- * before any data has been processed (including no SSL/TLS handshake, etc.)
+ * before any data has been processed (including no TLS handshake, etc.)
  */
 CMD_FUNC(cmd_zline)
 {
@@ -1199,7 +1188,7 @@ CMD_FUNC(cmd_zline)
 
 	if (parc == 1)
 	{
-		char *parv[3];
+		const char *parv[3];
 		parv[0] = NULL;
 		parv[1] = "kline"; /* (there's no /STATS zline, it's included in /STATS kline output) */
 		parv[2] = NULL;
@@ -1276,22 +1265,142 @@ static int xline_exists(char *type, char *usermask, char *hostmask)
 	return find_tkl_serverban(tpe, umask, hostmask, softban) ? 1 : 0;
 }
 
+/** Parse an extended server ban such as ~S:aabbccddetc..
+ * Used for both syntax checking and to split it into userbuf/hostbuf for TKL protocol.
+ * @param mask_in	The input mask (eg: ~S:aabbccddetc)
+ * @param client	Client doing the request (used to send errors), can be NULL.
+ * @param error		Pointer to set to the error buffer (must be set!)
+ * @param skip_checking	Set this to 1 if coming from a remote user/server to skip the .is_ok() check.
+ *                      Note that a .conv_param() call can still fail.
+ * @param buf1		Buffer to store the extban starter in (eg "~S:") -- can be NULL if you don't need it
+ * @param buf1len	Length of buf1
+ * @param buf2		Buffer to store the extban remainder in (eg "aabbccddetc") -- can be NULL if you don't need it
+ * @param buf2len	Length of buf2
+ * @returns 1 if the server ban is acceptable. The ban will then be stored in buf1/buf2 (unless those
+ *            were set to NULL by the caller). On failure we return 0 and 'error' is set appropriately.
+ */
+int parse_extended_server_ban(const char *mask_in, Client *client, char **error, int skip_checking, char *buf1, size_t buf1len, char *buf2, size_t buf2len)
+{
+	const char *nextbanstr = NULL;
+	Extban *extban;
+	const char *str;
+	char *p;
+	BanContext *b = NULL;
+	char    mask[USERLEN + NICKLEN + HOSTLEN + 32]; // same as extban_conv_param_nuh_or_extban()
+	char newmask[USERLEN + NICKLEN + HOSTLEN + 32];
+	char soft_ban = 0;
+
+	*error = NULL;
+	if (buf1 && buf2)
+		*buf1 = *buf2 = '\0';
+
+	/* Work on a copy */
+	if (*mask_in == '%')
+	{
+		strlcpy(mask, mask_in+1, sizeof(mask));
+		soft_ban = 1;
+	} else {
+		strlcpy(mask, mask_in, sizeof(mask));
+	}
+
+	extban = findmod_by_bantype(mask, &nextbanstr);
+	if (!extban || !(extban->options & EXTBOPT_TKL))
+	{
+		*error = "Invalid or unsupported extended server ban requested. Valid types are for example ~a, ~r, ~S.";
+		goto fail_parse_extended_server_ban;
+	}
+
+	b = safe_alloc(sizeof(BanContext));
+	b->client = client;
+	b->banstr = nextbanstr;
+	b->is_ok_check = EXBCHK_PARAM;
+	b->what = MODE_ADD;
+	b->ban_type = EXBTYPE_TKL;
+
+	/* Run .is_ok() for the extban. This check is skipped if coming from a remote user/server */
+	if (skip_checking == 0)
+	{
+		if (extban->is_ok && !extban->is_ok(b))
+		{
+			*error = "Invalid extended server ban";
+			goto fail_parse_extended_server_ban;
+		}
+	}
+
+	b->banstr = nextbanstr;
+	str = extban->conv_param(b, extban);
+	if (!str)
+	{
+		*error = "Invalid extended server ban";
+		goto fail_parse_extended_server_ban;
+	}
+	str = prefix_with_extban(str, b, extban, newmask, sizeof(newmask));
+	if (str == NULL)
+	{
+		*error = "Unexpected error (1)";
+		goto fail_parse_extended_server_ban;
+	}
+
+	p = strchr(newmask, ':');
+	if (!p)
+	{
+		*error = "Unexpected error (2)";
+		goto fail_parse_extended_server_ban;
+	}
+
+	if (p[1] == ':')
+	{
+		*error = "For technical reasons you cannot use a double : at the beginning of an extended server ban (eg ~a::xyz)";
+		goto fail_parse_extended_server_ban;
+	}
+
+	if (!p[1])
+	{
+		*error = "Empty / too short extended server ban";
+		goto fail_parse_extended_server_ban;
+	}
+
+	/* Now convert the result into two buffers for TKL protocol usage */
+	if (buf1 && buf2)
+	{
+		char save;
+		p++;
+		save = *p;
+		*p = '\0';
+		/* First buffer is eg ~S: or %~S: */
+		snprintf(buf1, buf1len, "%s%s",
+		         soft_ban ? "%" : "",
+		         newmask);
+		*p = save;
+		strlcpy(buf2, p, buf2len); /* eg 1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef */
+	}
+	safe_free(b);
+	return 1;
+
+fail_parse_extended_server_ban:
+	safe_free(b);
+	return 0;
+}
+
+
 /** Intermediate layer between user functions such as KLINE/GLINE
  * and the TKL layer (cmd_tkl).
  * This allows us doing some syntax checking and other helpful
  * things that are the same for many types of *LINES.
  */
-void cmd_tkl_line(Client *client, int parc, char *parv[], char *type)
+void cmd_tkl_line(Client *client, int parc, const char *parv[], char *type)
 {
 	time_t secs;
-	int whattodo = 0;	/* 0 = add  1 = del */
+	int add = 1;
 	time_t i;
 	Client *acptr = NULL;
-	char *mask = NULL;
+	char maskbuf[BUFSIZE];
+	char *mask;
 	char mo[64], mo2[64];
+	char mask1buf[BUFSIZE];
 	char mask2buf[BUFSIZE];
 	char *p, *usermask, *hostmask;
-	char *tkllayer[10] = {
+	const char *tkllayer[10] = {
 		me.name,		/*0  server.name */
 		NULL,			/*1  +|- */
 		NULL,			/*2  G   */
@@ -1308,15 +1417,16 @@ void cmd_tkl_line(Client *client, int parc, char *parv[], char *type)
 	if ((parc == 1) || BadPtr(parv[1]))
 		return; /* shouldn't happen */
 
-	mask = parv[1];
+	strlcpy(maskbuf, parv[1], sizeof(maskbuf));
+	mask = maskbuf;
 	if (*mask == '-')
 	{
-		whattodo = 1;
+		add = 0;
 		mask++;
 	}
 	else if (*mask == '+')
 	{
-		whattodo = 0;
+		add = 1;
 		mask++;
 	}
 
@@ -1345,57 +1455,42 @@ void cmd_tkl_line(Client *client, int parc, char *parv[], char *type)
 	}
 
 	/* Check if it's an extended server ban */
-	if (is_extended_ban(mask))
+	if (is_extended_server_ban(mask))
 	{
-		if (whattodo == 0)
-		{
-			/* Add */
-			char *str;
-			Extban *extban;
-			extban = findmod_by_bantype(mask[1]);
-			if (!extban || !(extban->options & EXTBOPT_TKL))
-			{
-				sendnotice(client, "Invalid or unsupported extended server ban requested: %s", mask);
-				sendnotice(client, "Valid types are for example ~a, ~r, ~S");
-				return;
-			}
-			if (extban->is_ok && !extban->is_ok(client, NULL, mask, EXBCHK_PARAM, MODE_ADD, EXBTYPE_TKL))
-				return; /* rejected */
-			str = extban->conv_param(mask);
-			if (!str || (strlen(str) <= 4))
-				return; /* rejected */
-			strlcpy(mask2buf, str+3, sizeof(mask2buf));
-			mask[3] = '\0';
-			usermask = mask; /* eg ~S: */
-			hostmask = mask2buf;
+		char *err;
 
-			if (((*type == 'z') || (*type == 'Z')))
+		if (!parse_extended_server_ban(mask, client, &err, 0, mask1buf, sizeof(mask1buf), mask2buf, sizeof(mask2buf)))
+		{
+			/* If adding, reject it */
+			if (add)
 			{
-				sendnotice(client, "ERROR: (g)zlines must be placed at *@\037IPMASK\037. "
-				                   "Extended server bans don't work here because (g)zlines are processed"
-				                   "BEFORE dns and ident lookups are done and before reading any client data. "
-				                   "If you want to use extended server bans then use a KLINE/GLINE instead.");
+				sendnotice(client, "ERROR: %s", err);
 				return;
+			} else
+			{
+				/* Always allow any removal attempt... */
+				char *p;
+				char save;
+				p = strchr(mask, ':');
+				p++;
+				save = *p;
+				*p = '\0';
+				strlcpy(mask1buf, mask, sizeof(mask1buf));
+				*p = save;
+				strlcpy(mask2buf, p, sizeof(mask2buf));
+				/* fallthrough */
 			}
-		} else {
-			/* Delete: allow any attempt */
-			strlcpy(mask2buf, mask+3, sizeof(mask2buf));
-			mask[3] = '\0';
-			usermask = mask; /* eg ~S: */
-			hostmask = mask2buf;
 		}
-		/* Make sure we don't screw up S2S traffic ;) */
-		if (*hostmask == ':')
+		if (add && ((*type == 'z') || (*type == 'Z')))
 		{
-			sendnotice(client, "[error] For technical reasons you cannot use double :: at the beginning "
-					   "of an extended server ban (eg ~a::xyz). You probably don't want to do this either.");
+			sendnotice(client, "ERROR: (g)zlines must be placed at *@\037IPMASK\037. "
+					   "Extended server bans don't work here because (g)zlines are processed"
+					   "BEFORE dns and ident lookups are done and before reading any client data. "
+					   "If you want to use extended server bans then use a KLINE/GLINE instead.");
 			return;
 		}
-		if (!*hostmask)
-		{
-			sendnotice(client, "[error] Empty hostmask encountered, eg -~S:");
-			return;
-		}
+		usermask = mask1buf; /* eg ~S: */
+		hostmask = mask2buf; /* eg 1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef */
 	} else
 	{
 		/* Check if it's a hostmask and legal .. */
@@ -1420,7 +1515,7 @@ void cmd_tkl_line(Client *client, int parc, char *parv[], char *type)
 				sendnotice(client, "[error] For technical reasons you cannot start the host with a ':', sorry");
 				return;
 			}
-			if (((*type == 'z') || (*type == 'Z')) && !whattodo)
+			if (add && ((*type == 'z') || (*type == 'Z')))
 			{
 				/* It's a (G)ZLINE, make sure the user isn't specyfing a HOST.
 				 * Just a warning in 3.2.3, but an error in 3.2.4.
@@ -1446,12 +1541,12 @@ void cmd_tkl_line(Client *client, int parc, char *parv[], char *type)
 		else
 		{
 			/* It's seemingly a nick .. let's see if we can find the user */
-			if ((acptr = find_person(mask, NULL)))
+			if ((acptr = find_user(mask, NULL)))
 			{
 				BanAction action = BAN_ACT_KLINE; // just a dummy default
 				if ((*type == 'z') || (*type == 'Z'))
 					action = BAN_ACT_ZLINE; // to indicate zline (no hostname, no dns, etc)
-				ban_target_to_tkl_layer(iConf.manual_ban_target, action, acptr, &usermask, &hostmask);
+				ban_target_to_tkl_layer(iConf.manual_ban_target, action, acptr, (const char **)&usermask, (const char **)&hostmask);
 			}
 			else
 			{
@@ -1461,7 +1556,7 @@ void cmd_tkl_line(Client *client, int parc, char *parv[], char *type)
 		}
 	}
 
-	if (!whattodo && ban_too_broad(usermask, hostmask))
+	if (add && ban_too_broad(usermask, hostmask))
 	{
 		sendnotice(client, "*** [error] Too broad mask");
 		return;
@@ -1469,7 +1564,7 @@ void cmd_tkl_line(Client *client, int parc, char *parv[], char *type)
 
 	secs = 0;
 
-	if (whattodo == 0 && (parc > 3))
+	if (add && (parc > 3))
 	{
 		secs = config_checkval(parv[2], CFG_TIME);
 		if (secs < 0)
@@ -1478,12 +1573,12 @@ void cmd_tkl_line(Client *client, int parc, char *parv[], char *type)
 			return;
 		}
 	}
-	tkllayer[1] = whattodo == 0 ? "+" : "-";
+	tkllayer[1] = add ? "+" : "-";
 	tkllayer[2] = type;
 	tkllayer[3] = usermask;
 	tkllayer[4] = hostmask;
 	tkllayer[5] = make_nick_user_host(client->name, client->user->username, GetHost(client));
-	if (whattodo == 0)
+	if (add)
 	{
 		if (secs == 0)
 		{
@@ -1557,7 +1652,7 @@ void eline_syntax(Client *client)
  * exception to be placed on *@ip rather than
  * user@host or *@host. For eg zlines.
  */
-TKLTypeTable *eline_type_requires_ip(char *bantypes)
+TKLTypeTable *eline_type_requires_ip(const char *bantypes)
 {
 	int i;
 
@@ -1568,9 +1663,9 @@ TKLTypeTable *eline_type_requires_ip(char *bantypes)
 }
 
 /** Checks a string to see if it contains invalid ban exception types */
-int contains_invalid_server_ban_exception_type(char *str, char *c)
+int contains_invalid_server_ban_exception_type(const char *str, char *c)
 {
-	char *p;
+	const char *p;
 	for (p = str; *p; p++)
 	{
 		if (!tkl_banexception_chartotype(*p))
@@ -1589,9 +1684,12 @@ CMD_FUNC(cmd_eline)
 	Client *acptr = NULL;
 	char *mask = NULL;
 	char mo[64], mo2[64];
+	char maskbuf[BUFSIZE];
+	char mask1buf[BUFSIZE];
 	char mask2buf[BUFSIZE];
-	char *p, *usermask, *hostmask, *bantypes=NULL, *reason=NULL;
-	char *tkllayer[11] = {
+	const char *p, *bantypes=NULL, *reason=NULL;
+	char *usermask, *hostmask;
+	const char *tkllayer[11] = {
 		me.name,		/*0  server.name */
 		NULL,			/*1  +|- */
 		NULL,			/*2  E   */
@@ -1625,7 +1723,8 @@ CMD_FUNC(cmd_eline)
 		return;
 	}
 
-	mask = parv[1];
+	strlcpy(maskbuf, parv[1], sizeof(maskbuf));
+	mask = maskbuf;
 	if (*mask == '-')
 	{
 		add = 0;
@@ -1665,55 +1764,40 @@ CMD_FUNC(cmd_eline)
 		return;
 
 	/* Check if it's an extended server ban */
-	if (is_extended_ban(mask))
+	if (is_extended_server_ban(mask))
 	{
-		if (add)
+		char *err;
+		if (!parse_extended_server_ban(mask, client, &err, 0, mask1buf, sizeof(mask1buf), mask2buf, sizeof(mask2buf)))
 		{
-			/* Add */
-			char *str;
-			Extban *extban;
-			extban = findmod_by_bantype(mask[1]);
-			if (!extban || !(extban->options & EXTBOPT_TKL))
+			/* If adding, reject it */
+			if (add)
 			{
-				sendnotice(client, "Invalid or unsupported extended server ban requested: %s", mask);
-				sendnotice(client, "Valid types are for example ~a, ~r, ~S");
+				sendnotice(client, "ERROR: %s", err);
 				return;
-			}
-			if (extban->is_ok && !extban->is_ok(client, NULL, mask, EXBCHK_PARAM, MODE_ADD, EXBTYPE_TKL))
-				return; /* rejected */
-			str = extban->conv_param(mask);
-			if (!str || (strlen(str) <= 4))
-				return; /* rejected */
-			strlcpy(mask2buf, str+3, sizeof(mask2buf));
-			mask[3] = '\0';
-			usermask = mask; /* eg ~S: */
-			hostmask = mask2buf;
-			if ((t = eline_type_requires_ip(bantypes)))
+			} else
 			{
-				sendnotice(client, "ERROR: Ban exception with type '%c' does not work on extended server bans. "
-				                   "This is because checking for %s takes places BEFORE "
-				                   "extended bans can be checked.", t->letter, t->log_name);
-				return;
+				/* Always allow any removal attempt... */
+				char *p;
+				char save;
+				p = strchr(mask, ':');
+				p++;
+				save = *p;
+				*p = '\0';
+				strlcpy(mask1buf, mask, sizeof(mask1buf));
+				*p = save;
+				strlcpy(mask2buf, p, sizeof(mask2buf));
+				/* fallthrough */
 			}
-		} else {
-			/* Delete: allow any attempt */
-			strlcpy(mask2buf, mask+3, sizeof(mask2buf));
-			mask[3] = '\0';
-			usermask = mask; /* eg ~S: */
-			hostmask = mask2buf;
 		}
-		/* Make sure we don't screw up S2S traffic ;) */
-		if (*hostmask == ':')
+		if (add && (t = eline_type_requires_ip(bantypes)))
 		{
-			sendnotice(client, "[error] For technical reasons you cannot use double :: at the beginning "
-					   "of an extended server ban (eg ~a::xyz). You probably don't want to do this either.");
+			sendnotice(client, "ERROR: Ban exception with type '%c' does not work on extended server bans. "
+					   "This is because checking for %s takes places BEFORE "
+					   "extended bans can be checked.", t->letter, t->log_name);
 			return;
 		}
-		if (!*hostmask)
-		{
-			sendnotice(client, "[error] Empty hostmask encountered, eg -~S:");
-			return;
-		}
+		usermask = mask1buf; /* eg ~S: */
+		hostmask = mask2buf; /* eg 1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef */
 	} else
 	{
 		/* Check if it's a hostmask and legal .. */
@@ -1769,12 +1853,12 @@ CMD_FUNC(cmd_eline)
 		else
 		{
 			/* It's seemingly a nick .. let's see if we can find the user */
-			if ((acptr = find_person(mask, NULL)))
+			if ((acptr = find_user(mask, NULL)))
 			{
 				BanAction action = BAN_ACT_KLINE; // just a dummy default
 				if (add && eline_type_requires_ip(bantypes))
 					action = BAN_ACT_ZLINE; // to indicate zline (no hostname, no dns, etc)
-				ban_target_to_tkl_layer(iConf.manual_ban_target, action, acptr, &usermask, &hostmask);
+				ban_target_to_tkl_layer(iConf.manual_ban_target, action, acptr, (const char **)&usermask, (const char **)&hostmask);
 			}
 			else
 			{
@@ -1844,7 +1928,7 @@ void spamfilter_usage(Client *client)
 }
 
 /** Helper function for cmd_spamfilter, explaining usage has changed. */
-void spamfilter_new_usage(Client *client, char *parv[])
+void spamfilter_new_usage(Client *client, const char *parv[])
 {
 	sendnotice(client, "Unknown match-type '%s'. Must be one of: -regex (new fast PCRE regexes) or "
 	                 "-simple (simple text with ? and * wildcards)",
@@ -1857,13 +1941,13 @@ void spamfilter_new_usage(Client *client, char *parv[])
 }
 
 /** Delete a spamfilter by ID (the ID can be obtained via '/SPAMFILTER del' */
-void spamfilter_del_by_id(Client *client, char *id)
+void spamfilter_del_by_id(Client *client, const char *id)
 {
 	int index;
 	TKL *tk;
 	int found = 0;
 	char mo[32], mo2[32];
-	char *tkllayer[13] = {
+	const char *tkllayer[13] = {
 		me.name,	/*  0 server.name */
 		NULL,		/*  1 +|- */
 		"F",		/*  2 F   */
@@ -1924,9 +2008,9 @@ void spamfilter_del_by_id(Client *client, char *id)
  */
 CMD_FUNC(cmd_spamfilter)
 {
-	int whattodo = 0;	/* 0 = add  1 = del */
+	int add = 1;
 	char mo[32], mo2[32];
-	char *tkllayer[13] = {
+	const char *tkllayer[13] = {
 		me.name,	/*  0 server.name */
 		NULL,		/*  1 +|- */
 		"F",		/*  2 F   */
@@ -1960,7 +2044,7 @@ CMD_FUNC(cmd_spamfilter)
 
 	if (parc == 1)
 	{
-		char *parv[3];
+		const char *parv[3];
 		parv[0] = NULL;
 		parv[1] = "spamfilter";
 		parv[2] = NULL;
@@ -1973,7 +2057,7 @@ CMD_FUNC(cmd_spamfilter)
 		if (!parv[2])
 		{
 			/* Show STATS with appropriate SPAMFILTER del command */
-			char *parv[5];
+			const char *parv[5];
 			parv[0] = NULL;
 			parv[1] = "spamfilter";
 			parv[2] = me.name;
@@ -2007,9 +2091,9 @@ CMD_FUNC(cmd_spamfilter)
 	 * parv[7]: regex
 	 */
 	if (!strcasecmp(parv[1], "add") || !strcmp(parv[1], "+"))
-		whattodo = 0;
+		add = 1;
 	else if (!strcasecmp(parv[1], "del") || !strcmp(parv[1], "-") || !strcasecmp(parv[1], "remove"))
-		whattodo = 1;
+		add = 0;
 	else
 	{
 		sendnotice(client, "1st parameter invalid");
@@ -2017,7 +2101,7 @@ CMD_FUNC(cmd_spamfilter)
 		return;
 	}
 
-	if ((whattodo == 0) && !strcasecmp(parv[2]+1, "posix"))
+	if (add && !strcasecmp(parv[2]+1, "posix"))
 	{
 		sendnotice(client, "ERROR: Spamfilter type 'posix' is DEPRECATED. You must use type 'regex' instead.");
 		sendnotice(client, "See https://www.unrealircd.org/docs/FAQ#spamfilter-posix-deprecated");
@@ -2050,7 +2134,7 @@ CMD_FUNC(cmd_spamfilter)
 	actionbuf[0] = banact_valtochar(action);
 	actionbuf[1] = '\0';
 
-	if (whattodo == 0)
+	if (add)
 	{
 		/* now check the regex / match field... */
 		m = unreal_create_match(match_type, parv[7], &err);
@@ -2062,7 +2146,7 @@ CMD_FUNC(cmd_spamfilter)
 		unreal_delete_match(m);
 	}
 
-	tkllayer[1] = whattodo ? "-" : "+";
+	tkllayer[1] = add ? "+" : "-";
 	tkllayer[3] = targetbuf;
 	tkllayer[4] = actionbuf;
 	tkllayer[5] = make_nick_user_host(client->name, client->user->username, GetHost(client));
@@ -2093,14 +2177,14 @@ CMD_FUNC(cmd_spamfilter)
 	 * on 50 characters for the rest... -- Syzop
 	 */
 	n = strlen(reason) + strlen(parv[7]) + strlen(tkllayer[6]) + (NICKLEN * 2) + 40;
-	if ((n > 500) && (whattodo == 0))
+	if ((n > 500) && add)
 	{
 		sendnotice(client, "Sorry, spamfilter too long. You'll either have to trim down the "
 		                 "reason or the regex (exceeded by %d bytes)", n - 500);
 		return;
 	}
 
-	if (whattodo == 0)
+	if (add)
 	{
 		ircsnprintf(mo2, sizeof(mo2), "%lld", (long long)TStime());
 		tkllayer[7] = mo2;
@@ -2123,8 +2207,9 @@ int _tkl_hash(unsigned int c)
 	else if ((c >= 'A') && (c <= 'Z'))
 		return c-'A';
 	else {
-		sendto_realops("[BUG] tkl_hash() called with out of range parameter (c = '%c') !!!", c);
-		ircd_log(LOG_ERROR, "[BUG] tkl_hash() called with out of range parameter (c = '%c') !!!", c);
+		unreal_log(ULOG_ERROR, "bug", "TKL_HASH_INVALID", NULL,
+		           "tkl_hash() called with out of range parameter (c = '$tkl_char') !!!",
+		           log_data_char("tkl_char", c));
 		return 0;
 	}
 #else
@@ -2141,8 +2226,9 @@ char _tkl_typetochar(int type)
 	for (i=0; tkl_types[i].config_name; i++)
 		if ((tkl_types[i].type == type) && tkl_types[i].tkltype)
 			return tkl_types[i].letter;
-	sendto_realops("[BUG]: tkl_typetochar(): unknown type 0x%x !!!", type);
-	ircd_log(LOG_ERROR, "[BUG] tkl_typetochar(): unknown type 0x%x !!!", type);
+	unreal_log(ULOG_ERROR, "bug", "TKL_TYPETOCHAR_INVALID", NULL,
+	           "tkl_typetochar(): unknown type $tkl_type!!!",
+	           log_data_integer("tkl_type", type));
 	return 0;
 }
 
@@ -2201,13 +2287,13 @@ char *tkl_banexception_configname_to_chars(char *name)
 char *_tkl_type_string(TKL *tkl)
 {
 	static char txt[256];
+	int i;
 
 	*txt = '\0';
 
 	if (TKLIsServerBan(tkl) && (tkl->ptr.serverban->subtype == TKL_SUBTYPE_SOFT))
 		strlcpy(txt, "Soft ", sizeof(txt));
 
-	int i;
 	for (i=0; tkl_types[i].config_name; i++)
 	{
 		if ((tkl_types[i].type == tkl->type) && tkl_types[i].tkltype)
@@ -2219,6 +2305,18 @@ char *_tkl_type_string(TKL *tkl)
 
 	strlcpy(txt, "Unknown *-Line", sizeof(txt));
 	return txt;
+}
+
+/** Short config string, lowercase alnum with possibly hyphens (eg: 'kline') */
+char *_tkl_type_config_string(TKL *tkl)
+{
+	int i;
+
+	for (i=0; tkl_types[i].config_name; i++)
+		if ((tkl_types[i].type == tkl->type) && tkl_types[i].tkltype)
+			return tkl_types[i].config_name;
+
+	return "???";
 }
 
 int tkl_banexception_matches_type(TKL *except, int bantype)
@@ -2632,18 +2730,10 @@ void _tkl_del_line(TKL *tkl)
 				}
 			if (!really_found)
 			{
-				ircd_log(LOG_ERROR, "[BUG] [Crash] tkl_del_line() for %s (%d): "
-				                    "NOT found in tklines_ip_hash[%d][%d], "
-				                    "this should never happen!",
-				                    tkl_type_string(tkl),
-				                    tkl->type,
-				                    index, index2);
-				if (TKLIsServerBan(tkl))
-				{
-					ircd_log(LOG_ERROR, "Additional information: the ban was on %s@%s",
-						tkl->ptr.serverban->usermask ? tkl->ptr.serverban->usermask : "<null>",
-						tkl->ptr.serverban->hostmask ? tkl->ptr.serverban->hostmask : "<null>");
-				}
+				unreal_log(ULOG_FATAL, "tkl", "BUG_TKL_DEL_LINE_HASH", NULL,
+				           "[BUG] [Crash] tkl_del_line() for $tkl (type: $tkl.type_string): "
+				           "NOT found in tklines_ip_hash. This should never happen!",
+				           log_data_tkl("tkl", tkl));
 				abort();
 			}
 #endif
@@ -2672,7 +2762,7 @@ static void add_default_exempts(void)
 	 * Currently the list is: gline, kline, gzline, zline, shun, blacklist,
 	 *                        connect-flood, handshake-data-flood.
 	 */
-	tkl_add_banexception(TKL_EXCEPTION, "*", "127.*", "localhost is always exempt",
+	tkl_add_banexception(TKL_EXCEPTION, "*", "127.0.0.0/8", "localhost is always exempt",
 	                     "-default-", 0, TStime(), 0, "GkZzsbcd", TKL_FLAG_CONFIG);
 }
 
@@ -2720,7 +2810,7 @@ void _tkl_check_local_remove_shun(TKL *tmp)
 					 */
 					keep_shun = 0;
 					for(tk = tklines[tkl_hash('s')]; tk && !keep_shun; tk = tk->next)
-						if(tk != tmp && match_simple(tk->ptr.serverban->usermask, cname))
+						if (tk != tmp && match_simple(tk->ptr.serverban->usermask, cname))
 						{
 							if ((*tk->ptr.serverban->hostmask >= '0') && (*tk->ptr.serverban->hostmask <= '9')
 							    /* the hostmask is an IP */
@@ -2732,7 +2822,7 @@ void _tkl_check_local_remove_shun(TKL *tmp)
 									keep_shun = 1;
 						}
 
-					if(!keep_shun)
+					if (!keep_shun)
 					{
 						ClearShunned(client);
 					}
@@ -2746,11 +2836,11 @@ void _tkl_check_local_remove_shun(TKL *tmp)
  * that can be used in oper notices like expiring kline, added kline, etc.
  */
 #define NO_SOFT_PREFIX	1
-char *tkl_uhost(TKL *tkl, char *buf, size_t buflen, int options)
+char *_tkl_uhost(TKL *tkl, char *buf, size_t buflen, int options)
 {
 	if (TKLIsServerBan(tkl))
 	{
-		if (is_extended_ban(tkl->ptr.serverban->usermask))
+		if (is_extended_server_ban(tkl->ptr.serverban->usermask))
 		{
 			ircsnprintf(buf, buflen, "%s%s%s",
 				(!(options & NO_SOFT_PREFIX) && (tkl->ptr.serverban->subtype & TKL_SUBTYPE_SOFT)) ? "%" : "",
@@ -2763,7 +2853,7 @@ char *tkl_uhost(TKL *tkl, char *buf, size_t buflen, int options)
 	} else
 	if (TKLIsBanException(tkl))
 	{
-		if (is_extended_ban(tkl->ptr.banexception->usermask))
+		if (is_extended_server_ban(tkl->ptr.banexception->usermask))
 		{
 			ircsnprintf(buf, buflen, "%s%s%s",
 				(!(options & NO_SOFT_PREFIX) && (tkl->ptr.banexception->subtype & TKL_SUBTYPE_SOFT)) ? "%" : "",
@@ -2784,60 +2874,33 @@ char *tkl_uhost(TKL *tkl, char *buf, size_t buflen, int options)
  */
 void tkl_expire_entry(TKL *tkl)
 {
-	char *whattype = tkl_type_string(tkl);
-
-	if (!tkl)
-		return;
-
-	if (tkl->type & TKL_SPAMF)
-	{
-		/* Impossible */
-	} else
 	if (TKLIsServerBan(tkl))
 	{
-		char uhostbuf[BUFSIZE];
-		char *uhost = tkl_uhost(tkl, uhostbuf, sizeof(uhostbuf), 0);
-		sendto_snomask(SNO_TKL,
-		    "*** Expiring %s (%s) made by %s (Reason: %s) set %lld seconds ago",
-		    whattype, uhost, tkl->set_by, tkl->ptr.serverban->reason,
-		    (long long)(TStime() - tkl->set_at));
-		ircd_log
-		    (LOG_TKL, "Expiring %s (%s) made by %s (Reason: %s) set %lld seconds ago",
-		    whattype, uhost, tkl->set_by, tkl->ptr.serverban->reason,
-		    (long long)(TStime() - tkl->set_at));
+		unreal_log(ULOG_INFO, "tkl", "TKL_EXPIRE", NULL,
+		           "Expiring $tkl.type_string '$tkl' [reason: $tkl.reason] [by: $tkl.set_by] [duration: $tkl.duration_string]",
+		           log_data_tkl("tkl", tkl));
 	}
 	else if (TKLIsNameBan(tkl))
 	{
 		if (!tkl->ptr.nameban->hold)
 		{
-			sendto_snomask(SNO_TKL,
-				"*** Expiring %s (%s) made by %s (Reason: %s) set %lld seconds ago",
-				whattype, tkl->ptr.nameban->name, tkl->set_by, tkl->ptr.nameban->reason,
-				(long long)(TStime() - tkl->set_at));
-			ircd_log
-				(LOG_TKL, "Expiring %s (%s) made by %s (Reason: %s) set %lld seconds ago",
-				whattype, tkl->ptr.nameban->name, tkl->set_by, tkl->ptr.nameban->reason,
-				(long long)(TStime() - tkl->set_at));
+			unreal_log(ULOG_INFO, "tkl", "TKL_EXPIRE", NULL,
+			           "Expiring $tkl.type_string '$tkl' [reason: $tkl.reason] [by: $tkl.set_by] [duration: $tkl.duration_string]",
+				   log_data_tkl("tkl", tkl));
 		}
 	}
 	else if (TKLIsBanException(tkl))
 	{
-		char uhostbuf[BUFSIZE];
-		char *uhost = tkl_uhost(tkl, uhostbuf, sizeof(uhostbuf), 0);
-		sendto_snomask(SNO_TKL,
-		    "*** Expiring %s (%s) for types '%s' made by %s (Reason: %s) set %lld seconds ago",
-		    whattype, uhost, tkl->ptr.banexception->bantypes, tkl->set_by, tkl->ptr.banexception->reason,
-		    (long long)(TStime() - tkl->set_at));
-		ircd_log
-		    (LOG_TKL, "Expiring %s (%s) for types '%s' made by %s (Reason: %s) set %lld seconds ago",
-		    whattype, uhost, tkl->ptr.banexception->bantypes, tkl->set_by, tkl->ptr.banexception->reason,
-		    (long long)(TStime() - tkl->set_at));
+		unreal_log(ULOG_INFO, "tkl", "TKL_EXPIRE", NULL,
+			   "Expiring $tkl.type_string '$tkl' [type: $tkl.exception_types] [reason: $tkl.reason] [by: $tkl.set_by] [duration: $tkl.duration_string]",
+			   log_data_tkl("tkl", tkl));
 	}
 
+	// FIXME: so.. this isn't logged? or what?
 	if (tkl->type & TKL_SHUN)
 		tkl_check_local_remove_shun(tkl);
 
-	RunHook2(HOOKTYPE_TKL_DEL, NULL, tkl);
+	RunHook(HOOKTYPE_TKL_DEL, NULL, tkl);
 	tkl_del_line(tkl);
 }
 
@@ -3032,7 +3095,7 @@ int _find_tkline_match(Client *client, int skip_soft)
 
 	/* User is banned... */
 
-	RunHookReturnInt2(HOOKTYPE_FIND_TKLINE_MATCH, client, tkl, !=99);
+	RunHookReturnInt(HOOKTYPE_FIND_TKLINE_MATCH, !=99, client, tkl);
 
 	if (tkl->type & TKL_KILL)
 	{
@@ -3161,45 +3224,13 @@ int spamfilter_check_users(TKL *tkl)
 				continue; /* No match */
 
 			/* matched! */
-			ircsnprintf(buf, sizeof(buf), "[Spamfilter] %s!%s@%s matches filter '%s': [%s: '%s'] [%s]",
-				client->name, client->user->username, client->user->realhost,
-				tkl->ptr.spamfilter->match->str,
-				"user", spamfilter_user,
-				unreal_decodespace(tkl->ptr.spamfilter->tkl_reason));
+			unreal_log(ULOG_INFO, "tkl", "SPAMFILTER_MATCH", client,
+			           "[Spamfilter] $client.details matches filter '$tkl': [cmd: $command: '$str'] [reason: $tkl.reason] [action: $tkl.ban_action]",
+				   log_data_tkl("tkl", tkl),
+				   log_data_string("command", "USER"),
+				   log_data_string("str", spamfilter_user));
 
-			sendto_snomask_global(SNO_SPAMF, "%s", buf);
-			ircd_log(LOG_SPAMFILTER, "%s", buf);
-			RunHook6(HOOKTYPE_LOCAL_SPAMFILTER, client, spamfilter_user, spamfilter_user, SPAMF_USER, NULL, tkl);
-			matches++;
-		}
-	}
-
-	return matches;
-}
-
-/** Similarly to previous, but match against all global users.
- * FUNCTION IS UNUSED !!
- */
-int spamfilter_check_all_users(Client *from, TKL *tkl)
-{
-	char spamfilter_user[NICKLEN + USERLEN + HOSTLEN + REALLEN + 64]; /* n!u@h:r */
-	int matches = 0;
-	Client *acptr;
-
-	list_for_each_entry(acptr, &client_list, client_node)
-	{
-		if (IsUser(acptr))
-		{
-			spamfilter_build_user_string(spamfilter_user, acptr->name, acptr);
-			if (!unreal_match(tkl->ptr.spamfilter->match, spamfilter_user))
-				continue; /* No match */
-
-			/* matched! */
-			sendnotice(from, "[Spamfilter] %s!%s@%s matches filter '%s': [%s: '%s'] [%s]",
-				acptr->name, acptr->user->username, acptr->user->realhost,
-				tkl->ptr.spamfilter->match->str,
-				"user", spamfilter_user,
-				unreal_decodespace(tkl->ptr.spamfilter->tkl_reason));
+			RunHook(HOOKTYPE_LOCAL_SPAMFILTER, client, spamfilter_user, spamfilter_user, SPAMF_USER, NULL, tkl);
 			matches++;
 		}
 	}
@@ -3317,15 +3348,15 @@ TKL *_find_tkline_match_zap(Client *client)
 
 typedef struct {
 	int flags;
-	char *mask;
-	char *reason;
-	char *set_by;
+	const char *mask;
+	const char *reason;
+	const char *set_by;
 } TKLFlag;
 
 /** Parse STATS tkl parameters.
  * TODO: I don't think this is documented anywhere? Or underdocumented at least.
  */
-static void parse_stats_params(char *para, TKLFlag *flag)
+static void parse_stats_params(const char *para, TKLFlag *flag)
 {
 	static char paratmp[512]; /* <- copy of para, because it gets fragged by strtok() */
 	char *flags, *tmp;
@@ -3381,7 +3412,7 @@ static void parse_stats_params(char *para, TKLFlag *flag)
 /** Does this TKL entry match the search terms?
  * This is a helper function for tkl_stats().
  */
-int tkl_stats_matcher(Client *client, int type, char *para, TKLFlag *tklflags, TKL *tkl)
+int tkl_stats_matcher(Client *client, int type, const char *para, TKLFlag *tklflags, TKL *tkl)
 {
 	/***** First, handle the selection ******/
 
@@ -3460,32 +3491,32 @@ int tkl_stats_matcher(Client *client, int type, char *para, TKLFlag *tklflags, T
 		if (tkl->type == (TKL_KILL | TKL_GLOBAL))
 		{
 			sendnumeric(client, RPL_STATSGLINE, 'G', uhost,
-				   (tkl->expire_at != 0) ? (tkl->expire_at - TStime()) : 0,
-				   (TStime() - tkl->set_at), tkl->set_by, tkl->ptr.serverban->reason);
+				   (tkl->expire_at != 0) ? (long long)(tkl->expire_at - TStime()) : 0,
+				   (long long)(TStime() - tkl->set_at), tkl->set_by, tkl->ptr.serverban->reason);
 		} else
 		if (tkl->type == (TKL_ZAP | TKL_GLOBAL))
 		{
 			sendnumeric(client, RPL_STATSGLINE, 'Z', uhost,
-				   (tkl->expire_at != 0) ? (tkl->expire_at - TStime()) : 0,
-				   (TStime() - tkl->set_at), tkl->set_by, tkl->ptr.serverban->reason);
+				   (tkl->expire_at != 0) ? (long long)(tkl->expire_at - TStime()) : 0,
+				   (long long)(TStime() - tkl->set_at), tkl->set_by, tkl->ptr.serverban->reason);
 		} else
 		if (tkl->type == (TKL_SHUN | TKL_GLOBAL))
 		{
 			sendnumeric(client, RPL_STATSGLINE, 's', uhost,
-				   (tkl->expire_at != 0) ? (tkl->expire_at - TStime()) : 0,
-				   (TStime() - tkl->set_at), tkl->set_by, tkl->ptr.serverban->reason);
+				   (tkl->expire_at != 0) ? (long long)(tkl->expire_at - TStime()) : 0,
+				   (long long)(TStime() - tkl->set_at), tkl->set_by, tkl->ptr.serverban->reason);
 		} else
 		if (tkl->type == (TKL_KILL))
 		{
 			sendnumeric(client, RPL_STATSGLINE, 'K', uhost,
-				   (tkl->expire_at != 0) ? (tkl->expire_at - TStime()) : 0,
-				   (TStime() - tkl->set_at), tkl->set_by, tkl->ptr.serverban->reason);
+				   (tkl->expire_at != 0) ? (long long)(tkl->expire_at - TStime()) : 0,
+				   (long long)(TStime() - tkl->set_at), tkl->set_by, tkl->ptr.serverban->reason);
 		} else
 		if (tkl->type == (TKL_ZAP))
 		{
 			sendnumeric(client, RPL_STATSGLINE, 'z', uhost,
-				   (tkl->expire_at != 0) ? (tkl->expire_at - TStime()) : 0,
-				   (TStime() - tkl->set_at), tkl->set_by, tkl->ptr.serverban->reason);
+				   (tkl->expire_at != 0) ? (long long)(tkl->expire_at - TStime()) : 0,
+				   (long long)(TStime() - tkl->set_at), tkl->set_by, tkl->ptr.serverban->reason);
 		}
 	} else
 	if (TKLIsSpamfilter(tkl))
@@ -3495,9 +3526,10 @@ int tkl_stats_matcher(Client *client, int type, char *para, TKLFlag *tklflags, T
 			unreal_match_method_valtostr(tkl->ptr.spamfilter->match->type),
 			spamfilter_target_inttostring(tkl->ptr.spamfilter->target),
 			banact_valtostring(tkl->ptr.spamfilter->action),
-			(tkl->expire_at != 0) ? (tkl->expire_at - TStime()) : 0,
-			TStime() - tkl->set_at,
-			tkl->ptr.spamfilter->tkl_duration, tkl->ptr.spamfilter->tkl_reason,
+			(tkl->expire_at != 0) ? (long long)(tkl->expire_at - TStime()) : 0,
+			(long long)(TStime() - tkl->set_at),
+			(long long)tkl->ptr.spamfilter->tkl_duration,
+			tkl->ptr.spamfilter->tkl_reason,
 			tkl->set_by,
 			tkl->ptr.spamfilter->match->str);
 		if (para && !strcasecmp(para, "del"))
@@ -3515,9 +3547,13 @@ int tkl_stats_matcher(Client *client, int type, char *para, TKLFlag *tklflags, T
 	} else
 	if (TKLIsNameBan(tkl))
 	{
-		sendnumeric(client, RPL_STATSQLINE, (tkl->type & TKL_GLOBAL) ? 'Q' : 'q',
-			tkl->ptr.nameban->name, (tkl->expire_at != 0) ? (tkl->expire_at - TStime()) : 0,
-			TStime() - tkl->set_at, tkl->set_by, tkl->ptr.nameban->reason);
+		sendnumeric(client, RPL_STATSQLINE,
+		            (tkl->type & TKL_GLOBAL) ? 'Q' : 'q',
+		            tkl->ptr.nameban->name,
+		            (tkl->expire_at != 0) ? (long long)(tkl->expire_at - TStime()) : 0,
+		            (long long)(TStime() - tkl->set_at),
+		            tkl->set_by,
+		            tkl->ptr.nameban->reason);
 	} else
 	if (TKLIsBanException(tkl))
 	{
@@ -3525,8 +3561,8 @@ int tkl_stats_matcher(Client *client, int type, char *para, TKLFlag *tklflags, T
 		char *uhost = tkl_uhost(tkl, uhostbuf, sizeof(uhostbuf), 0);
 		sendnumeric(client, RPL_STATSEXCEPTTKL, uhost,
 			   tkl->ptr.banexception->bantypes,
-			   (tkl->expire_at != 0) ? (tkl->expire_at - TStime()) : 0,
-			   (TStime() - tkl->set_at), tkl->set_by, tkl->ptr.banexception->reason);
+			   (tkl->expire_at != 0) ? (long long)(tkl->expire_at - TStime()) : 0,
+			   (long long)(TStime() - tkl->set_at), tkl->set_by, tkl->ptr.banexception->reason);
 	} else
 	{
 		/* That's weird, unknown TKL type */
@@ -3536,7 +3572,7 @@ int tkl_stats_matcher(Client *client, int type, char *para, TKLFlag *tklflags, T
 }
 
 /* TKL Stats. This is used by /STATS gline and all the others */
-void _tkl_stats(Client *client, int type, char *para, int *cnt)
+void _tkl_stats(Client *client, int type, const char *para, int *cnt)
 {
 	TKL *tk;
 	TKLFlag tklflags;
@@ -3661,8 +3697,10 @@ void tkl_sync_send_entry(int add, Client *sender, Client *to, TKL *tkl)
 			   tkl->ptr.banexception->reason);
 	} else
 	{
-		sendto_ops_and_log("[BUG] tkl_sync_send_entry() called, but unknown type %d/'%c'",
-			tkl->type, typ);
+		unreal_log(ULOG_FATAL, "tkl", "BUG_TKL_SYNC_SEND_ENTRY", NULL,
+			   "[BUG] tkl_sync_send_entry() called for '%s' but unknown type: $tkl.type_string ($tkl_type_int)",
+			   log_data_tkl("tkl", tkl),
+			   log_data_integer("tkl_type_int", typ));
 		abort();
 	}
 }
@@ -3809,138 +3847,81 @@ TKL *_find_tkl_spamfilter(int type, char *match_string, BanAction action, unsign
 /** Send a notice to opers about the TKL that is being added */
 void _sendnotice_tkl_add(TKL *tkl)
 {
-	char buf[512];
-	char set_at[128];
-	char expire_at[128];
-	char *tkl_type_str; /**< Eg: "K-Line" */
-
 	/* Don't show notices for temporary nick holds (issued by services) */
 	if (TKLIsNameBan(tkl) && tkl->ptr.nameban->hold)
 		return;
 
-	tkl_type_str = tkl_type_string(tkl);
-
-	*buf = *set_at = *expire_at = '\0';
-	short_date(tkl->set_at, set_at);
-	if (tkl->expire_at > 0)
-		short_date(tkl->expire_at, expire_at);
-
 	if (TKLIsServerBan(tkl))
 	{
-		char uhostbuf[BUFSIZE];
-		char *uhost = tkl_uhost(tkl, uhostbuf, sizeof(uhostbuf), 0);
-		if (tkl->expire_at != 0)
-		{
-			ircsnprintf(buf, sizeof(buf), "%s added for %s on %s GMT (from %s to expire at %s GMT: %s)",
-				tkl_type_str, uhost,
-				set_at, tkl->set_by, expire_at, tkl->ptr.serverban->reason);
-		} else {
-			ircsnprintf(buf, sizeof(buf), "Permanent %s added for %s on %s GMT (from %s: %s)",
-				tkl_type_str, uhost,
-				set_at, tkl->set_by, tkl->ptr.serverban->reason);
-		}
+		unreal_log(ULOG_INFO, "tkl", "TKL_ADD", NULL,
+			   "$tkl.type_string added: '$tkl' [reason: $tkl.reason] [by: $tkl.set_by] [duration: $tkl.duration_string]",
+			   log_data_tkl("tkl", tkl));
 	} else
 	if (TKLIsNameBan(tkl))
 	{
-		if (tkl->expire_at > 0)
-		{
-			ircsnprintf(buf, sizeof(buf), "%s added for %s on %s GMT (from %s to expire at %s GMT: %s)",
-				tkl_type_str, tkl->ptr.nameban->name, set_at, tkl->set_by, expire_at, tkl->ptr.nameban->reason);
-		} else {
-			ircsnprintf(buf, sizeof(buf), "Permanent %s added for %s on %s GMT (from %s: %s)",
-				tkl_type_str, tkl->ptr.nameban->name, set_at, tkl->set_by, tkl->ptr.nameban->reason);
-		}
+		unreal_log(ULOG_INFO, "tkl", "TKL_ADD", NULL,
+			   "$tkl.type_string added: '$tkl' [reason: $tkl.reason] [by: $tkl.set_by] [duration: $tkl.duration_string]",
+			   log_data_tkl("tkl", tkl));
 	} else
 	if (TKLIsSpamfilter(tkl))
 	{
-		/* Spamfilter */
-		ircsnprintf(buf, sizeof(buf),
-		            "Spamfilter added: '%s' [type: %s] [target: %s] [action: %s] [reason: %s] on %s GMT (from %s)",
-		            tkl->ptr.spamfilter->match->str,
-			    unreal_match_method_valtostr(tkl->ptr.spamfilter->match->type),
-		            spamfilter_target_inttostring(tkl->ptr.spamfilter->target),
-		            banact_valtostring(tkl->ptr.spamfilter->action),
-		            unreal_decodespace(tkl->ptr.spamfilter->tkl_reason),
-		            set_at,
-		            tkl->set_by);
+		unreal_log(ULOG_INFO, "tkl", "TKL_ADD", NULL,
+			   "Spamfilter added: '$tkl' [type: $tkl.match_type] [targets: $tkl.spamfilter_targets] "
+			   "[action: $tkl.ban_action] [reason: $tkl.reason] [by: $tkl.set_by]",
+			   log_data_tkl("tkl", tkl));
 	} else
 	if (TKLIsBanException(tkl))
 	{
-		char uhostbuf[BUFSIZE];
-		char *uhost = tkl_uhost(tkl, uhostbuf, sizeof(uhostbuf), 0);
-		if (tkl->expire_at != 0)
-		{
-			ircsnprintf(buf, sizeof(buf), "%s added for %s for types '%s' on %s GMT (from %s to expire at %s GMT: %s)",
-				tkl_type_str, uhost,
-				tkl->ptr.banexception->bantypes,
-				set_at, tkl->set_by, expire_at, tkl->ptr.banexception->reason);
-		} else {
-			ircsnprintf(buf, sizeof(buf), "Permanent %s added for %s for types '%s' on %s GMT (from %s: %s)",
-				tkl_type_str, uhost,
-				tkl->ptr.banexception->bantypes,
-				set_at, tkl->set_by, tkl->ptr.banexception->reason);
-		}
+		unreal_log(ULOG_INFO, "tkl", "TKL_ADD", NULL,
+			   "$tkl.type_string added: '$tkl' [types: $tkl.exception_types] [by: $tkl.set_by] [duration: $tkl.duration_string]",
+			   log_data_tkl("tkl", tkl));
 	} else
 	{
-		ircsnprintf(buf, sizeof(buf), "[BUG] %s added but type unhandled in sendnotice_tkl_add()!!!", tkl_type_str);
+		unreal_log(ULOG_ERROR, "tkl", "BUG_UNKNOWN_TKL", NULL,
+		           "[BUG] TKL added of unknown type, unhandled in sendnotice_tkl_add()!!!!");
 	}
-
-	sendto_snomask(SNO_TKL, "*** %s", buf);
-	ircd_log(LOG_TKL, "%s", buf);
 }
 
 /** Send a notice to opers about the TKL that is being deleted */
 void _sendnotice_tkl_del(char *removed_by, TKL *tkl)
 {
-	char buf[512];
-	char set_at[128];
-	char *tkl_type_str;
-
 	/* Don't show notices for temporary nick holds (issued by services) */
 	if (TKLIsNameBan(tkl) && tkl->ptr.nameban->hold)
 		return;
 
-	tkl_type_str = tkl_type_string(tkl); /* eg: "K-Line" */
-
-	*buf = *set_at = '\0';
-	short_date(tkl->set_at, set_at);
-
 	if (TKLIsServerBan(tkl))
 	{
-		char uhostbuf[BUFSIZE];
-		char *uhost = tkl_uhost(tkl, uhostbuf, sizeof(uhostbuf), 0);
-		ircsnprintf(buf, sizeof(buf),
-			       "%s removed %s %s (set at %s - reason: %s)",
-			       removed_by, tkl_type_str, uhost,
-			       set_at, tkl->ptr.serverban->reason);
+		unreal_log(ULOG_INFO, "tkl", "TKL_DEL", NULL,
+			   "$tkl.type_string removed: '$tkl' [reason: $tkl.reason] [by: $removed_by] [set at: $tkl.set_at_string]",
+			   log_data_tkl("tkl", tkl),
+			   log_data_string("removed_by", removed_by));
 	} else
 	if (TKLIsNameBan(tkl))
 	{
-		ircsnprintf(buf, sizeof(buf),
-			"%s removed %s %s (set at %s - reason: %s)",
-			removed_by, tkl_type_str, tkl->ptr.nameban->name, set_at, tkl->ptr.nameban->reason);
+		unreal_log(ULOG_INFO, "tkl", "TKL_DEL", NULL,
+			   "$tkl.type_string removed: '$tkl' [reason: $tkl.reason] [by: $removed_by] [set at: $tkl.set_at_string]",
+			   log_data_tkl("tkl", tkl),
+			   log_data_string("removed_by", removed_by));
 	} else
 	if (TKLIsSpamfilter(tkl))
 	{
-		ircsnprintf(buf, sizeof(buf),
-			"%s removed Spamfilter '%s' (set at %s)",
-			removed_by, tkl->ptr.spamfilter->match->str, set_at);
+		unreal_log(ULOG_INFO, "tkl", "TKL_DEL", NULL,
+			   "Spamfilter removed: '$tkl' [type: $tkl.match_type] [targets: $tkl.spamfilter_targets] "
+			   "[action: $tkl.ban_action] [reason: $tkl.reason] [by: $removed_by] [set at: $tkl.set_at_string]",
+			   log_data_tkl("tkl", tkl),
+			   log_data_string("removed_by", removed_by));
 	} else
 	if (TKLIsBanException(tkl))
 	{
-		char uhostbuf[BUFSIZE];
-		char *uhost = tkl_uhost(tkl, uhostbuf, sizeof(uhostbuf), 0);
-		ircsnprintf(buf, sizeof(buf),
-			       "%s removed exception on %s (set at %s - reason: %s)",
-			       removed_by, uhost,
-			       set_at, tkl->ptr.banexception->reason);
+		unreal_log(ULOG_INFO, "tkl", "TKL_DEL", NULL,
+			   "$tkl.type_string removed: '$tkl' [types: $tkl.exception_types] [by: $removed_by] [set at: $tkl.set_at_string]",
+			   log_data_tkl("tkl", tkl),
+			   log_data_string("removed_by", removed_by));
 	} else
 	{
-		ircsnprintf(buf, sizeof(buf), "[BUG] %s added but type unhandled in sendnotice_tkl_del()!!!!!", tkl_type_str);
+		unreal_log(ULOG_ERROR, "tkl", "BUG_UNKNOWN_TKL", NULL,
+		           "[BUG] TKL removed of unknown type, unhandled in sendnotice_tkl_del()!!!!");
 	}
-
-	sendto_snomask(SNO_TKL, "*** %s", buf);
-	ircd_log(LOG_TKL, "%s", buf);
 }
 
 /** Add a TKL using the TKL layer. See cmd_tkl for parv[] and protocol documentation. */
@@ -3949,7 +3930,7 @@ CMD_FUNC(cmd_tkl_add)
 	TKL *tkl;
 	int type;
 	time_t expire_at, set_at;
-	char *set_by;
+	const char *set_by;
 	char tkl_entry_exists = 0;
 
 	/* we rely on servers to be failsafe.. */
@@ -3977,14 +3958,18 @@ CMD_FUNC(cmd_tkl_add)
 	/* Validate set and expiry time */
 	if ((set_at < 0) || !short_date(set_at, NULL))
 	{
-		sendto_realops("Invalid TKL entry from %s, set-at time is out of range (%lld) -- not added. Clock on other server incorrect or bogus entry.",
-			client->name, (long long)set_at);
+		unreal_log(ULOG_WARNING, "tkl", "TKL_ADD_INVALID", client,
+			"Invalid TKL entry from $client: "
+			"The set-at time is out of range ($set_at). Clock on other server incorrect or bogus entry.",
+			log_data_integer("set_at", set_at));
 		return;
 	}
 	if ((expire_at < 0) || !short_date(expire_at, NULL))
 	{
-		sendto_realops("Invalid TKL entry from %s, expiry time is out of range (%lld) -- not added. Clock on other server incorrect or bogus entry.",
-			client->name, (long long)expire_at);
+		unreal_log(ULOG_WARNING, "tkl", "TKL_ADD_INVALID", client,
+			"Invalid TKL entry from $client: "
+			"The expire-at time is out of range ($expire_at). Clock on other server incorrect or bogus entry.",
+			log_data_integer("expire_at", expire_at));
 		return;
 	}
 
@@ -3996,9 +3981,9 @@ CMD_FUNC(cmd_tkl_add)
 	{
 		/* Validate server ban TKL fields */
 		int softban = 0;
-		char *usermask = parv[3];
-		char *hostmask = parv[4];
-		char *reason = parv[8];
+		const char *usermask = parv[3];
+		const char *hostmask = parv[4];
+		const char *reason = parv[8];
 
 		/* Some simple validation on usermask and hostmask:
 		 * may not contain an @. Yeah, some services or self-written
@@ -4006,9 +3991,11 @@ CMD_FUNC(cmd_tkl_add)
 		 */
 		if (strchr(usermask, '@') || strchr(hostmask, '@'))
 		{
-			sendto_realops("Ignoring TKL entry %s@%s from %s. "
-			               "Invalid usermask '%s' or hostmask '%s'.",
-			               usermask, hostmask, client->name, usermask, hostmask);
+			unreal_log(ULOG_WARNING, "tkl", "TKL_ADD_INVALID", client,
+				"Invalid TKL entry from $client: "
+				"Invalid user@host $usermask@$hostmask",
+				log_data_string("usermask", usermask),
+				log_data_string("hostmask", hostmask));
 			return;
 		}
 
@@ -4035,10 +4022,10 @@ CMD_FUNC(cmd_tkl_add)
 	{
 		/* Validate ban exception TKL fields */
 		int softban = 0;
-		char *usermask = parv[3];
-		char *hostmask = parv[4];
-		char *bantypes = parv[8];
-		char *reason;
+		const char *usermask = parv[3];
+		const char *hostmask = parv[4];
+		const char *bantypes = parv[8];
+		const char *reason;
 
 		if (parc < 10)
 			return;
@@ -4051,9 +4038,11 @@ CMD_FUNC(cmd_tkl_add)
 		 */
 		if (strchr(usermask, '@') || strchr(hostmask, '@'))
 		{
-			sendto_realops("Ignoring TKL exception entry %s@%s from %s. "
-			               "Invalid usermask '%s' or hostmask '%s'.",
-			               usermask, hostmask, client->name, usermask, hostmask);
+			unreal_log(ULOG_WARNING, "tkl", "TKL_ADD_INVALID", client,
+				"Invalid TKL entry from $client: "
+				"Invalid TKL except user@host $usermask@$hostmask",
+				log_data_string("usermask", usermask),
+				log_data_string("hostmask", hostmask));
 			return;
 		}
 
@@ -4083,8 +4072,8 @@ CMD_FUNC(cmd_tkl_add)
 	{
 		/* Validate name ban TKL fields */
 		int hold = 0;
-		char *name = parv[4];
-		char *reason = parv[8];
+		const char *name = parv[4];
+		const char *reason = parv[8];
 
 		if (*parv[3] == 'H')
 			hold = 1;
@@ -4102,10 +4091,10 @@ CMD_FUNC(cmd_tkl_add)
 	{
 		/* Validate spamfilter-specific TKL fields */
 		MatchType match_method;
-		char *match_string;
+		const char *match_string;
 		Match *m; /* compiled match_string */
 		time_t tkl_duration;
-		char *tkl_reason;
+		const char *tkl_reason;
 		BanAction action;
 		unsigned short target;
 		/* helper variables */
@@ -4113,38 +4102,42 @@ CMD_FUNC(cmd_tkl_add)
 
 		if (parc < 12)
 		{
-			sendto_realops("Ignoring spamfilter from %s. Running very old UnrealIRCd protocol (3.2.X?)", client->name);
+			unreal_log(ULOG_WARNING, "tkl", "TKL_ADD_INVALID", client,
+				"Invalid TKL entry from $client: "
+				"Spamfilter with too few parameters. Running very old UnrealIRCd protocol (3.2.X?)");
 			return;
 		}
 
 		match_string = parv[11];
 
-		if (!strcasecmp(parv[10], "posix"))
-		{
-			sendto_realops("Ignoring spamfilter from %s. Spamfilter is of type 'posix' (TRE) which "
-				       "is not supported in UnrealIRCd 5. Suggestion: upgrade the other server.",
-				       client->name);
-			return;
-		}
 		match_method = unreal_match_method_strtoval(parv[10]);
 		if (match_method == 0)
 		{
-			sendto_realops("Ignoring spamfilter '%s' from %s with unknown match type '%s'",
-				match_string, client->name, parv[10]);
+			unreal_log(ULOG_WARNING, "tkl", "TKL_ADD_INVALID", client,
+				"Invalid TKL entry from $client: "
+				"Spamfilter '$spamfilter_string' has unkown match-type '$spamfilter_type'",
+				log_data_string("spamfilter_string", match_string),
+				log_data_string("spamfilter_type", parv[10]));
 			return;
 		}
 
 		if (!(target = spamfilter_gettargets(parv[3], NULL)))
 		{
-			sendto_realops("Ignoring spamfilter '%s' from %s with unknown target type '%s'",
-				match_string, client->name, parv[3]);
+			unreal_log(ULOG_WARNING, "tkl", "TKL_ADD_INVALID", client,
+				"Invalid TKL entry from $client: "
+				"Spamfilter '$spamfilter_string' has unkown targets '$spamfilter_targets'",
+				log_data_string("spamfilter_string", match_string),
+				log_data_string("spamfilter_targets", parv[3]));
 			return;
 		}
 
 		if (!(action = banact_chartoval(*parv[4])))
 		{
-			sendto_realops("Ignoring spamfilter '%s' from %s with unknown action type '%s'",
-				match_string, client->name, parv[4]);
+			unreal_log(ULOG_WARNING, "tkl", "TKL_ADD_INVALID", client,
+				"Invalid TKL entry from $client: "
+				"Spamfilter '$spamfilter_string' has unkown action '$spamfilter_action'",
+				log_data_string("spamfilter_string", match_string),
+				log_data_string("spamfilter_action", parv[4]));
 			return;
 		}
 
@@ -4160,9 +4153,11 @@ CMD_FUNC(cmd_tkl_add)
 			m = unreal_create_match(match_method, match_string, &err);
 			if (!m)
 			{
-				sendto_realops("[TKL ERROR] ERROR: Trying to add a spamfilter which does not compile. "
-					       " ERROR='%s', Spamfilter='%s', from='%s'",
-					       err, match_string, client->name);
+				unreal_log(ULOG_WARNING, "tkl", "TKL_ADD_INVALID", client,
+					"Invalid TKL entry from $client: "
+					"Spamfilter '$spamfilter_string': regex does not compile: $spamfilter_regex_error",
+					log_data_string("spamfilter_string", match_string),
+					log_data_string("spamfilter_regex_error", err));
 				return;
 			}
 			tkl = tkl_add_spamfilter(type, target, action, m, set_by, expire_at, set_at,
@@ -4213,7 +4208,7 @@ CMD_FUNC(cmd_tkl_add)
 
 	/* Below this line we will only use 'tkl'. No parc/parv reading anymore. */
 
-	RunHook2(HOOKTYPE_TKL_ADD, client, tkl);
+	RunHook(HOOKTYPE_TKL_ADD, client, tkl);
 
 	sendnotice_tkl_add(tkl);
 
@@ -4233,7 +4228,7 @@ CMD_FUNC(cmd_tkl_del)
 {
 	TKL *tkl;
 	int type;
-	char *removed_by;
+	const char *removed_by;
 
 	if (!IsServer(client) && !IsMe(client))
 		return;
@@ -4249,8 +4244,8 @@ CMD_FUNC(cmd_tkl_del)
 
 	if (TKLIsServerBanType(type))
 	{
-		char *usermask = parv[3];
-		char *hostmask = parv[4];
+		const char *usermask = parv[3];
+		const char *hostmask = parv[4];
 		int softban = 0;
 
 		if (*usermask == '%')
@@ -4263,8 +4258,8 @@ CMD_FUNC(cmd_tkl_del)
 	}
 	else if (TKLIsBanExceptionType(type))
 	{
-		char *usermask = parv[3];
-		char *hostmask = parv[4];
+		const char *usermask = parv[3];
+		const char *hostmask = parv[4];
 		int softban = 0;
 		/* other parameters are ignored */
 
@@ -4279,7 +4274,7 @@ CMD_FUNC(cmd_tkl_del)
 	else if (TKLIsNameBanType(type))
 	{
 		int hold = 0;
-		char *name = parv[4];
+		const char *name = parv[4];
 
 		if (*parv[3] == 'H')
 			hold = 1;
@@ -4287,14 +4282,15 @@ CMD_FUNC(cmd_tkl_del)
 	}
 	else if (TKLIsSpamfilterType(type))
 	{
-		char *match_string;
+		const char *match_string;
 		unsigned short target;
 		BanAction action;
 
 		if (parc < 9)
 		{
-			sendto_realops("[BUG] cmd_tkl called with bogus spamfilter removal request [f/F], from=%s, parc=%d",
-				       client->name, parc);
+			unreal_log(ULOG_WARNING, "tkl", "TKL_DEL_INVALID", client,
+				"Invalid TKL deletion request from $client: "
+				"Spamfilter with too few parameters. Running very old UnrealIRCd protocol (3.2.X?)");
 			return; /* bogus */
 		}
 		if (parc >= 12)
@@ -4306,15 +4302,21 @@ CMD_FUNC(cmd_tkl_del)
 
 		if (!(target = spamfilter_gettargets(parv[3], NULL)))
 		{
-			sendto_realops("Ignoring spamfilter deletion request for '%s' from %s with unknown target type '%s'",
-				match_string, client->name, parv[3]);
+			unreal_log(ULOG_WARNING, "tkl", "TKL_DEL_INVALID", client,
+				"Invalid TKL deletion request from $client: "
+				"Spamfilter '$spamfilter_string' has unkown targets '$spamfilter_targets'",
+				log_data_string("spamfilter_string", match_string),
+				log_data_string("spamfilter_targets", parv[3]));
 			return;
 		}
 
 		if (!(action = banact_chartoval(*parv[4])))
 		{
-			sendto_realops("Ignoring spamfilter deletion request for '%s' from %s with unknown action type '%s'",
-				match_string, client->name, parv[4]);
+			unreal_log(ULOG_WARNING, "tkl", "TKL_DEL_INVALID", client,
+				"Invalid TKL deletion request from $client: "
+				"Spamfilter '$spamfilter_string' has unkown action '$spamfilter_action'",
+				log_data_string("spamfilter_string", match_string),
+				log_data_string("spamfilter_action", parv[4]));
 			return;
 		}
 		tkl = find_tkl_spamfilter(type, match_string, action, target);
@@ -4338,7 +4340,7 @@ CMD_FUNC(cmd_tkl_del)
 	if (type & TKL_SHUN)
 		tkl_check_local_remove_shun(tkl);
 
-	RunHook2(HOOKTYPE_TKL_DEL, client, tkl);
+	RunHook(HOOKTYPE_TKL_DEL, client, tkl);
 
 	if (type & TKL_GLOBAL)
 	{
@@ -4412,7 +4414,7 @@ CMD_FUNC(_cmd_tkl)
 }
 
 /** Configure the username/hostname TKL layer based on the BAN_TARGET_* configuration */
-void ban_target_to_tkl_layer(BanTarget ban_target, BanAction action, Client *client, char **tkl_username, char **tkl_hostname)
+void ban_target_to_tkl_layer(BanTarget ban_target, BanAction action, Client *client, const char **tkl_username, const char **tkl_hostname)
 {
 	static char username[USERLEN+1];
 	static char hostname[HOSTLEN+8];
@@ -4422,13 +4424,11 @@ void ban_target_to_tkl_layer(BanTarget ban_target, BanAction action, Client *cli
 
 	if (ban_target == BAN_TARGET_ACCOUNT)
 	{
-		if (client->user && client->user->svid &&
-		    strcmp(client->user->svid, "0") &&
-		    (*client->user->svid != ':'))
+		if (IsLoggedIn(client) && (*client->user->account != ':'))
 		{
 			/* Place a ban on ~a:Accountname */
 			strlcpy(username, "~a:", sizeof(username));
-			strlcpy(hostname, client->user->svid, sizeof(hostname));
+			strlcpy(hostname, client->user->account, sizeof(hostname));
 			*tkl_username = username;
 			*tkl_hostname = hostname;
 			return;
@@ -4437,7 +4437,7 @@ void ban_target_to_tkl_layer(BanTarget ban_target, BanAction action, Client *cli
 	} else
 	if (ban_target == BAN_TARGET_CERTFP)
 	{
-		char *fp = moddata_client_get(client, "certfp");
+		const char *fp = moddata_client_get(client, "certfp");
 		if (fp)
 		{
 			/* Place a ban on ~S:sha256sumofclientcertificate */
@@ -4453,7 +4453,7 @@ void ban_target_to_tkl_layer(BanTarget ban_target, BanAction action, Client *cli
 	/* Below we deal with the more common choices... */
 
 	/* First, set the username */
-	if (((ban_target == BAN_TARGET_USERIP) || (ban_target == BAN_TARGET_USERHOST)) && client->ident && strcmp(client->ident, "unknown"))
+	if (((ban_target == BAN_TARGET_USERIP) || (ban_target == BAN_TARGET_USERHOST)) && strcmp(client->ident, "unknown"))
 		strlcpy(username, client->ident, sizeof(username));
 	else
 		strlcpy(username, "*", sizeof(username));
@@ -4494,11 +4494,10 @@ int _place_host_ban(Client *client, BanAction action, char *reason, long duratio
 	{
 		case BAN_ACT_TEMPSHUN:
 			/* We simply mark this connection as shunned and do not add a ban record */
-			sendto_snomask(SNO_TKL, "Temporary shun added at user %s (%s@%s) [%s]",
-				client->name,
-				client->user ? client->user->username : "unknown",
-				client->user ? client->user->realhost : GetIP(client),
-				reason);
+			unreal_log(ULOG_INFO, "tkl", "TKL_ADD_TEMPSHUN", &me,
+				   "Temporary shun added on user $target.details [reason: $shun_reason] [by: $client]",
+				   log_data_string("shun_reason", reason),
+				   log_data_client("target", client));
 			SetShunned(client);
 			return 1;
 		case BAN_ACT_GZLINE:
@@ -4511,7 +4510,7 @@ int _place_host_ban(Client *client, BanAction action, char *reason, long duratio
 		case BAN_ACT_SOFT_SHUN:
 		{
 			char ip[128], user[USERLEN+3], mo[100], mo2[100];
-			char *tkllayer[9] = {
+			const char *tkllayer[9] = {
 				me.name,	/*0  server.name */
 				"+",		/*1  +|- */
 				"?",		/*2  type */
@@ -4554,7 +4553,7 @@ int _place_host_ban(Client *client, BanAction action, char *reason, long duratio
 			tkllayer[7] = mo2;
 			tkllayer[8] = reason;
 			cmd_tkl(&me, NULL, 9, tkllayer);
-			RunHookReturnInt4(HOOKTYPE_PLACE_HOST_BAN, client, action, reason, duration, !=99);
+			RunHookReturnInt(HOOKTYPE_PLACE_HOST_BAN, !=99, client, action, reason, duration);
 			if ((action == BAN_ACT_SHUN) || (action == BAN_ACT_SOFT_SHUN))
 			{
 				find_shun(client);
@@ -4565,7 +4564,7 @@ int _place_host_ban(Client *client, BanAction action, char *reason, long duratio
 		case BAN_ACT_SOFT_KILL:
 		case BAN_ACT_KILL:
 		default:
-			RunHookReturnInt4(HOOKTYPE_PLACE_HOST_BAN, client, action, reason, duration, !=99);
+			RunHookReturnInt(HOOKTYPE_PLACE_HOST_BAN, !=99, client, action, reason, duration);
 			exit_client(client, NULL, reason);
 			return 1;
 	}
@@ -4618,7 +4617,7 @@ TKL *choose_winning_spamfilter(TKL *one, TKL *two)
 /** Checks if 'target' is on the spamfilter exception list.
  * RETURNS 1 if found in list, 0 if not.
  */
-static int target_is_spamexcept(char *target)
+static int target_is_spamexcept(const char *target)
 {
 	SpamExcept *e;
 
@@ -4638,12 +4637,13 @@ static int target_is_spamexcept(char *target)
  */
 int _join_viruschan(Client *client, TKL *tkl, int type)
 {
-	char *xparv[3], chbuf[CHANNELLEN + 16], buf[2048];
+	const char *xparv[3];
+	char chbuf[CHANNELLEN + 16], buf[2048];
 	Channel *channel;
 	int ret;
 
 	snprintf(buf, sizeof(buf), "0,%s", SPAMFILTER_VIRUSCHAN);
-	xparv[0] = client->name;
+	xparv[0] = NULL;
 	xparv[1] = buf;
 	xparv[2] = NULL;
 
@@ -4658,16 +4658,16 @@ int _join_viruschan(Client *client, TKL *tkl, int type)
 	sendnotice(client, "You are now restricted to talking in %s: %s",
 		SPAMFILTER_VIRUSCHAN, unreal_decodespace(tkl->ptr.spamfilter->tkl_reason));
 
-	channel = find_channel(SPAMFILTER_VIRUSCHAN, NULL);
+	channel = find_channel(SPAMFILTER_VIRUSCHAN);
 	if (channel)
 	{
 		MessageTag *mtags = NULL;
-		ircsnprintf(chbuf, sizeof(chbuf), "@%s", channel->chname);
+		ircsnprintf(chbuf, sizeof(chbuf), "@%s", channel->name);
 		ircsnprintf(buf, sizeof(buf), "[Spamfilter] %s matched filter '%s' [%s] [%s]",
 			client->name, tkl->ptr.spamfilter->match->str, cmdname_by_spamftarget(type),
 			unreal_decodespace(tkl->ptr.spamfilter->tkl_reason));
 		new_message(&me, NULL, &mtags);
-		sendto_channel(channel, &me, NULL, PREFIX_OP|PREFIX_ADMIN|PREFIX_OWNER,
+		sendto_channel(channel, &me, NULL, "o",
 		               0, SEND_ALL|SKIP_DEAF, mtags,
 		               ":%s NOTICE %s :%s", me.name, chbuf, buf);
 		free_message_tags(mtags);
@@ -4687,11 +4687,11 @@ int _join_viruschan(Client *client, TKL *tkl, int type)
  * 1 if spamfilter matched and it should be blocked (or client exited), 0 if not matched.
  * In case of 1, be sure to check IsDead(client)..
  */
-int _match_spamfilter(Client *client, char *str_in, int target, char *cmd, char *destination, int flags, TKL **rettkl)
+int _match_spamfilter(Client *client, const char *str_in, int target, const char *cmd, const char *destination, int flags, TKL **rettkl)
 {
 	TKL *tkl;
 	TKL *winner_tkl = NULL;
-	char *str;
+	const char *str;
 	int ret = -1;
 	char *reason = NULL;
 #ifdef SPAMFILTER_DETECTSLOW
@@ -4708,7 +4708,7 @@ int _match_spamfilter(Client *client, char *str_in, int target, char *cmd, char 
 	if (target == SPAMF_USER)
 		str = str_in;
 	else
-		str = (char *)StripControlCodes(str_in);
+		str = StripControlCodes(str_in);
 
 	/* (note: using client->user check here instead of IsUser()
 	 * due to SPAMF_USER where user isn't marked as client/person yet.
@@ -4753,22 +4753,26 @@ int _match_spamfilter(Client *client, char *str_in, int target, char *cmd, char 
 
 		if ((SPAMFILTER_DETECTSLOW_FATAL > 0) && (ms_past > SPAMFILTER_DETECTSLOW_FATAL))
 		{
-			sendto_realops("[Spamfilter] WARNING: Too slow spamfilter detected (took %ld msec to execute) "
-			               "-- spamfilter will be \002REMOVED!\002: %s", ms_past, tkl->ptr.spamfilter->match->str);
+			unreal_log(ULOG_ERROR, "tkl", "SPAMFILTER_SLOW_FATAL", NULL,
+			           "[Spamfilter] WARNING: Too slow spamfilter detected (took $msec_time msec to execute) "
+			           "-- spamfilter will be \002REMOVED!\002: $tkl",
+			           log_data_tkl("tkl", tkl),
+			           log_data_integer("msec_time", ms_past));
 			tkl_del_line(tkl);
 			return 0; /* Act as if it didn't match, even if it did.. it's gone now anyway.. */
 		} else
 		if ((SPAMFILTER_DETECTSLOW_WARN > 0) && (ms_past > SPAMFILTER_DETECTSLOW_WARN))
 		{
-			sendto_realops("[Spamfilter] WARNING: SLOW Spamfilter detected (took %ld msec to execute): %s",
-				ms_past, tkl->ptr.spamfilter->match->str);
+			unreal_log(ULOG_WARNING, "tkl", "SPAMFILTER_SLOW_WARN", NULL,
+			           "[Spamfilter] WARNING: Slow spamfilter detected (took $msec_time msec to execute): $tkl",
+			           log_data_tkl("tkl", tkl),
+			           log_data_integer("msec_time", ms_past));
 		}
 #endif
 
 		if (ret)
 		{
 			/* We have a match! */
-			char buf[1024];
 			char destinationbuf[48];
 
 			if (destination) {
@@ -4781,15 +4785,14 @@ int _match_spamfilter(Client *client, char *str_in, int target, char *cmd, char 
 			if (!winner_tkl && destination && target_is_spamexcept(destination))
 				return 0; /* No problem! */
 
-			ircsnprintf(buf, sizeof(buf), "[Spamfilter] %s!%s@%s matches filter '%s': [%s%s: '%s'] [%s]",
-				client->name, client->user->username, client->user->realhost,
-				tkl->ptr.spamfilter->match->str,
-				cmd, destinationbuf, str,
-				unreal_decodespace(tkl->ptr.spamfilter->tkl_reason));
+			unreal_log(ULOG_INFO, "tkl", "SPAMFILTER_MATCH", client,
+			           "[Spamfilter] $client.details matches filter '$tkl': [cmd: $command$destination: '$str'] [reason: $tkl.reason] [action: $tkl.ban_action]",
+				   log_data_tkl("tkl", tkl),
+				   log_data_string("command", cmd),
+				   log_data_string("destination", destination ? destination : ""),
+				   log_data_string("str", str));
 
-			sendto_snomask_global(SNO_SPAMF, "%s", buf);
-			ircd_log(LOG_SPAMFILTER, "%s", buf);
-			RunHook6(HOOKTYPE_LOCAL_SPAMFILTER, client, str, str_in, target, destination, tkl);
+			RunHook(HOOKTYPE_LOCAL_SPAMFILTER, client, str, str_in, target, destination, tkl);
 
 			/* If we should stop after the first match, we end here... */
 			if (SPAMFILTER_STOP_ON_FIRST_MATCH)
@@ -4990,7 +4993,7 @@ static int comp_with_mask(void *addr, void *dest, u_int mask)
  * CIDR support is available so 'host' may be like '1.2.0.0/16'.
  * @returns 1 on match, 0 on no match.
  */
-int _match_user(char *rmask, Client *client, int options)
+int _match_user(const char *rmask, Client *client, int options)
 {
 	char mask[NICKLEN+USERLEN+HOSTLEN+8];
 	char clientip[IPSZ], maskip[IPSZ];
@@ -5001,8 +5004,8 @@ int _match_user(char *rmask, Client *client, int options)
 	strlcpy(mask, rmask, sizeof(mask));
 
 	if ((options & MATCH_CHECK_EXTENDED) &&
-	    is_extended_ban(mask) &&
-	    client && client->user)
+	    is_extended_server_ban(mask) &&
+	    client->user)
 	{
 		/* Check user properties / extbans style */
 		return _match_user_extended_server_ban(rmask, client);
@@ -5144,17 +5147,29 @@ int _match_user(char *rmask, Client *client, int options)
 	return 0; /* NOMATCH: nothing of the above matched */
 }
 
-int _match_user_extended_server_ban(char *banstr, Client *client)
+int _match_user_extended_server_ban(const char *banstr, Client *client)
 {
-	char *msg = NULL, *errmsg = NULL;
+	const char *nextbanstr;
 	Extban *extban;
+	BanContext *b;
+	int ret;
 
-	if (!is_extended_ban(banstr))
+	if (!is_extended_server_ban(banstr))
 		return 0; /* we should never have been called */
 
-	extban = findmod_by_bantype(banstr[1]);
-	if (!extban || !(extban->options & EXTBOPT_TKL))
+	extban = findmod_by_bantype(banstr, &nextbanstr);
+	if (!extban ||
+	    !(extban->options & EXTBOPT_TKL) ||
+	    !(extban->is_banned_events & BANCHK_TKL))
+	{
 		return 0; /* extban not found or of incorrect type (eg ~T) */
+	}
 
-	return extban->is_banned(client, NULL, banstr, BANCHK_TKL, &msg, &errmsg);
+	b = safe_alloc(sizeof(BanContext));
+	b->client = client;
+	b->banstr = nextbanstr;
+	b->ban_check_types = BANCHK_TKL;
+	ret = extban->is_banned(b);
+	safe_free(b);
+	return ret;
 }

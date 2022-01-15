@@ -30,7 +30,7 @@ ModuleHeader MOD_HEADER
 	"5.0",
 	"command /silence", 
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
     };
 
 /* Structs */
@@ -104,7 +104,8 @@ MOD_UNLOAD()
 CMD_FUNC(cmd_silence)
 {
 	Silence *s;
-	char action, *p;
+	const char *p;
+	char action;
 
 	if (MyUser(client))
 	{
@@ -121,7 +122,7 @@ CMD_FUNC(cmd_silence)
 		{
 			p++;
 		} else
-		if (!strchr(p, '@') && !strchr(p, '.') && !strchr(p, '!') && !strchr(p, '*') && !find_person(p, NULL))
+		if (!strchr(p, '@') && !strchr(p, '.') && !strchr(p, '!') && !strchr(p, '*') && !find_user(p, NULL))
 		{
 			sendnumeric(client, ERR_NOSUCHNICK, parv[1]);
 			return;

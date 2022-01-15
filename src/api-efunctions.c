@@ -34,47 +34,50 @@ static Efunction *Efunctions[MAXEFUNCTIONS]; /* Efunction objects (used for reha
 static EfunctionsList efunction_table[MAXEFUNCTIONS];
 
 /* Efuncs */
-void (*do_join)(Client *client, int parc, char *parv[]);
-void (*join_channel)(Channel *channel, Client *client, MessageTag *mtags, int flags);
-int (*can_join)(Client *client, Channel *channel, char *key, char *parv[]);
-void (*do_mode)(Channel *channel, Client *client, MessageTag *mtags, int parc, char *parv[], time_t sendts, int samode);
-void (*set_mode)(Channel *channel, Client *client, int parc, char *parv[], u_int *pcount,
-    char pvar[MAXMODEPARAMS][MODEBUFLEN + 3], int bounce);
-void (*cmd_umode)(Client *client, MessageTag *mtags, int parc, char *parv[]);
-int (*register_user)(Client *client, char *nick, char *username, char *umode, char *virthost, char *ip);
+void (*do_join)(Client *client, int parc, const char *parv[]);
+void (*join_channel)(Channel *channel, Client *client, MessageTag *mtags, const char *member_modes);
+int (*can_join)(Client *client, Channel *channel, const char *key, char **errmsg);
+void (*do_mode)(Channel *channel, Client *client, MessageTag *mtags, int parc, const char *parv[], time_t sendts, int samode);
+MultiLineMode *(*set_mode)(Channel *channel, Client *client, int parc, const char *parv[], u_int *pcount,
+                           char pvar[MAXMODEPARAMS][MODEBUFLEN + 3]);
+void (*set_channel_mode)(Channel *channel, char *modes, char *parameters);
+void (*cmd_umode)(Client *client, MessageTag *mtags, int parc, const char *parv[]);
+int (*register_user)(Client *client);
 int (*tkl_hash)(unsigned int c);
 char (*tkl_typetochar)(int type);
 int (*tkl_chartotype)(char c);
-char *(*tkl_type_string)(TKL *tk);
-TKL *(*tkl_add_serverban)(int type, char *usermask, char *hostmask, char *reason, char *setby,
+const char *(*tkl_type_string)(TKL *tk);
+const char *(*tkl_type_config_string)(TKL *tk);
+char *(*tkl_uhost)(TKL *tkl, char *buf, size_t buflen, int options);
+TKL *(*tkl_add_serverban)(int type, const char *usermask, const char *hostmask, const char *reason, const char *setby,
                               time_t expire_at, time_t set_at, int soft, int flags);
-TKL *(*tkl_add_nameban)(int type, char *name, int hold, char *reason, char *setby,
+TKL *(*tkl_add_nameban)(int type, const char *name, int hold, const char *reason, const char *setby,
                             time_t expire_at, time_t set_at, int flags);
-TKL *(*tkl_add_spamfilter)(int type, unsigned short target, unsigned short action, Match *match, char *setby,
+TKL *(*tkl_add_spamfilter)(int type, unsigned short target, unsigned short action, Match *match, const char *setby,
                                time_t expire_at, time_t set_at,
-                               time_t spamf_tkl_duration, char *spamf_tkl_reason,
+                               time_t spamf_tkl_duration, const char *spamf_tkl_reason,
                                int flags);
-TKL *(*tkl_add_banexception)(int type, char *usermask, char *hostmask, char *reason, char *set_by,
-                                time_t expire_at, time_t set_at, int soft, char *bantypes, int flags);
+TKL *(*tkl_add_banexception)(int type, const char *usermask, const char *hostmask, const char *reason, const char *set_by,
+                                time_t expire_at, time_t set_at, int soft, const char *bantypes, int flags);
 TKL *(*tkl_del_line)(TKL *tkl);
 void (*tkl_check_local_remove_shun)(TKL *tmp);
 int (*find_tkline_match)(Client *client, int skip_soft);
 int (*find_shun)(Client *client);
 int(*find_spamfilter_user)(Client *client, int flags);
-TKL *(*find_qline)(Client *client, char *nick, int *ishold);
+TKL *(*find_qline)(Client *client, const char *nick, int *ishold);
 TKL *(*find_tkline_match_zap)(Client *client);
-void (*tkl_stats)(Client *client, int type, char *para, int *cnt);
+void (*tkl_stats)(Client *client, int type, const char *para, int *cnt);
 void (*tkl_sync)(Client *client);
-void (*cmd_tkl)(Client *client, MessageTag *mtags, int parc, char *parv[]);
-int (*place_host_ban)(Client *client, BanAction action, char *reason, long duration);
-int (*match_spamfilter)(Client *client, char *str_in, int type, char *cmd, char *target, int flags, TKL **rettk);
-int (*match_spamfilter_mtags)(Client *client, MessageTag *mtags, char *cmd);
+void (*cmd_tkl)(Client *client, MessageTag *mtags, int parc, const char *parv[]);
+int (*place_host_ban)(Client *client, BanAction action, const char *reason, long duration);
+int (*match_spamfilter)(Client *client, const char *str_in, int type, const char *cmd, const char *target, int flags, TKL **rettk);
+int (*match_spamfilter_mtags)(Client *client, MessageTag *mtags, const char *cmd);
 int (*join_viruschan)(Client *client, TKL *tk, int type);
-unsigned char *(*StripColors)(unsigned char *text);
-const char *(*StripControlCodes)(unsigned char *text);
-void (*spamfilter_build_user_string)(char *buf, char *nick, Client *client);
+const char *(*StripColors)(const char *text);
+const char *(*StripControlCodes)(const char *text);
+void (*spamfilter_build_user_string)(char *buf, const char *nick, Client *client);
 void (*send_protoctl_servers)(Client *client, int response);
-int (*verify_link)(Client *client, char *servername, ConfigItem_link **link_out);
+int (*verify_link)(Client *client, ConfigItem_link **link_out);
 void (*introduce_user)(Client *to, Client *client);
 void (*send_server_message)(Client *client);
 void (*broadcast_md_client)(ModDataInfo *mdi, Client *client, ModData *md);
@@ -82,37 +85,40 @@ void (*broadcast_md_channel)(ModDataInfo *mdi, Channel *channel, ModData *md);
 void (*broadcast_md_member)(ModDataInfo *mdi, Channel *channel, Member *m, ModData *md);
 void (*broadcast_md_membership)(ModDataInfo *mdi, Client *client, Membership *m, ModData *md);
 int (*check_banned)(Client *client, int exitflags);
-int (*check_deny_version)(Client *client, char *software, int protocol, char *flags);
-void (*broadcast_md_client_cmd)(Client *except, Client *sender, Client *acptr, char *varname, char *value);
-void (*broadcast_md_channel_cmd)(Client *except, Client *sender, Channel *channel, char *varname, char *value);
-void (*broadcast_md_member_cmd)(Client *except, Client *sender, Channel *channel, Client *acptr, char *varname, char *value);
-void (*broadcast_md_membership_cmd)(Client *except, Client *sender, Client *acptr, Channel *channel, char *varname, char *value);
+int (*check_deny_version)(Client *client, const char *software, int protocol, const char *flags);
+void (*broadcast_md_client_cmd)(Client *except, Client *sender, Client *acptr, const char *varname, const char *value);
+void (*broadcast_md_channel_cmd)(Client *except, Client *sender, Channel *channel, const char *varname, const char *value);
+void (*broadcast_md_member_cmd)(Client *except, Client *sender, Channel *channel, Client *acptr, const char *varname, const char *value);
+void (*broadcast_md_membership_cmd)(Client *except, Client *sender, Client *acptr, Channel *channel, const char *varname, const char *value);
+void (*moddata_add_s2s_mtags)(Client *client, MessageTag **mtags);
+void (*moddata_extract_s2s_mtags)(Client *client, MessageTag *mtags);
 void (*send_moddata_client)(Client *srv, Client *client);
 void (*send_moddata_channel)(Client *srv, Channel *channel);
 void (*send_moddata_members)(Client *srv);
 void (*broadcast_moddata_client)(Client *client);
-int (*match_user)(char *rmask, Client *client, int options);
+int (*match_user)(const char *rmask, Client *client, int options);
 void (*userhost_changed)(Client *client);
 void (*userhost_save_current)(Client *client);
 void (*send_join_to_local_users)(Client *client, Channel *channel, MessageTag *mtags);
 int (*do_nick_name)(char *nick);
 int (*do_remote_nick_name)(char *nick);
-char *(*charsys_get_current_languages)(void);
+const char *(*charsys_get_current_languages)(void);
 void (*broadcast_sinfo)(Client *client, Client *to, Client *except);
+void (*connect_server)(ConfigItem_link *aconf, Client *by, struct hostent *hp);
 void (*parse_message_tags)(Client *client, char **str, MessageTag **mtag_list);
-char *(*mtags_to_string)(MessageTag *m, Client *client);
-int (*can_send_to_channel)(Client *client, Channel *channel, char **msgtext, char **errmsg, int notice);
+const char *(*mtags_to_string)(MessageTag *m, Client *client);
+int (*can_send_to_channel)(Client *client, Channel *channel, const char **msgtext, const char **errmsg, int notice);
 void (*broadcast_md_globalvar)(ModDataInfo *mdi, ModData *md);
-void (*broadcast_md_globalvar_cmd)(Client *except, Client *sender, char *varname, char *value);
-int (*tkl_ip_hash)(char *ip);
+void (*broadcast_md_globalvar_cmd)(Client *except, Client *sender, const char *varname, const char *value);
+int (*tkl_ip_hash)(const char *ip);
 int (*tkl_ip_hash_type)(int type);
-void (*sendnotice_tkl_del)(char *removed_by, TKL *tkl);
+void (*sendnotice_tkl_del)(const char *removed_by, TKL *tkl);
 void (*sendnotice_tkl_add)(TKL *tkl);
 void (*free_tkl)(TKL *tkl);
-TKL *(*find_tkl_serverban)(int type, char *usermask, char *hostmask, int softban);
-TKL *(*find_tkl_banexception)(int type, char *usermask, char *hostmask, int softban);
-TKL *(*find_tkl_nameban)(int type, char *name, int hold);
-TKL *(*find_tkl_spamfilter)(int type, char *match_string, unsigned short action, unsigned short target);
+TKL *(*find_tkl_serverban)(int type, const char *usermask, const char *hostmask, int softban);
+TKL *(*find_tkl_banexception)(int type, const char *usermask, const char *hostmask, int softban);
+TKL *(*find_tkl_nameban)(int type, const char *name, int hold);
+TKL *(*find_tkl_spamfilter)(int type, const char *match_string, unsigned short action, unsigned short target);
 int (*find_tkl_exception)(int ban_type, Client *client);
 int (*is_silenced)(Client *client, Client *acptr);
 int (*del_silence)(Client *client, const char *mask);
@@ -120,9 +126,17 @@ int (*add_silence)(Client *client, const char *mask, int senderr);
 void *(*labeled_response_save_context)(void);
 void (*labeled_response_set_context)(void *ctx);
 void (*labeled_response_force_end)(void);
-void (*kick_user)(MessageTag *mtags, Channel *channel, Client *client, Client *victim, char *comment);
+void (*kick_user)(MessageTag *mtags, Channel *channel, Client *client, Client *victim, const char *comment);
+int (*watch_add)(const char *nick, Client *client, int flags);
+int (*watch_del)(const char *nick, Client *client, int flags);
+int (*watch_del_list)(Client *client, int flags);
+Watch *(*watch_get)(const char *nick);
+int (*watch_check)(Client *client, int reply, int (*watch_notify)(Client *client, Watch *watch, Link *lp, int event));
+void (*do_unreal_log_remote_deliver)(LogLevel loglevel, const char *subsystem, const char *event_id, MultiLine *msg, const char *json_serialized);
+char *(*get_chmodes_for_user)(Client *client, const char *flags);
+WhoisConfigDetails (*whois_get_policy)(Client *client, Client *target, const char *name);
 
-Efunction *EfunctionAddMain(Module *module, EfunctionType eftype, int (*func)(), void (*vfunc)(), void *(*pvfunc)(), char *(*cfunc)())
+Efunction *EfunctionAddMain(Module *module, EfunctionType eftype, int (*func)(), void (*vfunc)(), void *(*pvfunc)(), char *(*stringfunc)(), const char *(*conststringfunc)())
 {
 	Efunction *p;
 
@@ -140,8 +154,10 @@ Efunction *EfunctionAddMain(Module *module, EfunctionType eftype, int (*func)(),
 		p->func.voidfunc = vfunc;
 	if (pvfunc)
 		p->func.pvoidfunc = pvfunc;
-	if (cfunc)
-		p->func.pcharfunc = cfunc;
+	if (stringfunc)
+		p->func.stringfunc = stringfunc;
+	if (conststringfunc)
+		p->func.conststringfunc = conststringfunc;
 	p->type = eftype;
 	p->owner = module;
 	AddListItem(p, Efunctions[eftype]);
@@ -256,7 +272,9 @@ void efunctions_switchover(void)
 				continue;
 			if (!efunction_table[i].funcptr)
 			{
-				ircd_log(LOG_ERROR, "[BUG] efunctions_switchover(): someone forgot to initialize the function table for efunc %d", i);
+				unreal_log(ULOG_FATAL, "module", "BUG_EFUNCTIONS_SWITCHOVER", NULL,
+				           "[BUG] efunctions_switchover(): someone forgot to initialize the function table for efunc $efunction_number",
+				           log_data_integer("efunction_number", i));
 				abort();
 			}
 			*efunction_table[i].funcptr = e->func.voidfunc;  /* This is the new one. */
@@ -273,10 +291,19 @@ void efunctions_switchover(void)
 	}
 }
 
-#define efunc_init_function(what, func, default_func) efunc_init_function_(what, #func, (void *)&func, default_func)
+#define efunc_init_function(what, func, default_func) efunc_init_function_(what, #func, (void *)&func, (void *)default_func)
 
 void efunc_init_function_(EfunctionType what, char *name, void *func, void *default_func)
 {
+	if (what >= MAXEFUNCTIONS)
+	{
+		/* increase MAXEFUNCTIONS if you ever encounter that --k4be */
+		unreal_log(ULOG_FATAL, "module", "BUG_EFUNC_INIT_FUNCTION_TOO_MANY", NULL,
+		           "Too many efunctions! ($efunctions_request > $efunctions_max)",
+		           log_data_integer("efunctions_request", what),
+		           log_data_integer("efunctions_max", MAXEFUNCTIONS));
+		abort();
+	}
 	safe_strdup(efunction_table[what].name, name);
 	efunction_table[what].funcptr = func;
 	efunction_table[what].deffunc = default_func;
@@ -290,6 +317,7 @@ void efunctions_init(void)
 	efunc_init_function(EFUNC_CAN_JOIN, can_join, NULL);
 	efunc_init_function(EFUNC_DO_MODE, do_mode, NULL);
 	efunc_init_function(EFUNC_SET_MODE, set_mode, NULL);
+	efunc_init_function(EFUNC_SET_CHANNEL_MODE, set_channel_mode, NULL);
 	efunc_init_function(EFUNC_CMD_UMODE, cmd_umode, NULL);
 	efunc_init_function(EFUNC_REGISTER_USER, register_user, NULL);
 	efunc_init_function(EFUNC_TKL_HASH, tkl_hash, NULL);
@@ -327,6 +355,8 @@ void efunctions_init(void)
 	efunc_init_function(EFUNC_BROADCAST_MD_CHANNEL_CMD, broadcast_md_channel_cmd, NULL);
 	efunc_init_function(EFUNC_BROADCAST_MD_MEMBER_CMD, broadcast_md_member_cmd, NULL);
 	efunc_init_function(EFUNC_BROADCAST_MD_MEMBERSHIP_CMD, broadcast_md_membership_cmd, NULL);
+	efunc_init_function(EFUNC_MODDATA_ADD_S2S_MTAGS, moddata_add_s2s_mtags, NULL);
+	efunc_init_function(EFUNC_MODDATA_EXTRACT_S2S_MTAGS, moddata_extract_s2s_mtags, NULL);
 	efunc_init_function(EFUNC_SEND_MODDATA_CLIENT, send_moddata_client, NULL);
 	efunc_init_function(EFUNC_SEND_MODDATA_CHANNEL, send_moddata_channel, NULL);
 	efunc_init_function(EFUNC_SEND_MODDATA_MEMBERS, send_moddata_members, NULL);
@@ -339,10 +369,12 @@ void efunctions_init(void)
 	efunc_init_function(EFUNC_DO_REMOTE_NICK_NAME, do_remote_nick_name, NULL);
 	efunc_init_function(EFUNC_CHARSYS_GET_CURRENT_LANGUAGES, charsys_get_current_languages, NULL);
 	efunc_init_function(EFUNC_BROADCAST_SINFO, broadcast_sinfo, NULL);
+	efunc_init_function(EFUNC_CONNECT_SERVER, connect_server, NULL);
 	efunc_init_function(EFUNC_PARSE_MESSAGE_TAGS, parse_message_tags, &parse_message_tags_default_handler);
 	efunc_init_function(EFUNC_MTAGS_TO_STRING, mtags_to_string, &mtags_to_string_default_handler);
 	efunc_init_function(EFUNC_TKL_CHARTOTYPE, tkl_chartotype, NULL);
 	efunc_init_function(EFUNC_TKL_TYPE_STRING, tkl_type_string, NULL);
+	efunc_init_function(EFUNC_TKL_TYPE_CONFIG_STRING, tkl_type_config_string, NULL);
 	efunc_init_function(EFUNC_CAN_SEND_TO_CHANNEL, can_send_to_channel, NULL);
 	efunc_init_function(EFUNC_BROADCAST_MD_GLOBALVAR, broadcast_md_globalvar, NULL);
 	efunc_init_function(EFUNC_BROADCAST_MD_GLOBALVAR_CMD, broadcast_md_globalvar_cmd, NULL);
@@ -365,4 +397,13 @@ void efunctions_init(void)
 	efunc_init_function(EFUNC_LABELED_RESPONSE_SET_CONTEXT, labeled_response_set_context, labeled_response_set_context_default_handler);
 	efunc_init_function(EFUNC_LABELED_RESPONSE_FORCE_END, labeled_response_force_end, labeled_response_force_end_default_handler);
 	efunc_init_function(EFUNC_KICK_USER, kick_user, NULL);
+	efunc_init_function(EFUNC_WATCH_ADD, watch_add, NULL);
+	efunc_init_function(EFUNC_WATCH_DEL, watch_del, NULL);
+	efunc_init_function(EFUNC_WATCH_DEL_LIST, watch_del_list, NULL);
+	efunc_init_function(EFUNC_WATCH_GET, watch_get, NULL);
+	efunc_init_function(EFUNC_WATCH_CHECK, watch_check, NULL);
+	efunc_init_function(EFUNC_TKL_UHOST, tkl_uhost, NULL);
+	efunc_init_function(EFUNC_DO_UNREAL_LOG_REMOTE_DELIVER, do_unreal_log_remote_deliver, do_unreal_log_remote_deliver_default_handler);
+	efunc_init_function(EFUNC_GET_CHMODES_FOR_USER, get_chmodes_for_user, NULL);
+	efunc_init_function(EFUNC_WHOIS_GET_POLICY, whois_get_policy, NULL);
 }

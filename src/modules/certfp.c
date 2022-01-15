@@ -1,6 +1,6 @@
 /*
  * Certificate Fingerprint Module
- * This grabs the SHA256 fingerprint of the SSL/TLS client certificate
+ * This grabs the SHA256 fingerprint of the TLS client certificate
  * the user is using, shares it with the other servers (and rest of
  * UnrealIRCd) and shows it in /WHOIS etc.
  *
@@ -17,24 +17,22 @@ ModuleHeader MOD_HEADER
 	"5.0",
 	"Certificate fingerprint",
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
     };
 
 /* Forward declarations */
 void certfp_free(ModData *m);
-char *certfp_serialize(ModData *m);
-void certfp_unserialize(char *str, ModData *m);
+const char *certfp_serialize(ModData *m);
+void certfp_unserialize(const char *str, ModData *m);
 int certfp_handshake(Client *client);
 int certfp_connect(Client *client);
-int certfp_whois(Client *client, Client *target);
+int certfp_whois(Client *client, Client *target, NameValuePrioList **list);
 
 ModDataInfo *certfp_md; /* Module Data structure which we acquire */
 
-#define WHOISCERTFP_STRING ":%s 276 %s %s :has client certificate fingerprint %s"
-
 MOD_INIT()
 {
-ModDataInfo mreq;
+	ModDataInfo mreq;
 
 	MARK_AS_OFFICIAL_MODULE(modinfo);
 	
@@ -43,7 +41,7 @@ ModDataInfo mreq;
 	mreq.free = certfp_free;
 	mreq.serialize = certfp_serialize;
 	mreq.unserialize = certfp_unserialize;
-	mreq.sync = 1;
+	mreq.sync = MODDATA_SYNC_EARLY;
 	mreq.type = MODDATATYPE_CLIENT;
 	certfp_md = ModDataAdd(modinfo->handle, mreq);
 	if (!certfp_md)
@@ -121,7 +119,7 @@ int certfp_connect(Client *client)
 {
 	if (IsSecure(client))
 	{
-		char *fp = moddata_client_get(client, "certfp");
+		const char *fp = moddata_client_get(client, "certfp");
 	
 		if (fp && !iConf.no_connect_tls_info)
 			sendnotice(client, "*** Your TLS certificate fingerprint is %s", fp);
@@ -130,12 +128,17 @@ int certfp_connect(Client *client)
 	return 0;
 }
 
-int certfp_whois(Client *client, Client *target)
+int certfp_whois(Client *client, Client *target, NameValuePrioList **list)
 {
-	char *fp = moddata_client_get(target, "certfp");
-	
-	if (fp)
-		sendnumeric(client, RPL_WHOISCERTFP, target->name, fp);
+	const char *fp = moddata_client_get(target, "certfp");
+	char buf[512];
+
+	if (!fp)
+		return 0;
+
+	if (whois_get_policy(client, target, "certfp") == WHOIS_CONFIG_DETAILS_FULL)
+		add_nvplist_numeric(list, 0, "certfp", client, RPL_WHOISCERTFP, target->name, fp);
+
 	return 0;
 }
 
@@ -144,14 +147,14 @@ void certfp_free(ModData *m)
 	safe_free(m->str);
 }
 
-char *certfp_serialize(ModData *m)
+const char *certfp_serialize(ModData *m)
 {
 	if (!m->str)
 		return NULL;
 	return m->str;
 }
 
-void certfp_unserialize(char *str, ModData *m)
+void certfp_unserialize(const char *str, ModData *m)
 {
 	safe_strdup(m->str, str);
 }

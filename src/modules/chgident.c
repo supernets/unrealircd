@@ -32,7 +32,7 @@ ModuleHeader MOD_HEADER
 	"5.0", /* Version */
 	"/chgident", /* Short description of module */
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
     };
 
 MOD_INIT()
@@ -63,7 +63,7 @@ MOD_UNLOAD()
 CMD_FUNC(cmd_chgident)
 {
 	Client *target;
-	char *s;
+	const char *s;
 	int legalident = 1;
 
 	if (!ValidatePermissionsForPath("client:set:ident",client,NULL,NULL,NULL))
@@ -102,7 +102,7 @@ CMD_FUNC(cmd_chgident)
 		return;
 	}
 
-	if (!(target = find_person(parv[1], NULL)))
+	if (!(target = find_user(parv[1], NULL)))
 	{
 		sendnumeric(client, ERR_NOSUCHNICK, parv[1]);
 		return;
@@ -134,15 +134,11 @@ CMD_FUNC(cmd_chgident)
 	}
 	if (!IsULine(client))
 	{
-		sendto_snomask(SNO_EYES,
-		    "%s changed the virtual ident of %s (%s@%s) to be %s",
-		    client->name, target->name, target->user->username,
-		    GetHost(target), parv[2]);
-		/* Logging ability added by XeRXeS */
-		ircd_log(LOG_CHGCMDS,
-			"CHGIDENT: %s changed the virtual ident of %s (%s@%s) to be %s",
-			client->name, target->name, target->user->username,    
-			GetHost(target), parv[2]);
+		unreal_log(ULOG_INFO, "chgcmds", "CHGIDENT_COMMAND", client,
+		           "CHGIDENT: $client changed the username of $target.details to be $new_username",
+		           log_data_string("change_type", "username"),
+			   log_data_client("target", target),
+		           log_data_string("new_username", parv[2]));
 	}
 
 	sendto_server(client, 0, 0, NULL, ":%s CHGIDENT %s %s",

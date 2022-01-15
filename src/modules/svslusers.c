@@ -34,7 +34,7 @@ ModuleHeader MOD_HEADER
 	"5.0",
 	"command /svslusers", 
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
     };
 
 MOD_INIT()
@@ -66,7 +66,7 @@ CMD_FUNC(cmd_svslusers)
 {
         if (!IsULine(client) || parc < 4)
 		return;  
-        if (hunt_server(client, NULL, ":%s SVSLUSERS %s %s :%s", 1, parc, parv) == HUNTED_ISME)
+        if (hunt_server(client, NULL, "SVSLUSERS", 1, parc, parv) == HUNTED_ISME)
         {
 		int temp;
 		temp = atoi(parv[2]);

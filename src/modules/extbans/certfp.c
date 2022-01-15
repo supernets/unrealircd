@@ -24,23 +24,26 @@ ModuleHeader MOD_HEADER
 	"4.2",
 	"ExtBan ~S - Ban/exempt by SHA256 TLS certificate fingerprint",
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
 };
 
 /* Forward declarations */
-int extban_certfp_is_ok(Client *client, Channel *channel, char *para, int checkt, int what, int what2);
-char *extban_certfp_conv_param(char *para);
-int extban_certfp_is_banned(Client *client, Channel *channel, char *banin, int type, char **msg, char **errmsg);
+int extban_certfp_is_ok(BanContext *b);
+const char *extban_certfp_conv_param(BanContext *b, Extban *extban);
+int extban_certfp_is_banned(BanContext *b);
 
 /* Called upon module init */
 MOD_INIT()
 {
 	ExtbanInfo req;
 	
-	req.flag = 'S';
+	memset(&req, 0, sizeof(req));
+	req.letter = 'S';
+	req.name = "certfp";
 	req.is_ok = extban_certfp_is_ok;
 	req.conv_param = extban_certfp_conv_param;
 	req.is_banned = extban_certfp_is_banned;
+	req.is_banned_events = BANCHK_ALL|BANCHK_TKL;
 	req.options = EXTBOPT_INVEX|EXTBOPT_TKL;
 	if (!ExtbanAdd(modinfo->handle, req))
 	{
@@ -74,18 +77,18 @@ int extban_certfp_usage(Client *client)
 	return EX_DENY;
 }
 
-int extban_certfp_is_ok(Client *client, Channel *channel, char *para, int checkt, int what, int what2)
+int extban_certfp_is_ok(BanContext *b)
 {
-	if (checkt == EXCHK_PARAM)
+	if (b->is_ok_check == EXCHK_PARAM)
 	{
-		char *p;
+		const char *p;
 		
-		if (strlen(para) != 3 + CERT_FP_LEN)
-			return extban_certfp_usage(client);
+		if (strlen(b->banstr) != CERT_FP_LEN)
+			return extban_certfp_usage(b->client);
 		
-		for (p = para + 3; *p; p++)
+		for (p = b->banstr; *p; p++)
 			if (!isxdigit(*p))
-				return extban_certfp_usage(client);
+				return extban_certfp_usage(b->client);
 
 		return EX_ALLOW;
 	}
@@ -93,14 +96,14 @@ int extban_certfp_is_ok(Client *client, Channel *channel, char *para, int checkt
 }
 
 /* Obtain targeted certfp from the ban string */
-char *extban_certfp_conv_param(char *para)
+const char *extban_certfp_conv_param(BanContext *b, Extban *extban)
 {
 	static char retbuf[EVP_MAX_MD_SIZE * 2 + 1];
 	char *p;
 	
-	strlcpy(retbuf, para, sizeof(retbuf));
+	strlcpy(retbuf, b->banstr, sizeof(retbuf));
 	
-	for (p = retbuf+3; *p; p++)
+	for (p = retbuf; *p; p++)
 	{
 		*p = tolower(*p);
 	}
@@ -108,17 +111,14 @@ char *extban_certfp_conv_param(char *para)
 	return retbuf;
 }
 
-int extban_certfp_is_banned(Client *client, Channel *channel, char *banin, int type, char **msg, char **errmsg)
+int extban_certfp_is_banned(BanContext *b)
 {
-	char *ban = banin+3;
-	char *fp;
-
-	fp = moddata_client_get(client, "certfp");
+	const char *fp = moddata_client_get(b->client, "certfp");
 
 	if (!fp)
 		return 0; /* not using TLS */
 
-	if (!strcmp(ban, fp))
+	if (!strcmp(b->banstr, fp))
 		return 1;
 
 	return 0;

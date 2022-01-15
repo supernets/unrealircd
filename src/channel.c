@@ -40,31 +40,15 @@ long sajoinmode = 0;
  */
 Channel *channels = NULL;
 
-/* some buffers for rebuilding channel/nick lists with comma's */
+/* A buffer for rebuilding channel/nick lists with comma's */
 static char buf[BUFSIZE];
-/** Mode buffer (eg: "+sntkl") */
-MODVAR char modebuf[BUFSIZE];
-/** Parameter buffer (eg: "key 123") */
-MODVAR char parabuf[BUFSIZE];
+
+static mp_pool_t *channel_pool = NULL;
 
 /** This describes the letters, modes and options for core channel modes.
  * These are +ntmispklr and also the list modes +vhoaq and +beI.
  */
 CoreChannelModeTable corechannelmodetable[] = {
-	{MODE_LIMIT, 'l', 1, 1},
-	{MODE_VOICE, 'v', 1, 1},
-	{MODE_HALFOP, 'h', 0, 1},
-	{MODE_CHANOP, 'o', 0, 1},
-	{MODE_PRIVATE, 'p', 0, 0},
-	{MODE_SECRET, 's', 0, 0},
-	{MODE_MODERATED, 'm', 1, 0},
-	{MODE_NOPRIVMSGS, 'n', 1, 0},
-	{MODE_TOPICLIMIT, 't', 1, 0},
-	{MODE_INVITEONLY, 'i', 1, 0},
-	{MODE_KEY, 'k', 1, 1},
-	{MODE_RGSTR, 'r', 0, 0},
-	{MODE_CHANADMIN, 'a', 0, 1},
-	{MODE_CHANOWNER, 'q', 0, 1},
 	{MODE_BAN, 'b', 1, 1},
 	{MODE_EXCEPT, 'e', 1, 1},	/* exception ban */
 	{MODE_INVEX, 'I', 1, 1},	/* invite-only exception */
@@ -74,14 +58,8 @@ CoreChannelModeTable corechannelmodetable[] = {
 /** The advertised supported channel modes in the 004 numeric */
 char cmodestring[512];
 
-/* Some forward declarations */
-char *clean_ban_mask(char *, int, Client *);
-void channel_modes(Client *client, char *mbuf, char *pbuf, size_t mbuf_size, size_t pbuf_size, Channel *channel);
-int sub1_from_channel(Channel *);
-void del_invite(Client *, Channel *);
-
 /** Returns 1 if the IRCOp can override or is a remote connection */
-inline int op_can_override(char *acl, Client *client,Channel *channel,void* extra)
+inline int op_can_override(const char *acl, Client *client, Channel *channel, void* extra)
 {
 #ifndef NO_OPEROVERRIDE
 	if (MyUser(client) && !(ValidatePermissionsForPath(acl,client,NULL,channel,extra)))
@@ -104,17 +82,6 @@ int Halfop_mode(long mode)
 		tab++;
 	}
 	return TRUE;
-}
-
-
-/** Returns the length (entry count) of a +beI list */
-static int list_length(Link *lp)
-{
-	int  count = 0;
-
-	for (; lp; lp = lp->next)
-		count++;
-	return count;
 }
 
 /** Find client in a Member linked list (eg: channel->members) */
@@ -156,8 +123,6 @@ static Member *make_member(void)
 		for (i = 1; i <= (4072/sizeof(Member)); ++i)
 		{
 			lp = safe_alloc(sizeof(Member));
-			lp->client = NULL;
-			lp->flags = 0;
 			lp->next = freemember;
 			freemember = lp;
 		}
@@ -176,8 +141,6 @@ static void free_member(Member *lp)
 	moddata_free_member(lp);
 	memset(lp, 0, sizeof(Member));
 	lp->next = freemember;
-	lp->client = NULL;
-	lp->flags = 0;
 	freemember = lp;
 }
 
@@ -228,7 +191,7 @@ static void free_membership(Membership *m)
  *			only after searching through the nick history.
  * @returns The client (if found) or NULL (if not found).
  */
-Client *find_chasing(Client *client, char *user, int *chasing)
+Client *find_chasing(Client *client, const char *user, int *chasing)
 {
 	Client *who = find_client(user, NULL);
 
@@ -254,9 +217,10 @@ Client *find_chasing(Client *client, char *user, int *chasing)
 }
 
 /** Return 1 if the bans are identical, taking into account special handling for extbans */
-int identical_ban(char *one, char *two)
+int identical_ban(const char *one, const char *two)
 {
-	if (is_extended_ban(one))
+#if 0
+	if (is_extended_ban(one) && is_extended_ban(two))
 	{
 		/* compare the first 3 characters case-sensitive and if identical then compare
 		 * the remainder of the string case-insensitive.
@@ -267,6 +231,14 @@ int identical_ban(char *one, char *two)
 		if (!mycmp(one, two))
 			return 1;
 	}
+#else
+	/* Actually I think we can live with this nowadays.
+	 * We are pushing towards named extbans, and all the
+	 * letter extbans that could clash no longer exist.
+	 */
+	if (!mycmp(one, two))
+		return 1;
+#endif
 	return 0;
 }
 
@@ -274,14 +246,14 @@ int identical_ban(char *one, char *two)
  *  the specified channel. (Extended version with
  *  set by nick and set on timestamp)
  */
-int add_listmode_ex(Ban **list, Client *client, Channel *channel, char *banid, char *setby, time_t seton)
+int add_listmode_ex(Ban **list, Client *client, Channel *channel, const char *banid, const char *setby, time_t seton)
 {
 	Ban *ban;
 	int cnt = 0, len;
 	int do_not_add = 0;
 
-	if (MyUser(client))
-		collapse(banid);
+	//if (MyUser(client))
+	//	collapse(banid);
 
 	len = strlen(banid);
 	if (!*list && ((len > MAXBANLENGTH) || (MAXBANS < 1)))
@@ -289,7 +261,7 @@ int add_listmode_ex(Ban **list, Client *client, Channel *channel, char *banid, c
 		if (MyUser(client))
 		{
 			/* Only send the error to local clients */
-			sendnumeric(client, ERR_BANLISTFULL, channel->chname, banid);
+			sendnumeric(client, ERR_BANLISTFULL, channel->name, banid);
 		}
 		do_not_add = 1;
 	}
@@ -318,7 +290,7 @@ int add_listmode_ex(Ban **list, Client *client, Channel *channel, char *banid, c
 			if (MyUser(client))
 			{
 				/* Only send the error to local clients */
-				sendnumeric(client, ERR_BANLISTFULL, channel->chname, banid);
+				sendnumeric(client, ERR_BANLISTFULL, channel->name, banid);
 			}
 			return -1;
 		}
@@ -345,20 +317,20 @@ int add_listmode_ex(Ban **list, Client *client, Channel *channel, char *banid, c
 /** Add a listmode (+beI) with the specified banid to
  *  the specified channel. (Simplified version)
  */
-int add_listmode(Ban **list, Client *client, Channel *channel, char *banid)
+int add_listmode(Ban **list, Client *client, Channel *channel, const char *banid)
 {
 	char *setby = client->name;
 	char nuhbuf[NICKLEN+USERLEN+HOSTLEN+4];
 
 	if (IsUser(client) && (iConf.ban_setter == SETTER_NICK_USER_HOST))
-		setby = make_nick_user_host_r(nuhbuf, client->name, client->user->username, GetHost(client));
+		setby = make_nick_user_host_r(nuhbuf, sizeof(nuhbuf), client->name, client->user->username, GetHost(client));
 
 	return add_listmode_ex(list, client, channel, banid, setby, TStime());
 }
 
 /** Delete a listmode (+beI) from a channel that matches the specified banid.
  */
-int del_listmode(Ban **list, Channel *channel, char *banid)
+int del_listmode(Ban **list, Channel *channel, const char *banid)
 {
 	Ban **ban;
 	Ban *tmp;
@@ -390,43 +362,37 @@ int del_listmode(Ban **list, Channel *channel, char *banid)
  * @returns      A pointer to the ban struct if banned, otherwise NULL.
  * @comments     Simple wrapper for is_banned_with_nick()
  */
-inline Ban *is_banned(Client *client, Channel *channel, int type, char **msg, char **errmsg)
+inline Ban *is_banned(Client *client, Channel *channel, int type, const char **msg, const char **errmsg)
 {
 	return is_banned_with_nick(client, channel, type, NULL, msg, errmsg);
 }
 
 /** ban_check_mask - Checks if the user matches the specified n!u@h mask -or- run an extended ban.
- * @param client         Client to check (can be remote client)
- * @param channel        Channel to check
- * @param banstr       Mask string to check user
- * @param type         Type of ban to check for (BANCHK_*)
- * @param msg          Message, only for some BANCHK_* types, otherwise NULL.
- * @param errmsg       Error message, could be NULL
- * @param no_extbans   0 to check extbans, nonzero to disable extban checking.
- * @returns            Nonzero if the mask/extban succeeds. Zero if it doesn't.
- * @comments           This is basically extracting the mask and extban check from is_banned_with_nick, but with being a bit more strict in what an extban is.
- *                     Strange things could happen if this is called outside standard ban checking.
+ * This is basically extracting the mask and extban check from is_banned_with_nick,
+ * but with being a bit more strict in what an extban is.
+ * Strange things could happen if this is called outside standard ban checking.
+ * @param b	Ban context, see BanContext
+ * @returns	Nonzero if the mask/extban succeeds. Zero if it doesn't.
  */
-inline int ban_check_mask(Client *client, Channel *channel, char *banstr, int type, char **msg, char **errmsg, int no_extbans)
+inline int ban_check_mask(BanContext *b)
 {
-	Extban *extban = NULL;
-	if (!no_extbans && is_extended_ban(banstr))
+	if (!b->no_extbans && is_extended_ban(b->banstr))
 	{
 		/* Is an extended ban. */
-		extban = findmod_by_bantype(banstr[1]);
-		if (!extban)
+		const char *nextbanstr;
+		Extban *extban = findmod_by_bantype(b->banstr, &nextbanstr);
+		if (!extban || !(extban->is_banned_events & b->ban_check_types))
 		{
 			return 0;
-		}
-		else
-		{
-			return extban->is_banned(client, channel, banstr, type, msg, errmsg);
+		} else {
+			b->banstr = nextbanstr;
+			return extban->is_banned(b);
 		}
 	}
 	else
 	{
 		/* Is a n!u@h mask. */
-		return match_user(banstr, client, MATCH_CHECK_ALL);
+		return match_user(b->banstr, b->client, MATCH_CHECK_ALL);
 	}
 }
 
@@ -438,10 +404,11 @@ inline int ban_check_mask(Client *client, Channel *channel, char *banstr, int ty
  * @param msg    Message, only for some BANCHK_* types, otherwise NULL
  * @returns      A pointer to the ban struct if banned, otherwise NULL.
  */
-Ban *is_banned_with_nick(Client *client, Channel *channel, int type, char *nick, char **msg, char **errmsg)
+Ban *is_banned_with_nick(Client *client, Channel *channel, int type, const char *nick, const char **msg, const char **errmsg)
 {
 	Ban *ban, *ex;
 	char savednick[NICKLEN+1];
+	BanContext *b = safe_alloc(sizeof(BanContext));
 
 	/* It's not really doable to pass 'nick' to all the ban layers,
 	 * including extbans (with stacking) and so on. Or at least not
@@ -460,13 +427,20 @@ Ban *is_banned_with_nick(Client *client, Channel *channel, int type, char *nick,
 		strlcpy(client->name, nick, sizeof(client->name));
 	}
 
+	b->client = client;
+	b->channel = channel;
+	b->ban_check_types = type;
+	if (msg)
+		b->msg = *msg;
+
 	/* We check +b first, if a +b is found we then see if there is a +e.
 	 * If a +e was found we return NULL, if not, we return the ban.
 	 */
 
 	for (ban = channel->banlist; ban; ban = ban->next)
 	{
-		if (ban_check_mask(client, channel, ban->banstr, type, msg, errmsg, 0))
+		b->banstr = ban->banstr;
+		if (ban_check_mask(b))
 			break;
 	}
 
@@ -475,7 +449,8 @@ Ban *is_banned_with_nick(Client *client, Channel *channel, int type, char *nick,
 		/* Ban found, now check for +e */
 		for (ex = channel->exlist; ex; ex = ex->next)
 		{
-			if (ban_check_mask(client, channel, ex->banstr, type, msg, errmsg, 0))
+			b->banstr = ex->banstr;
+			if (ban_check_mask(b))
 			{
 				/* except matched */
 				ban = NULL;
@@ -491,6 +466,13 @@ Ban *is_banned_with_nick(Client *client, Channel *channel, int type, char *nick,
 		strlcpy(client->name, savednick, sizeof(client->name));
 	}
 
+	/* OUT: */
+	if (msg)
+		*msg = b->msg;
+	if (errmsg)
+		*errmsg = b->error_msg;
+
+	safe_free(b);
 	return ban;
 }
 
@@ -499,37 +481,43 @@ Ban *is_banned_with_nick(Client *client, Channel *channel, int type, char *nick,
  * and also the Membership struct to the client->user->channel linked list.
  * @note This does NOT send the JOIN, it only does the linked list stuff.
  */
-void add_user_to_channel(Channel *channel, Client *who, int flags)
+void add_user_to_channel(Channel *channel, Client *client, const char *modes)
 {
 	Member *m;
 	Membership *mb;
+	const char *p;
 
-	if (who->user)
-	{
-		m = make_member();
-		m->client = who;
-		m->flags = flags;
-		m->next = channel->members;
-		channel->members = m;
-		channel->users++;
+	if (!client->user)
+		return;
 
-		mb = make_membership();
-		mb->channel = channel;
-		mb->next = who->user->channel;
-		mb->flags = flags;
-		who->user->channel = mb;
-		who->user->joined++;
-		RunHook2(HOOKTYPE_JOIN_DATA, who, channel);
-	}
+	m = make_member();
+	m->client = client;
+	m->next = channel->members;
+	channel->members = m;
+	channel->users++;
+
+	mb = make_membership();
+	mb->channel = channel;
+	mb->next = client->user->channel;
+	client->user->channel = mb;
+	client->user->joined++;
+
+	for (p = modes; *p; p++)
+		add_member_mode_fast(m, mb, *p);
+
+	RunHook(HOOKTYPE_JOIN_DATA, client, channel);
 }
 
 /** Remove the user from the channel.
- * This doesn't send any PART etc. It does the free'ing of
- * membership etc. It will also DESTROY the channel if the
- * user was the last user (and the channel is not +P),
- * via sub1_from_channel(), that is.
+ * This frees the memberships, decreases the user counts,
+ * destroys the channel if needed, etc.
+ * This does not send any PART/KICK/..!
+ * @param client	The client that is removed from the channel
+ * @param channel	The channel
+ * @param dont_log	Set to 1 if it should not be logged as a part,
+ *                      for example if you are already logging it as a kick.
  */
-int remove_user_from_channel(Client *client, Channel *channel)
+int remove_user_from_channel(Client *client, Channel *channel, int dont_log)
 {
 	Member **m;
 	Member *m2;
@@ -561,56 +549,46 @@ int remove_user_from_channel(Client *client, Channel *channel)
 	/* Update user record to reflect 1 less joined */
 	client->user->joined--;
 
+	if (!dont_log)
+	{
+		if (MyUser(client))
+		{
+			unreal_log(ULOG_INFO, "part", "LOCAL_CLIENT_PART", client,
+				   "User $client left $channel",
+				   log_data_channel("channel", channel));
+		} else {
+			unreal_log(ULOG_INFO, "part", "REMOTE_CLIENT_PART", client,
+				   "User $client left $channel",
+				   log_data_channel("channel", channel));
+		}
+	}
+
 	/* Now sub1_from_channel() will deal with the channel record
 	 * and destroy the channel if needed.
 	 */
 	return sub1_from_channel(channel);
 }
 
-/** Get channel access flags (CHFL_*) for a client in a channel.
- * @param client	The client
- * @param channel	The channel
- * @returns One or more of CHFL_* (eg: CHFL_CHANOP|CHFL_CHANADMIN)
- * @note If the user is not found, then 0 is returned.
- *       If the user has no access rights, then 0 is returned as well.
- */
-long get_access(Client *client, Channel *channel)
-{
-	Membership *lp;
-	if (channel && IsUser(client))
-		if ((lp = find_membership_link(client->user->channel, channel)))
-			return lp->flags;
-	return 0;
-}
-
 /** Returns 1 if channel has this channel mode set and 0 if not */
 int has_channel_mode(Channel *channel, char mode)
 {
-	CoreChannelModeTable *tab = &corechannelmodetable[0];
-	int i;
+	Cmode *cm;
 
-	/* Extended channel modes */
-	for (i=0; i <= Channelmode_highest; i++)
-	{
-		if ((Channelmode_Table[i].flag == mode) && (channel->mode.extmode & Channelmode_Table[i].mode))
+	for (cm=channelmodes; cm; cm = cm->next)
+		if ((cm->letter == mode) && (channel->mode.mode & cm->mode))
 			return 1;
-	}
 
-	/* Built-in channel modes */
-	while (tab->mode != 0x0)
-	{
-		if ((channel->mode.mode & tab->mode) && (tab->flag == mode))
+	return 0; /* Not found */
+}
+
+/** Returns 1 if channel has this mode is set and 0 if not */
+int has_channel_mode_raw(Cmode_t m, char mode)
+{
+	Cmode *cm;
+
+	for (cm=channelmodes; cm; cm = cm->next)
+		if ((cm->letter == mode) && (m & cm->mode))
 			return 1;
-		tab++;
-	}
-
-	/* Special handling for +l (needed??) */
-	if (channel->mode.limit && (mode == 'l'))
-		return 1;
-
-	/* Special handling for +k (needed??) */
-	if (channel->mode.key[0] && (mode == 'k'))
-		return 1;
 
 	return 0; /* Not found */
 }
@@ -618,126 +596,88 @@ int has_channel_mode(Channel *channel, char mode)
 /** Get the extended channel mode 'bit' value (eg: 0x20) by character (eg: 'Z') */
 Cmode_t get_extmode_bitbychar(char m)
 {
-        int extm;
-        for (extm=0; extm <= Channelmode_highest; extm++)
-        {
-                if (Channelmode_Table[extm].flag == m)
-                        return Channelmode_Table[extm].mode;
-        }
+	Cmode *cm;
+
+	for (cm=channelmodes; cm; cm = cm->next)
+                if (cm->letter == m)
+                        return cm->mode;
+
         return 0;
 }
 
-/** Get the extended channel mode character (eg: 'Z') by the 'bit' value (eg: 0x20) */
-long get_mode_bitbychar(char m)
-{
-	CoreChannelModeTable *tab = &corechannelmodetable[0];
-
-	while(tab->mode != 0x0)
-	{
-		if (tab->flag == m)
-			return tab->mode;
-		tab++;;
-	}
-	return 0;
-}
-
 /** Write the "simple" list of channel modes for channel channel onto buffer mbuf with the parameters in pbuf.
+ * @param client		The client requesting the mode list (can be NULL)
+ * @param mbuf			Modes will be stored here
+ * @param pbuf			Mode parameters will be stored here
+ * @param mbuf_size		Length of the mbuf buffer
+ * @param pbuf_size		Length of the pbuf buffer
+ * @param channel		The channel to fetch modes from
+ * @param hide_local_modes	If set to 1 then we will hide local channel modes like Z and d
+ *				(eg: if you intend to send the buffer to a remote server)
  */
-/* TODO: this function has many security issues and needs an audit, maybe even a recode */
-void channel_modes(Client *client, char *mbuf, char *pbuf, size_t mbuf_size, size_t pbuf_size, Channel *channel)
+void channel_modes(Client *client, char *mbuf, char *pbuf, size_t mbuf_size, size_t pbuf_size, Channel *channel, int hide_local_modes)
 {
-	CoreChannelModeTable *tab = &corechannelmodetable[0];
-	int ismember;
-	int i;
+	int ismember = 0;
+	Cmode *cm;
 
-	if (!(mbuf_size && pbuf_size)) return;
+	if (!mbuf_size || !pbuf_size)
+		return;
 
-	ismember = (IsMember(client, channel) || IsServer(client) || IsMe(client) || IsULine(client)) ? 1 : 0;
+	if (!client || IsMember(client, channel) || IsServer(client) || IsMe(client) || IsULine(client))
+		ismember = 1;
 
 	*pbuf = '\0';
+	strlcpy(mbuf, "+", mbuf_size);
 
-	*mbuf++ = '+';
-	mbuf_size--;
 	/* Paramless first */
-	while (mbuf_size && tab->mode != 0x0)
+	for (cm=channelmodes; cm; cm = cm->next)
 	{
-		if ((channel->mode.mode & tab->mode))
-			if (!tab->parameters) {
-				*mbuf++ = tab->flag;
-				mbuf_size--;
-			}
-		tab++;
-	}
-	for (i=0; i <= Channelmode_highest; i++)
-	{
-		if (!mbuf_size) break;
-		if (Channelmode_Table[i].flag && !Channelmode_Table[i].paracount &&
-		    (channel->mode.extmode & Channelmode_Table[i].mode)) {
-			*mbuf++ = Channelmode_Table[i].flag;
-			mbuf_size--;
-		}
-	}
-	if (channel->mode.limit)
-	{
-		if (mbuf_size) {
-			*mbuf++ = 'l';
-			mbuf_size--;
-		}
-		if (ismember) {
-			ircsnprintf(pbuf, pbuf_size, "%d ", channel->mode.limit);
-			pbuf_size-=strlen(pbuf);
-			pbuf+=strlen(pbuf);
-		}
-	}
-	if (*channel->mode.key)
-	{
-		if (mbuf_size) {
-			*mbuf++ = 'k';
-			mbuf_size--;
-		}
-		if (ismember && pbuf_size) {
-			ircsnprintf(pbuf, pbuf_size, "%s ", channel->mode.key);
-			pbuf_size-=strlen(pbuf);
-			pbuf+=strlen(pbuf);
+		if (cm->letter &&
+		    !cm->paracount &&
+		    !(hide_local_modes && cm->local) &&
+		    (channel->mode.mode & cm->mode))
+		{
+			strlcat_letter(mbuf, cm->letter, mbuf_size);
 		}
 	}
 
-	for (i=0; i <= Channelmode_highest; i++)
+	for (cm=channelmodes; cm; cm = cm->next)
 	{
-		if (Channelmode_Table[i].flag && Channelmode_Table[i].paracount &&
-		    (channel->mode.extmode & Channelmode_Table[i].mode)) {
-		        char flag = Channelmode_Table[i].flag;
-			if (mbuf_size) {
-				*mbuf++ = flag;
-				mbuf_size--;
-			}
+		if (cm->letter &&
+		    cm->paracount &&
+		    !(hide_local_modes && cm->local) &&
+		    (channel->mode.mode & cm->mode))
+		{
+			char flag = cm->letter;
+
+			if (mbuf_size)
+				strlcat_letter(mbuf, flag, mbuf_size);
+
 			if (ismember)
 			{
-				ircsnprintf(pbuf, pbuf_size, "%s ", cm_getparameter(channel, flag));
-				pbuf_size-=strlen(pbuf);
-				pbuf+=strlen(pbuf);
+				strlcat(pbuf, cm_getparameter(channel, flag), pbuf_size);
+				strlcat(pbuf, " ", pbuf_size);
 			}
 		}
 	}
 
 	/* Remove the trailing space from the parameters -- codemastr */
-	if (*pbuf) pbuf[strlen(pbuf)-1]=0;
-
-	if (!mbuf_size) mbuf--;
-	*mbuf++ = '\0';
-	return;
+	if (*pbuf)
+		pbuf[strlen(pbuf)-1]='\0';
 }
 
 /** Make a pretty mask from the input string - only used by SILENCE
  */
-char *pretty_mask(char *mask)
+char *pretty_mask(const char *mask_in)
 {
-	char *cp;
-	char *user;
-	char *host;
+	char mask[512];
+	char *cp, *user, *host;
+
+	strlcpy(mask, mask_in, sizeof(mask));
 
 	if ((user = strchr((cp = mask), '!')))
 		*user++ = '\0';
+
 	if ((host = strrchr(user ? user : cp, '@')))
 	{
 		*host++ = '\0';
@@ -745,7 +685,9 @@ char *pretty_mask(char *mask)
 			return make_nick_user_host(NULL, cp, host);
 	}
 	else if (!user && strchr(cp, '.'))
+	{
 		return make_nick_user_host(NULL, NULL, cp);
+	}
 	return make_nick_user_host(cp, user, host);
 }
 
@@ -772,30 +714,29 @@ char *trim_str(char *str, int len)
  * @param mask		The ban mask
  * @param what		MODE_DEL or MODE_ADD
  * @param client	The client adding/removing this ban mask
+ * @param conv_options	Options for BanContext.conv_options (eg BCTX_CONV_OPTION_WRITE_LETTER_BANS)
  * @returns pointer to correct banmask or NULL in case of error
  * @note A pointer is returned to a static buffer, which is overwritten
  *       on next clean_ban_mask or make_nick_user_host call.
  */
-char *clean_ban_mask(char *mask, int what, Client *client)
+const char *clean_ban_mask(const char *mask_in, int what, Client *client, int conv_options)
 {
 	char *cp, *x;
 	char *user;
 	char *host;
-	Extban *p;
-	static char maskbuf[512];
+	static char mask[512];
+
+	/* Strip any ':' at beginning since that would cause a desync */
+	for (; (*mask_in && (*mask_in == ':')); mask_in++);
+	if (!*mask_in)
+		return NULL;
 
 	/* Work on a copy */
-	strlcpy(maskbuf, mask, sizeof(maskbuf));
-	mask = maskbuf;
+	strlcpy(mask, mask_in, sizeof(mask));
 
 	cp = strchr(mask, ' ');
 	if (cp)
 		*cp = '\0';
-
-	/* Strip any ':' at beginning since that would cause a desync */
-	for (; (*mask && (*mask == ':')); mask++);
-	if (!*mask)
-		return NULL;
 
 	/* Forbid ASCII <= 32 in all bans */
 	for (x = mask; *x; x++)
@@ -805,6 +746,9 @@ char *clean_ban_mask(char *mask, int what, Client *client)
 	/* Extended ban? */
 	if (is_extended_ban(mask))
 	{
+		const char *nextbanstr;
+		Extban *extban;
+
 		if (RESTRICT_EXTENDEDBANS && MyUser(client) && !ValidatePermissionsForPath("immune:restrict-extendedbans",client,NULL,NULL,NULL))
 		{
 			if (!strcmp(RESTRICT_EXTENDEDBANS, "*"))
@@ -819,8 +763,9 @@ char *clean_ban_mask(char *mask, int what, Client *client)
 				return NULL;
 			}
 		}
-		p = findmod_by_bantype(mask[1]);
-		if (!p)
+
+		extban = findmod_by_bantype(mask, &nextbanstr);
+		if (!extban)
 		{
 			/* extended bantype not supported, what to do?
 			 * Here are the rules:
@@ -833,8 +778,21 @@ char *clean_ban_mask(char *mask, int what, Client *client)
 				return mask; /* allow it */
 			return NULL; /* reject */
 		}
-		if (p->conv_param)
-			return p->conv_param(mask);
+
+		if (extban->conv_param)
+		{
+			const char *ret;
+			static char retbuf[512];
+			BanContext *b = safe_alloc(sizeof(BanContext));
+			b->client = client;
+			b->what = what;
+			b->banstr = nextbanstr;
+			b->conv_options = conv_options;
+			ret = extban->conv_param(b, extban);
+			ret = prefix_with_extban(ret, b, extban, retbuf, sizeof(retbuf));
+			safe_free(b);
+			return ret;
+		}
 		/* else, do some basic sanity checks and cut it off at 80 bytes */
 		if ((mask[1] != ':') || (mask[2] == '\0'))
 		    return NULL; /* require a ":<char>" after extban type */
@@ -864,11 +822,23 @@ char *clean_ban_mask(char *mask, int what, Client *client)
 int find_invex(Channel *channel, Client *client)
 {
 	Ban *inv;
+	BanContext *b = safe_alloc(sizeof(BanContext));
+
+	b->client = client;
+	b->channel = channel;
+	b->ban_check_types = BANCHK_JOIN;
 
 	for (inv = channel->invexlist; inv; inv = inv->next)
-		if (ban_check_mask(client, channel, inv->banstr, BANCHK_JOIN, NULL, NULL, 0))
+	{
+		b->banstr = inv->banstr;
+		if (ban_check_mask(b))
+		{
+			safe_free(b);
 			return 1;
+		}
+	}
 
+	safe_free(b);
 	return 0;
 }
 
@@ -924,120 +894,66 @@ int valid_channelname(const char *cname)
 	return 1; /* Valid */
 }
 
-/** Get existing channel 'chname' or create a new one.
- * @param client	User creating or searching this channel
- * @param chname	Channel name
+void initlist_channels(void)
+{
+	channel_pool = mp_pool_new(sizeof(Channel), 512 * 1024);
+}
+
+/** Create channel 'name' (or if it exists, return the existing one)
+ * @param name		Channel name
  * @param flag		If set to 'CREATE' then the channel is
  *			created if it does not exist.
  * @returns Pointer to channel (new or existing).
  * @note Be sure to call valid_channelname() first before
  *       you blindly call this function!
  */
-Channel *get_channel(Client *client, char *chname, int flag)
+Channel *make_channel(const char *name)
 {
 	Channel *channel;
-	int  len;
+	int len;
+	char *p;
+	char namebuf[CHANNELLEN+1];
 
-	if (BadPtr(chname))
+	if (BadPtr(name))
 		return NULL;
 
-	len = strlen(chname);
-	if (MyUser(client) && len > CHANNELLEN)
+	/* Copy and silently truncate */
+	strlcpy(namebuf, name, sizeof(namebuf));
+
+	/* Copied from valid_channelname(), the minimal requirements */
+	for (p = namebuf; *p; p++)
 	{
-		len = CHANNELLEN;
-		*(chname + CHANNELLEN) = '\0';
+		if (*p < 33 || *p == ',' || *p == ':')
+		{
+			*p = '\0';
+			break;
+		}
 	}
-	if ((channel = find_channel(chname, NULL)))
-		return (channel);
-	if (flag == CREATE)
-	{
-		channel = safe_alloc(sizeof(Channel) + len);
-		strlcpy(channel->chname, chname, len + 1);
-		if (channels)
-			channels->prevch = channel;
-		channel->topic = NULL;
-		channel->topic_nick = NULL;
-		channel->prevch = NULL;
-		channel->nextch = channels;
-		channel->creationtime = MyUser(client) ? TStime() : 0;
-		channels = channel;
-		add_to_channel_hash_table(chname, channel);
-		irccounts.channels++;
-		RunHook2(HOOKTYPE_CHANNEL_CREATE, client, channel);
-	}
+
+	/* Exists? Return it. */
+	if ((channel = find_channel(name)))
+		return channel;
+
+	channel = mp_pool_get(channel_pool);
+	memset(channel, 0, sizeof(Channel));
+
+	strlcpy(channel->name, name, sizeof(channel->name));
+
+	if (channels)
+		channels->prevch = channel;
+
+	channel->topic = NULL;
+	channel->topic_nick = NULL;
+	channel->prevch = NULL;
+	channel->nextch = channels;
+	channel->creationtime = TStime();
+	channels = channel;
+	add_to_channel_hash_table(channel->name, channel);
+	irccounts.channels++;
+
+	RunHook(HOOKTYPE_CHANNEL_CREATE, channel);
+
 	return channel;
-}
-
-/** Register an invite from someone to a channel - so they can bypass +i etc.
- * @param from		The person sending the invite
- * @param to		The person who is invited to join
- * @param channel	The channel
- * @param mtags		Message tags associated with this INVITE command
- */
-void add_invite(Client *from, Client *to, Channel *channel, MessageTag *mtags)
-{
-	Link *inv, *tmp;
-
-	del_invite(to, channel);
-	/* If too many invite entries then delete the oldest one */
-	if (list_length(to->user->invited) >= MAXCHANNELSPERUSER)
-	{
-		for (tmp = to->user->invited; tmp->next; tmp = tmp->next)
-			;
-		del_invite(to, tmp->value.channel);
-
-	}
-	/* We get pissy over too many invites per channel as well now,
-	 * since otherwise mass-inviters could take up some major
-	 * resources -Donwulff
-	 */
-	if (list_length(channel->invites) >= MAXCHANNELSPERUSER)
-	{
-		for (tmp = channel->invites; tmp->next; tmp = tmp->next)
-			;
-		del_invite(tmp->value.client, channel);
-	}
-	/*
-	 * add client to the beginning of the channel invite list
-	 */
-	inv = make_link();
-	inv->value.client = to;
-	inv->next = channel->invites;
-	channel->invites = inv;
-	/*
-	 * add channel to the beginning of the client invite list
-	 */
-	inv = make_link();
-	inv->value.channel = channel;
-	inv->next = to->user->invited;
-	to->user->invited = inv;
-
-	RunHook4(HOOKTYPE_INVITE, from, to, channel, mtags);
-}
-
-/** Delete a previous invite of someone to a channel.
- * @param client	The client who was invited
- * @param channel	The channel to which the person was invited
- */
-void del_invite(Client *client, Channel *channel)
-{
-	Link **inv, *tmp;
-
-	for (inv = &(channel->invites); (tmp = *inv); inv = &tmp->next)
-		if (tmp->value.client == client)
-		{
-			*inv = tmp->next;
-			free_link(tmp);
-			break;
-		}
-
-	for (inv = &(client->user->invited); (tmp = *inv); inv = &tmp->next)
-		if (tmp->value.channel == channel)
-		{
-			*inv = tmp->next;
-			free_link(tmp);
-			break;
-		}
 }
 
 /** Is the user 'client' invited to channel 'channel' by a chanop?
@@ -1046,12 +962,9 @@ void del_invite(Client *client, Channel *channel)
  */
 int is_invited(Client *client, Channel *channel)
 {
-	Link *lp;
-
-	for (lp = client->user->invited; lp; lp = lp->next)
-		if (lp->value.channel == channel)
-			return 1;
-	return 0;
+	int invited = 0;
+	RunHook(HOOKTYPE_IS_INVITED, client, channel, &invited);
+	return invited;
 }
 
 /** Subtract one user from channel i. Free the channel if it became empty.
@@ -1072,7 +985,7 @@ int sub1_from_channel(Channel *channel)
 	channel->users = 0; /* to be sure */
 
 	/* If the channel is +P then this hook will actually stop destruction. */
-	RunHook2(HOOKTYPE_CHANNEL_DESTROY, channel, &should_destroy);
+	RunHook(HOOKTYPE_CHANNEL_DESTROY, channel, &should_destroy);
 	if (!should_destroy)
 		return 0;
 
@@ -1081,9 +994,6 @@ int sub1_from_channel(Channel *channel)
 	 */
 
 	moddata_free_channel(channel);
-
-	while ((lp = channel->invites))
-		del_invite(lp->value.client, channel);
 
 	while (channel->banlist)
 	{
@@ -1111,7 +1021,7 @@ int sub1_from_channel(Channel *channel)
 	}
 
 	/* free extcmode params */
-	extcmode_free_paramlist(channel->mode.extmodeparams);
+	extcmode_free_paramlist(channel->mode.mode_params);
 
 	safe_free(channel->mode_lock);
 	safe_free(channel->topic);
@@ -1124,10 +1034,10 @@ int sub1_from_channel(Channel *channel)
 
 	if (channel->nextch)
 		channel->nextch->prevch = channel->prevch;
-	del_from_channel_hash_table(channel->chname, channel);
+	del_from_channel_hash_table(channel->name, channel);
 
 	irccounts.channels--;
-	safe_free(channel);
+	mp_pool_release(channel);
 	return 1;
 }
 
@@ -1143,7 +1053,7 @@ void set_channel_mlock(Client *client, Channel *channel, const char *newmlock, i
 	if (propagate)
 	{
 		sendto_server(client, 0, 0, NULL, ":%s MLOCK %lld %s :%s",
-			      client->id, (long long)channel->creationtime, channel->chname,
+			      client->id, (long long)channel->creationtime, channel->name,
 			      BadPtr(channel->mode_lock) ? "" : channel->mode_lock);
 	}
 }
@@ -1159,14 +1069,14 @@ void set_channel_mlock(Client *client, Channel *channel, const char *newmlock, i
  * int ret;
  * for (ret = parse_chanmode(&pm, modebuf, parabuf); ret; ret = parse_chanmode(&pm, NULL, NULL))
  * {
- *         ircd_log(LOG_ERROR, "Got %c%c %s",
- *                  pm.what == MODE_ADD ? '+' : '-',
- *                  pm.modechar,
- *                  pm.param ? pm.param : "");
+ *         unreal_log(ULOG_INFO, "test", "TEST", "Got %c%c %s",
+ *                    pm.what == MODE_ADD ? '+' : '-',
+ *                    pm.modechar,
+ *                    pm.param ? pm.param : "");
  * }
  * @endcode
  */
-int parse_chanmode(ParseMode *pm, char *modebuf_in, char *parabuf_in)
+int parse_chanmode(ParseMode *pm, const char *modebuf_in, const char *parabuf_in)
 {
 	if (modebuf_in)
 	{
@@ -1196,7 +1106,7 @@ int parse_chanmode(ParseMode *pm, char *modebuf_in, char *parabuf_in)
 		else
 		{
 			CoreChannelModeTable *tab = &corechannelmodetable[0];
-			int i;
+			Cmode *cm;
 			int eatparam = 0;
 
 			/* Set some defaults */
@@ -1216,32 +1126,31 @@ int parse_chanmode(ParseMode *pm, char *modebuf_in, char *parabuf_in)
 				/* INTERNAL MODE */
 				if (tab->parameters)
 				{
-					if ((pm->what == MODE_DEL) && (tab->flag == 'l'))
-						eatparam = 0; /* -l is special: no parameter required */
-					else
-						eatparam = 1; /* all other internal parameter modes do require a parameter on unset */
+					eatparam = 1;
 				}
 			} else {
 				/* EXTENDED CHANNEL MODE */
 				int found = 0;
-				for (i=0; i <= Channelmode_highest; i++)
-					if (Channelmode_Table[i].flag == *pm->modebuf)
+				for (cm=channelmodes; cm; cm = cm->next)
+				{
+					if (cm->letter == *pm->modebuf)
 					{
 						found = 1;
 						break;
 					}
+				}
 				if (!found)
 				{
 					/* Not found. Will be ignored, just move on.. */
 					pm->modebuf++;
 					continue;
 				}
-				pm->extm = &Channelmode_Table[i];
-				if (Channelmode_Table[i].paracount == 1)
+				pm->extm = cm;
+				if (cm->paracount == 1)
 				{
 					if (pm->what == MODE_ADD)
 						eatparam = 1;
-					else if (Channelmode_Table[i].unset_with_param)
+					else if (cm->unset_with_param)
 						eatparam = 1;
 					/* else 0 (if MODE_DEL && !unset_with_param) */
 				}
@@ -1252,7 +1161,7 @@ int parse_chanmode(ParseMode *pm, char *modebuf_in, char *parabuf_in)
 				/* Hungry.. */
 				if (pm->parabuf && *pm->parabuf)
 				{
-					char *start, *end;
+					const char *start, *end;
 					for (; *pm->parabuf == ' '; pm->parabuf++); /* skip whitespace */
 					start = pm->parabuf;
 					if (*pm->parabuf == '\0')
@@ -1274,6 +1183,7 @@ int parse_chanmode(ParseMode *pm, char *modebuf_in, char *parabuf_in)
 						strlcpy(pm->buf, start, sizeof(pm->buf));
 						pm->parabuf = pm->parabuf + strlen(pm->parabuf); /* point to \0 at end */
 					}
+					stripcrlf(pm->buf); /* needed for unreal_server_compat.c */
 					pm->param = pm->buf;
 				} else {
 					pm->modebuf++;
@@ -1319,7 +1229,7 @@ int user_can_see_member(Client *user, Client *target, Channel *channel)
 	}
 
 	/* We must ensure that user is allowed to "see" target */
-	if (j != 0 && !(is_skochanop(target, channel) || has_voice(target,channel)) && !is_skochanop(user, channel))
+	if (j != 0 && !(check_channel_access(target, channel, "hoaq") || check_channel_access(target,channel, "v")) && !check_channel_access(user, channel, "hoaq"))
 		return 0;
 
 	return 1;
@@ -1341,7 +1251,7 @@ int invisible_user_in_channel(Client *target, Channel *channel)
 	}
 
 	/* We must ensure that user is allowed to "see" target */
-	if (j != 0 && !(is_skochanop(target, channel) || has_voice(target,channel)))
+	if (j != 0 && !(check_channel_access(target, channel, "hoaq") || check_channel_access(target,channel, "v")))
 		return 1;
 
 	return 0;
@@ -1352,9 +1262,9 @@ int invisible_user_in_channel(Client *target, Channel *channel)
  * @param client      The client to send the message to.
  * @param channelname The (invalid) channel that the user tried to join.
  */
-void send_invalid_channelname(Client *client, char *channelname)
+void send_invalid_channelname(Client *client, const char *channelname)
 {
-	char *reason;
+	const char *reason;
 
 	if (*channelname != '#')
 	{
@@ -1383,10 +1293,60 @@ void send_invalid_channelname(Client *client, char *channelname)
 
 /** Is the provided string possibly an extended ban?
  * Note that it still may not exist, it just tests the first part.
+ * @param str	The string to check (eg "~account:xyz")
  */
 int is_extended_ban(const char *str)
 {
-	if ((str[0] == '~') && (str[1] != '\0') && (str[2] == ':'))
+	const char *p;
+
+	if (*str != '~')
+		return 0;
+	for (p = str+1; *p; p++)
+	{
+		if (!isalnum(*p))
+		{
+			if (*p == ':')
+				return 1;
+		}
+	}
+	return 0;
+}
+
+/** Is the provided string possibly an extended server ban?
+ * Actually this is only a very light check.
+ * It may still not exist, it just tests the first part.
+ * @param str	The string to check (eg "~account:xyz")
+ * The only difference between this and is_extended_ban()
+ * is that we allow a % at the beginning for soft-bans.
+ * @see is_extended_ban()
+ */
+int is_extended_server_ban(const char *str)
+{
+	if (*str == '%')
+		str++;
+	return is_extended_ban(str);
+}
+
+/** Check if it is an empty (useless) mode, namely "", "+" or "-".
+ * Typically called as: empty_mode(modebuf)
+ */
+int empty_mode(const char *m)
+{
+	if (!*m || (((m[0] == '+') || (m[0] == '-')) && m[1] == '\0'))
 		return 1;
 	return 0;
+}
+
+/** Free everything of/in a MultiLineMode */
+void free_multilinemode(MultiLineMode *m)
+{
+	int i;
+	if (m == NULL)
+		return;
+	for (i=0; i < m->numlines; i++)
+	{
+		safe_free(m->modeline[i]);
+		safe_free(m->paramline[i]);
+	}
+	safe_free(m);
 }

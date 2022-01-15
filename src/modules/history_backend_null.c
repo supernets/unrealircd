@@ -16,14 +16,14 @@ ModuleHeader MOD_HEADER
 	"2.0",
 	"History backend: null/none",
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
 };
 
 /* Forward declarations */
-int hbn_history_set_limit(char *object, int max_lines, long max_time);
-int hbn_history_add(char *object, MessageTag *mtags, char *line);
-HistoryResult *hbn_history_request(char *object, HistoryFilter *filter);
-int hbn_history_destroy(char *object);
+int hbn_history_set_limit(const char *object, int max_lines, long max_time);
+int hbn_history_add(const char *object, MessageTag *mtags, const char *line);
+HistoryResult *hbn_history_request(const char *object, HistoryFilter *filter);
+int hbn_history_destroy(const char *object);
 
 MOD_INIT()
 {
@@ -53,22 +53,22 @@ MOD_UNLOAD()
 	return MOD_SUCCESS;
 }
 
-int hbn_history_add(char *object, MessageTag *mtags, char *line)
+int hbn_history_add(const char *object, MessageTag *mtags, const char *line)
 {
 	return 1;
 }
 
-HistoryResult *hbn_history_request(char *object, HistoryFilter *filter)
+HistoryResult *hbn_history_request(const char *object, HistoryFilter *filter)
 {
 	return NULL;
 }
 
-int hbn_history_set_limit(char *object, int max_lines, long max_time)
+int hbn_history_set_limit(const char *object, int max_lines, long max_time)
 {
 	return 1;
 }
 
-int hbn_history_destroy(char *object)
+int hbn_history_destroy(const char *object)
 {
 	return 1;
 }

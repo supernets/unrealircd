@@ -32,7 +32,7 @@ ModuleHeader MOD_HEADER
 	"5.0",
 	"command /stats",
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
     };
 
 MOD_INIT()
@@ -53,39 +53,38 @@ MOD_UNLOAD()
 }
 
 extern MODVAR int  max_connection_count;
-extern char *get_client_name2(Client *, int);
 
-int stats_banversion(Client *, char *);
-int stats_links(Client *, char *);
-int stats_denylinkall(Client *, char *);
-int stats_gline(Client *, char *);
-int stats_except(Client *, char *);
-int stats_allow(Client *, char *);
-int stats_command(Client *, char *);
-int stats_oper(Client *, char *);
-int stats_port(Client *, char *);
-int stats_bannick(Client *, char *);
-int stats_traffic(Client *, char *);
-int stats_uline(Client *, char *);
-int stats_vhost(Client *, char *);
-int stats_denylinkauto(Client *, char *);
-int stats_kline(Client *, char *);
-int stats_banrealname(Client *, char *);
-int stats_sqline(Client *, char *);
-int stats_linkinfoint(Client *, char *, int);
-int stats_linkinfo(Client *, char *);
-int stats_linkinfoall(Client *, char *);
-int stats_chanrestrict(Client *, char *);
-int stats_shun(Client *, char *);
-int stats_set(Client *, char *);
-int stats_tld(Client *, char *);
-int stats_uptime(Client *, char *);
-int stats_denyver(Client *, char *);
-int stats_notlink(Client *, char *);
-int stats_class(Client *, char *);
-int stats_officialchannels(Client *, char *);
-int stats_spamfilter(Client *, char *);
-int stats_fdtable(Client *, char *);
+int stats_banversion(Client *, const char *);
+int stats_links(Client *, const char *);
+int stats_denylinkall(Client *, const char *);
+int stats_gline(Client *, const char *);
+int stats_except(Client *, const char *);
+int stats_allow(Client *, const char *);
+int stats_command(Client *, const char *);
+int stats_oper(Client *, const char *);
+int stats_port(Client *, const char *);
+int stats_bannick(Client *, const char *);
+int stats_traffic(Client *, const char *);
+int stats_uline(Client *, const char *);
+int stats_vhost(Client *, const char *);
+int stats_denylinkauto(Client *, const char *);
+int stats_kline(Client *, const char *);
+int stats_banrealname(Client *, const char *);
+int stats_sqline(Client *, const char *);
+int stats_linkinfoint(Client *, const char *, int);
+int stats_linkinfo(Client *, const char *);
+int stats_linkinfoall(Client *, const char *);
+int stats_chanrestrict(Client *, const char *);
+int stats_shun(Client *, const char *);
+int stats_set(Client *, const char *);
+int stats_tld(Client *, const char *);
+int stats_uptime(Client *, const char *);
+int stats_denyver(Client *, const char *);
+int stats_notlink(Client *, const char *);
+int stats_class(Client *, const char *);
+int stats_officialchannels(Client *, const char *);
+int stats_spamfilter(Client *, const char *);
+int stats_fdtable(Client *, const char *);
 
 #define SERVER_AS_PARA 0x1
 #define FLAGS_AS_PARA 0x2
@@ -93,7 +92,7 @@ int stats_fdtable(Client *, char *);
 struct statstab {
 	char flag;
 	char *longflag;
-	int (*func)(Client *client, char *para);
+	int (*func)(Client *client, const char *para);
 	int options;
 };
 
@@ -142,7 +141,7 @@ struct statstab StatsTable[] = {
 	{ 0, 	NULL, 		NULL, 			0		}
 };
 
-int stats_compare(char *s1, char *s2)
+int stats_compare(const char *s1, const char *s2)
 {
 	/* The long stats flags are always lowercase */
 	while (*s1 == tolower(*s2))
@@ -171,7 +170,7 @@ static inline struct statstab *stats_binary_search(char c) {
 	return NULL;
 }
 
-static inline struct statstab *stats_search(char *s) {
+static inline struct statstab *stats_search(const char *s) {
 	int i;
 	for (i = 0; StatsTable[i].flag; i++)
 		if (!stats_compare(StatsTable[i].longflag,s))
@@ -179,7 +178,7 @@ static inline struct statstab *stats_search(char *s) {
 	return NULL;
 }
 
-static inline char *stats_combine_parv(char *p1, char *p2)
+static inline char *stats_combine_parv(const char *p1, const char *p2)
 {
 	static char buf[BUFSIZE+1];
         ircsnprintf(buf, sizeof(buf), "%s %s", p1, p2);
@@ -259,7 +258,7 @@ static inline int allow_user_stats_short(char c)
 	return 0;
 }
 
-static inline int allow_user_stats_long(char *s)
+static inline int allow_user_stats_long(const char *s)
 {
 	OperStat *os;
 	for (os = iConf.allow_user_stats_ext; os; os = os->next)
@@ -295,12 +294,12 @@ CMD_FUNC(cmd_stats)
 
 	if (parc == 3 && parv[2][0] != '+' && parv[2][0] != '-')
 	{
-		if (hunt_server(client, recv_mtags, ":%s STATS %s :%s", 2, parc, parv) != HUNTED_ISME)
+		if (hunt_server(client, recv_mtags, "STATS", 2, parc, parv) != HUNTED_ISME)
 			return;
 	}
 	else if (parc == 4 && parv[2][0] != '+' && parv[2][0] != '-')
 	{
-		if (hunt_server(client, recv_mtags, ":%s STATS %s %s %s", 2, parc, parv) != HUNTED_ISME)
+		if (hunt_server(client, recv_mtags, "STATS", 2, parc, parv) != HUNTED_ISME)
 			return;
 	}
 	if (parc < 2 || !*parv[1])
@@ -382,20 +381,13 @@ CMD_FUNC(cmd_stats)
 	 */
 	if (stat->flag != 'S')
 	{
-		RunHook2(HOOKTYPE_STATS, client, flags);
+		RunHook(HOOKTYPE_STATS, client, flags);
 	}
 
 	sendnumeric(client, RPL_ENDOFSTATS, stat->flag);
-
-	if (!IsULine(client))
-		sendto_snomask(SNO_EYES, "Stats \'%c\' requested by %s (%s@%s)",
-			stat->flag, client->name, client->user->username, GetHost(client));
-	else
-		sendto_snomask(SNO_JUNK, "Stats \'%c\' requested by %s (%s@%s) [ulined]",
-			stat->flag, client->name, client->user->username, GetHost(client));
 }
 
-int stats_banversion(Client *client, char *para)
+int stats_banversion(Client *client, const char *para)
 {
 	ConfigItem_ban *bans;
 	for (bans = conf_ban; bans; bans = bans->next)
@@ -408,7 +400,7 @@ int stats_banversion(Client *client, char *para)
 	return 0;
 }
 
-int stats_links(Client *client, char *para)
+int stats_links(Client *client, const char *para)
 {
 	ConfigItem_link *link_p;
 #ifdef DEBUGMODE
@@ -433,40 +425,42 @@ int stats_links(Client *client, char *para)
 		else if (link_p->leaf)
 			sendnumericfmt(client, RPL_STATSLLINE, "L %s * %s %d",
 				link_p->leaf, link_p->servername, link_p->leaf_depth);
-		// TODO: send incoming allow list? (for opers only)
 	}
 #ifdef DEBUGMODE
 	list_for_each_entry(acptr, &client_list, client_node)
-		if (MyConnect(acptr) && acptr->serv && !IsMe(acptr))
+		if (MyConnect(acptr) && acptr->server && !IsMe(acptr))
 		{
-			if (!acptr->serv->conf)
+			if (!acptr->server->conf)
 				sendnotice(client, "client '%s' (%p) has NO CONF attached (? :P)",
 					acptr->name, acptr);
 			else
 				sendnotice(client, "client '%s' (%p) has conf %p attached, refcount: %d, temporary: %s",
 					acptr->name, acptr,
-					acptr->serv->conf,
-					acptr->serv->conf->refcount,
-					acptr->serv->conf->flag.temporary ? "YES" : "NO");
+					acptr->server->conf,
+					acptr->server->conf->refcount,
+					acptr->server->conf->flag.temporary ? "YES" : "NO");
 		}
 #endif
 	return 0;
 }
 
-int stats_denylinkall(Client *client, char *para)
+int stats_denylinkall(Client *client, const char *para)
 {
 	ConfigItem_deny_link *links;
+	ConfigItem_mask *m;
 
 	for (links = conf_deny_link; links; links = links->next)
 	{
 		if (links->flag.type == CRULE_ALL)
-			sendnumeric(client, RPL_STATSDLINE,
-			'D', links->mask, links->prettyrule);
+		{
+			for (m = links->mask; m; m = m->next)
+				sendnumeric(client, RPL_STATSDLINE, 'D', m->mask, links->prettyrule);
+		}
 	}
 	return 0;
 }
 
-int stats_gline(Client *client, char *para)
+int stats_gline(Client *client, const char *para)
 {
 	int cnt = 0;
 	tkl_stats(client, TKL_GLOBAL|TKL_KILL, para, &cnt);
@@ -474,7 +468,7 @@ int stats_gline(Client *client, char *para)
 	return 0;
 }
 
-int stats_spamfilter(Client *client, char *para)
+int stats_spamfilter(Client *client, const char *para)
 {
 	int cnt = 0;
 	tkl_stats(client, TKL_SPAMF, para, &cnt);
@@ -482,7 +476,7 @@ int stats_spamfilter(Client *client, char *para)
 	return 0;
 }
 
-int stats_except(Client *client, char *para)
+int stats_except(Client *client, const char *para)
 {
 	int cnt = 0;
 	tkl_stats(client, TKL_EXCEPTION, para, &cnt);
@@ -490,43 +484,41 @@ int stats_except(Client *client, char *para)
 	return 0;
 }
 
-int stats_allow(Client *client, char *para)
+int stats_allow(Client *client, const char *para)
 {
 	ConfigItem_allow *allows;
+	ConfigItem_mask *m;
+
 	for (allows = conf_allow; allows; allows = allows->next)
 	{
-		sendnumeric(client, RPL_STATSILINE,
-		            allows->ip, allows->hostname,
-		            allows->maxperip,
-		            allows->global_maxperip,
-		            allows->class->name,
-		            allows->server ? allows->server : defserv,
-		            allows->port ? allows->port : 6667);
+		for (m = allows->mask; m; m = m->next)
+		{
+			sendnumeric(client, RPL_STATSILINE,
+				    m->mask, "-",
+				    allows->maxperip,
+				    allows->global_maxperip,
+				    allows->class->name,
+				    allows->server ? allows->server : DEFAULT_SERVER,
+				    allows->port ? allows->port : 6667);
+		}
 	}
 	return 0;
 }
 
-int stats_command(Client *client, char *para)
+int stats_command(Client *client, const char *para)
 {
 	int i;
 	RealCommand *mptr;
 	for (i = 0; i < 256; i++)
 		for (mptr = CommandHash[i]; mptr; mptr = mptr->next)
 			if (mptr->count)
-#ifndef DEBUGMODE
 			sendnumeric(client, RPL_STATSCOMMANDS, mptr->cmd,
 				mptr->count, mptr->bytes);
-#else
-			sendnumeric(client, RPL_STATSCOMMANDS, mptr->cmd,
-				mptr->count, mptr->bytes,
-				mptr->lticks, mptr->lticks / CLOCKS_PER_SEC,
-				mptr->rticks, mptr->rticks / CLOCKS_PER_SEC);
-#endif
 
 	return 0;
 }
 
-int stats_oper(Client *client, char *para)
+int stats_oper(Client *client, const char *para)
 {
 	ConfigItem_oper *oper_p;
 	ConfigItem_mask *m;
@@ -556,7 +548,7 @@ static char *stats_port_helper(ConfigItem_listen *listener)
 	return buf;
 }
 
-int stats_port(Client *client, char *para)
+int stats_port(Client *client, const char *para)
 {
 	ConfigItem_listen *listener;
 
@@ -577,7 +569,7 @@ int stats_port(Client *client, char *para)
 	return 0;
 }
 
-int stats_bannick(Client *client, char *para)
+int stats_bannick(Client *client, const char *para)
 {
 	int cnt = 0;
 	tkl_stats(client, TKL_NAME, para, &cnt);
@@ -585,7 +577,7 @@ int stats_bannick(Client *client, char *para)
 	return 0;
 }
 
-int stats_traffic(Client *client, char *para)
+int stats_traffic(Client *client, const char *para)
 {
 	Client *acptr;
 	IRCStatistics *sp;
@@ -599,41 +591,13 @@ int stats_traffic(Client *client, char *para)
 	{
 		if (IsServer(acptr))
 		{
-			sp->is_sbs += acptr->local->sendB;
-			sp->is_sbr += acptr->local->receiveB;
-			sp->is_sks += acptr->local->sendK;
-			sp->is_skr += acptr->local->receiveK;
-			sp->is_sti += now - acptr->local->firsttime;
+			sp->is_sti += now - acptr->local->creationtime;
 			sp->is_sv++;
-			if (sp->is_sbs > 1023)
-			{
-				sp->is_sks += (sp->is_sbs >> 10);
-				sp->is_sbs &= 0x3ff;
-			}
-			if (sp->is_sbr > 1023)
-			{
-				sp->is_skr += (sp->is_sbr >> 10);
-				sp->is_sbr &= 0x3ff;
-			}
 		}
 		else if (IsUser(acptr))
 		{
-			sp->is_cbs += acptr->local->sendB;
-			sp->is_cbr += acptr->local->receiveB;
-			sp->is_cks += acptr->local->sendK;
-			sp->is_ckr += acptr->local->receiveK;
-			sp->is_cti += now - acptr->local->firsttime;
+			sp->is_cti += now - acptr->local->creationtime;
 			sp->is_cl++;
-			if (sp->is_cbs > 1023)
-			{
-				sp->is_cks += (sp->is_cbs >> 10);
-				sp->is_cbs &= 0x3ff;
-			}
-			if (sp->is_cbr > 1023)
-			{
-				sp->is_ckr += (sp->is_cbr >> 10);
-				sp->is_cbr &= 0x3ff;
-			}
 		}
 		else if (IsUnknown(acptr))
 			sp->is_ni++;
@@ -648,17 +612,17 @@ int stats_traffic(Client *client, char *para)
 	sendnumericfmt(client, RPL_STATSDEBUG, "local connections %u udp packets %u", sp->is_loc, sp->is_udp);
 	sendnumericfmt(client, RPL_STATSDEBUG, "Client Server");
 	sendnumericfmt(client, RPL_STATSDEBUG, "connected %u %u", sp->is_cl, sp->is_sv);
-	sendnumericfmt(client, RPL_STATSDEBUG, "bytes sent %ld.%huK %ld.%huK",
-		sp->is_cks, sp->is_cbs, sp->is_sks, sp->is_sbs);
-	sendnumericfmt(client, RPL_STATSDEBUG, "bytes recv %ld.%huK %ld.%huK",
-	    sp->is_ckr, sp->is_cbr, sp->is_skr, sp->is_sbr);
+	sendnumericfmt(client, RPL_STATSDEBUG, "messages sent %lld", me.local->traffic.messages_sent);
+	sendnumericfmt(client, RPL_STATSDEBUG, "messages received %lld", me.local->traffic.messages_received);
+	sendnumericfmt(client, RPL_STATSDEBUG, "bytes sent %lld", me.local->traffic.bytes_sent);
+	sendnumericfmt(client, RPL_STATSDEBUG, "bytes received %lld", me.local->traffic.bytes_received);
 	sendnumericfmt(client, RPL_STATSDEBUG, "time connected %lld %lld",
 	    (long long)sp->is_cti, (long long)sp->is_sti);
 
 	return 0;
 }
 
-int stats_fdtable(Client *client, char *para)
+int stats_fdtable(Client *client, const char *para)
 {
 	int i;
 
@@ -677,14 +641,14 @@ int stats_fdtable(Client *client, char *para)
 	return 0;
 }
 
-int stats_uline(Client *client, char *para)
+int stats_uline(Client *client, const char *para)
 {
 	ConfigItem_ulines *ulines;
 	for (ulines = conf_ulines; ulines; ulines = ulines->next)
 		sendnumeric(client, RPL_STATSULINE, ulines->servername);
 	return 0;
 }
-int stats_vhost(Client *client, char *para)
+int stats_vhost(Client *client, const char *para)
 {
 	ConfigItem_mask *m;
 	ConfigItem_vhost *vhosts;
@@ -700,20 +664,23 @@ int stats_vhost(Client *client, char *para)
 	return 0;
 }
 
-int stats_denylinkauto(Client *client, char *para)
+int stats_denylinkauto(Client *client, const char *para)
 {
 	ConfigItem_deny_link *links;
+	ConfigItem_mask *m;
 
 	for (links = conf_deny_link; links; links = links->next)
 	{
 		if (links->flag.type == CRULE_AUTO)
-			sendnumeric(client, RPL_STATSDLINE,
-			'd', links->mask, links->prettyrule);
+		{
+			for (m = links->mask; m; m = m->next)
+				sendnumeric(client, RPL_STATSDLINE, 'd', m->mask, links->prettyrule);
+		}
 	}
 	return 0;
 }
 
-int stats_kline(Client *client, char *para)
+int stats_kline(Client *client, const char *para)
 {
 	int cnt = 0;
 	tkl_stats(client, TKL_KILL, NULL, &cnt);
@@ -721,7 +688,7 @@ int stats_kline(Client *client, char *para)
 	return 0;
 }
 
-int stats_banrealname(Client *client, char *para)
+int stats_banrealname(Client *client, const char *para)
 {
 	ConfigItem_ban *bans;
 	for (bans = conf_ban; bans; bans = bans->next)
@@ -735,14 +702,14 @@ int stats_banrealname(Client *client, char *para)
 	return 0;
 }
 
-int stats_sqline(Client *client, char *para)
+int stats_sqline(Client *client, const char *para)
 {
 	int cnt = 0;
 	tkl_stats(client, TKL_NAME|TKL_GLOBAL, para, &cnt);
 	return 0;
 }
 
-int stats_chanrestrict(Client *client, char *para)
+int stats_chanrestrict(Client *client, const char *para)
 {
 	ConfigItem_deny_channel *dchans;
 	ConfigItem_allow_channel *achans;
@@ -757,7 +724,7 @@ int stats_chanrestrict(Client *client, char *para)
 	return 0;
 }
 
-int stats_shun(Client *client, char *para)
+int stats_shun(Client *client, const char *para)
 {
 	int cnt = 0;
 	tkl_stats(client, TKL_GLOBAL|TKL_SHUN, para, &cnt);
@@ -765,13 +732,13 @@ int stats_shun(Client *client, char *para)
 }
 
 /* should this be moved to a seperate stats flag? */
-int stats_officialchannels(Client *client, char *para)
+int stats_officialchannels(Client *client, const char *para)
 {
 	ConfigItem_offchans *x;
 
 	for (x = conf_offchans; x; x = x->next)
 	{
-		sendtxtnumeric(client, "%s %s", x->chname, x->topic ? x->topic : "");
+		sendtxtnumeric(client, "%s %s", x->name, x->topic ? x->topic : "");
 	}
 	return 0;
 }
@@ -791,6 +758,14 @@ static void stats_set_anti_flood(Client *client, FloodSettings *f)
 				f->name, floodoption_names[i],
 				(int)f->limit[i], pretty_time_val(f->period[i]));
 		}
+		if (i == FLD_LAG_PENALTY)
+		{
+			sendtxtnumeric(client, "anti-flood::%s::lag-penalty: %d msec",
+				f->name, (int)f->period[i]);
+			sendtxtnumeric(client, "anti-flood::%s::lag-penalty-bytes: %d",
+				f->name,
+				f->limit[i] == INT_MAX ? 0 : (int)f->limit[i]);
+		}
 		else
 		{
 			sendtxtnumeric(client, "anti-flood::%s::%s: %d per %s",
@@ -800,11 +775,12 @@ static void stats_set_anti_flood(Client *client, FloodSettings *f)
 	}
 }
 
-int stats_set(Client *client, char *para)
+int stats_set(Client *client, const char *para)
 {
 	char *uhallow;
 	SecurityGroup *s;
 	FloodSettings *f;
+	char modebuf[BUFSIZE], parabuf[BUFSIZE];
 
 	if (!ValidatePermissionsForPath("server:info:stats",client,NULL,NULL,NULL))
 	{
@@ -813,8 +789,8 @@ int stats_set(Client *client, char *para)
 	}
 
 	sendtxtnumeric(client, "*** Configuration Report ***");
-	sendtxtnumeric(client, "network-name: %s", ircnetwork);
-	sendtxtnumeric(client, "default-server: %s", defserv);
+	sendtxtnumeric(client, "network-name: %s", NETWORK_NAME);
+	sendtxtnumeric(client, "default-server: %s", DEFAULT_SERVER);
 	if (SERVICES_NAME)
 	{
 		sendtxtnumeric(client, "services-server: %s", SERVICES_NAME);
@@ -827,9 +803,9 @@ int stats_set(Client *client, char *para)
 	{
 		sendtxtnumeric(client, "sasl-server: %s", SASL_SERVER);
 	}
-	sendtxtnumeric(client, "hiddenhost-prefix: %s", hidden_host);
-	sendtxtnumeric(client, "help-channel: %s", helpchan);
-	sendtxtnumeric(client, "cloak-keys: %s", CLOAK_KEYCRC);
+	sendtxtnumeric(client, "cloak-prefix: %s", CLOAK_PREFIX);
+	sendtxtnumeric(client, "help-channel: %s", HELP_CHANNEL);
+	sendtxtnumeric(client, "cloak-keys: %s", CLOAK_KEY_CHECKSUM);
 	sendtxtnumeric(client, "kline-address: %s", KLINE_ADDRESS);
 	if (GLINE_ADDRESS)
 		sendtxtnumeric(client, "gline-address: %s", GLINE_ADDRESS);
@@ -896,8 +872,6 @@ int stats_set(Client *client, char *para)
 	sendtxtnumeric(client, "static-part: %s", STATIC_PART ? STATIC_PART : "<none>");
 	sendtxtnumeric(client, "who-limit: %d", WHOLIMIT);
 	sendtxtnumeric(client, "silence-limit: %d", SILENCE_LIMIT);
-	if (DNS_BINDIP)
-		sendtxtnumeric(client, "dns::bind-ip: %s", DNS_BINDIP);
 	sendtxtnumeric(client, "ban-version-tkl-time: %s", pretty_time_val(BAN_VERSION_TKL_TIME));
 	if (LINK_BINDIP)
 		sendtxtnumeric(client, "link::bind-ip: %s", LINK_BINDIP);
@@ -932,7 +906,7 @@ int stats_set(Client *client, char *para)
 	sendtxtnumeric(client, "outdated-tls-policy::user: %s", policy_valtostr(iConf.outdated_tls_policy_user));
 	sendtxtnumeric(client, "outdated-tls-policy::oper: %s", policy_valtostr(iConf.outdated_tls_policy_oper));
 	sendtxtnumeric(client, "outdated-tls-policy::server: %s", policy_valtostr(iConf.outdated_tls_policy_server));
-	RunHook2(HOOKTYPE_STATS, client, "S");
+	RunHook(HOOKTYPE_STATS, client, "S");
 #ifndef _WIN32
 	sendtxtnumeric(client, "This server can handle %d concurrent sockets (%d clients + %d reserve)",
 		maxclients+CLIENTS_RESERVE, maxclients, CLIENTS_RESERVE);
@@ -940,34 +914,34 @@ int stats_set(Client *client, char *para)
 	return 1;
 }
 
-int stats_tld(Client *client, char *para)
+int stats_tld(Client *client, const char *para)
 {
 	ConfigItem_tld *tld;
+	ConfigItem_mask *m;
 
 	for (tld = conf_tld; tld; tld = tld->next)
 	{
-		sendnumeric(client, RPL_STATSTLINE,
-			tld->mask, tld->motd_file, tld->rules_file ?
-			tld->rules_file : "none");
+		for (m = tld->mask; m; m = m->next)
+			sendnumeric(client, RPL_STATSTLINE, m->mask, tld->motd_file, tld->rules_file ? tld->rules_file : "none");
 	}
 
 	return 0;
 }
 
-int stats_uptime(Client *client, char *para)
+int stats_uptime(Client *client, const char *para)
 {
-	time_t tmpnow;
+	long long uptime;
 
-	tmpnow = TStime() - me.local->since;
+	uptime = TStime() - me.local->fake_lag;
 	sendnumeric(client, RPL_STATSUPTIME,
-	    tmpnow / 86400, (tmpnow / 3600) % 24, (tmpnow / 60) % 60,
-	    tmpnow % 60);
+	    uptime / 86400, (uptime / 3600) % 24, (uptime / 60) % 60,
+	    uptime % 60);
 	sendnumeric(client, RPL_STATSCONN,
 	    max_connection_count, irccounts.me_max);
 	return 0;
 }
 
-int stats_denyver(Client *client, char *para)
+int stats_denyver(Client *client, const char *para)
 {
 	ConfigItem_deny_version *versions;
 	for (versions = conf_deny_version; versions; versions = versions->next)
@@ -978,7 +952,7 @@ int stats_denyver(Client *client, char *para)
 	return 0;
 }
 
-int stats_notlink(Client *client, char *para)
+int stats_notlink(Client *client, const char *para)
 {
 	ConfigItem_link *link_p;
 
@@ -993,7 +967,7 @@ int stats_notlink(Client *client, char *para)
 	return 0;
 }
 
-int stats_class(Client *client, char *para)
+int stats_class(Client *client, const char *para)
 {
 	ConfigItem_class *classes;
 
@@ -1009,31 +983,23 @@ int stats_class(Client *client, char *para)
 	return 0;
 }
 
-int stats_linkinfo(Client *client, char *para)
+int stats_linkinfo(Client *client, const char *para)
 {
 	return stats_linkinfoint(client, para, 0);
 }
 
-int stats_linkinfoall(Client *client, char *para)
+int stats_linkinfoall(Client *client, const char *para)
 {
 	return stats_linkinfoint(client, para, 1);
 }
 
-int stats_linkinfoint(Client *client, char *para, int all)
+int stats_linkinfoint(Client *client, const char *para, int all)
 {
-#ifndef DEBUGMODE
-	static char Sformat[] = "SendQ SendM SendBytes RcveM RcveBytes Open_since :Idle";
-	static char Lformat[] = "%s%s %u %u %u %u %u %u :%u";
-#else
-	static char Sformat[] = "SendQ SendM SendBytes RcveM RcveBytes Open_since CPU :Idle";
-	static char Lformat[] = "%s%s %u %u %u %u %u %u %s";
-	char pbuf[96];		/* Should be enough for to ints */
-#endif
 	int remote = 0;
 	int wilds = 0;
 	int doall = 0;
-	int showports = ValidatePermissionsForPath("server:info:stats",client,NULL,NULL,NULL);
 	Client *acptr;
+
 	/*
 	 * send info about connections which match, or all if the
 	 * mask matches me.name.  Only restrictions are on those who
@@ -1051,7 +1017,9 @@ int stats_linkinfoint(Client *client, char *para, int all)
 	}
 	else
 		para = me.name;
-	sendnumericfmt(client, RPL_STATSLINKINFO, "%s", Sformat);
+
+	sendnumericfmt(client, RPL_STATSLINKINFO, "Name SendQ SendM SendBytes RcveM RcveBytes Open_since :Idle");
+
 	if (!MyUser(client))
 	{
 		remote = 1;
@@ -1076,54 +1044,23 @@ int stats_linkinfoint(Client *client, char *para, int all)
 			continue;
 		}
 
-#ifdef DEBUGMODE
-		ircsnprintf(pbuf, sizeof(pbuf), "%ld :%ld", (long)acptr->local->cputime,
-		      (long)(acptr->user && MyConnect(acptr)) ? TStime() - acptr->local->last : 0);
-#endif
-		if (ValidatePermissionsForPath("server:info:stats",client,NULL,NULL,NULL))
-		{
-			sendnumericfmt(client, RPL_STATSLINKINFO, Lformat,
-				all ?
-				(get_client_name2(acptr, showports)) :
-				(get_client_name(acptr, FALSE)),
-				get_client_status(acptr),
-				(int)DBufLength(&acptr->local->sendQ),
-				(int)acptr->local->sendM, (int)acptr->local->sendK,
-				(int)acptr->local->receiveM,
-				(int)acptr->local->receiveK,
-			 	TStime() - acptr->local->firsttime,
-#ifndef DEBUGMODE
-				(acptr->user && MyConnect(acptr)) ?
-				TStime() - acptr->local->last : 0);
-#else
-				pbuf);
-#endif
-		}
-		else if (!strchr(acptr->name, '.'))
-			sendnumericfmt(client, RPL_STATSLINKINFO, Lformat,
-				IsHidden(acptr) ? acptr->name :
-				all ?	/* Potvin - PreZ */
-				get_client_name2(acptr, showports) :
-				get_client_name(acptr, FALSE),
-				get_client_status(acptr),
-				(int)DBufLength(&acptr->local->sendQ),
-				(int)acptr->local->sendM, (int)acptr->local->sendK,
-				(int)acptr->local->receiveM,
-				(int)acptr->local->receiveK,
-				TStime() - acptr->local->firsttime,
-#ifndef DEBUGMODE
-				(acptr->user && MyConnect(acptr)) ?
-				TStime() - acptr->local->last : 0);
-#else
-				pbuf);
-#endif
+		sendnumericfmt(client, RPL_STATSLINKINFO,
+		        "%s%s %lld %lld %lld %lld %lld %lld :%lld",
+			acptr->name, get_client_status(acptr),
+			(long long)DBufLength(&acptr->local->sendQ),
+			(long long)acptr->local->traffic.messages_sent,
+			(long long)acptr->local->traffic.bytes_sent,
+			(long long)acptr->local->traffic.messages_received,
+			(long long)acptr->local->traffic.bytes_received,
+			(long long)(TStime() - acptr->local->creationtime),
+			(long long)(TStime() - acptr->local->last_msg_received));
 	}
 #ifdef DEBUGMODE
 	list_for_each_entry(acptr, &client_list, client_node)
 	{
 		if (IsServer(acptr))
 			sendnotice(client, "Server %s is %s",
-				acptr->name, acptr->serv->flags.synced ? "SYNCED" : "NOT SYNCED!!");
+				acptr->name, acptr->server->flags.synced ? "SYNCED" : "NOT SYNCED!!");
 	}
 #endif
 	return 0;

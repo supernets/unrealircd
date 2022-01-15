@@ -16,35 +16,44 @@ rem cinst innosetup -y
 
 rem Installing UnrealIRCd dependencies
 cd \projects
-mkdir unrealircd-5-libs
-cd unrealircd-5-libs
-curl -fsS -o unrealircd-libraries-5-devel.zip https://www.unrealircd.org/files/dev/win/libs/unrealircd-libraries-5-devel.zip
-unzip unrealircd-libraries-5-devel.zip
-copy dlltool.exe \users\user\worker\unreal5-w10\build /y
+mkdir unrealircd-6-libs
+cd unrealircd-6-libs
+curl -fsS -o unrealircd-libraries-6-devel.zip https://www.unrealircd.org/files/dev/win/libs/unrealircd-libraries-6-devel.zip
+unzip unrealircd-libraries-6-devel.zip
+copy dlltool.exe \users\user\worker\unreal6-w10\build /y
 
-rem for appveyor: cd \projects\unrealircd
-cd \users\user\worker\unreal5-w10\build
+rem for appveyor, use: cd \projects\unrealircd
+cd \users\user\worker\unreal6-w10\build
+
+rem Install 'unrealircd-tests'
+cd ..
+rd /q/s unrealircd-tests
+git clone -q --branch unreal60 https://github.com/unrealircd/unrealircd-tests.git unrealircd-tests
+if %ERRORLEVEL% NEQ 0 EXIT /B 1
+cd build
 
 rem Now the actual build
-call extras\build-tests\windows\compilecmd\%SHORTNAME%.bat
-
-rem The above command will fail, due to missing symbol file
-rem However the symbol file can only be generated after the above command
-rem So... we create the symbolfile...
+rem - First this, otherwise JOM will fail
+IF NOT EXIST src\version.c nmake -f Makefile.windows CONF
+rem - Then build most of UnrealIRCd.exe etc
+call extras\build-tests\windows\compilecmd\%SHORTNAME%.bat UNREALSVC.EXE UnrealIRCd.exe
+rem - It will fail due to missing symbolfile, which we create here..
 nmake -f makefile.windows SYMBOLFILE
-
-rem And we re-run the exact same command:
-call extras\build-tests\windows\compilecmd\%SHORTNAME%.bat
+rem - Then we finalize building UnrealIRCd.exe: should be no error
+call extras\build-tests\windows\compilecmd\%SHORTNAME%.bat UNREALSVC.EXE UnrealIRCd.exe
+if %ERRORLEVEL% NEQ 0 EXIT /B 1
+rem - Build all the modules (DLL files): should be no error
+call extras\build-tests\windows\compilecmd\%SHORTNAME%.bat MODULES
 if %ERRORLEVEL% NEQ 0 EXIT /B 1
 
 rem Compile dependencies for unrealircd-tests -- this doesn't belong here though..
-curl -fsS -o src\modules\third\fakereputation.c https://raw.githubusercontent.com/unrealircd/unrealircd-tests/master/serverconfig/unrealircd/modules/fakereputation.c
+copy ..\unrealircd-tests\serverconfig\unrealircd\modules\fakereputation.c src\modules\third /Y
 call extras\build-tests\windows\compilecmd\%SHORTNAME%.bat CUSTOMMODULE MODULEFILE=fakereputation
 if %ERRORLEVEL% NEQ 0 EXIT /B 1
 
-rem Convert c:\dev to c:\projects\unrealircd-5-libs
+rem Convert c:\dev to c:\projects\unrealircd-6-libs
 rem TODO: should use environment variable in innosetup script?
-sed -i "s/c:\\dev\\unrealircd-5-libs/c:\\projects\\unrealircd-5-libs/gi" src\windows\unrealinst.iss
+sed -i "s/c:\\dev\\unrealircd-6-libs/c:\\projects\\unrealircd-6-libs/gi" src\windows\unrealinst.iss
 
 rem Build installer file
 "c:\Program Files (x86)\Inno Setup 5\iscc.exe" /Q- src\windows\unrealinst.iss
@@ -60,7 +69,7 @@ taskkill -im unrealircd.exe -f
 sleep 2
 rem Just a safety measure so we don't end up testing
 rem some old version...
-del "C:\Program Files\UnrealIRCd 5\bin\unrealircd.exe"
+del "C:\Program Files\UnrealIRCd 6\bin\unrealircd.exe"
 
 echo Running installer...
 start /WAIT unrealircd-dev-build.exe /VERYSILENT /LOG=setup.log
@@ -70,12 +79,7 @@ rem Upload artifact
 rem appveyor PushArtifact unrealircd-dev-build.exe
 rem if %ERRORLEVEL% NEQ 0 EXIT /B 1
 
-rem Install 'unrealircd-tests'
-cd ..
-rd /q/s unrealircd-tests
-git clone https://github.com/unrealircd/unrealircd-tests.git
-if %ERRORLEVEL% NEQ 0 EXIT /B 1
-cd unrealircd-tests
+cd ..\unrealircd-tests
 dir
 
 rem All tests except db:

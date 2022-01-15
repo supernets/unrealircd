@@ -28,7 +28,7 @@ ModuleHeader MOD_HEADER
 	"4.2",
 	"User Mode +q",
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
     };
 
 /* Global variables */
@@ -37,7 +37,7 @@ long UMODE_NOKICK = 0L;
 /* Forward declarations */
 int umode_allow_unkickable_oper(Client *client, int what);
 int nokick_can_kick(Client *client, Client *target, Channel *channel,
-                    char *comment, long client_flags, long target_flags, char **reject_reason);
+                    const char *comment, const char *client_member_modes, const char *target_member_modes, const char **reject_reason);
 
 MOD_TEST()
 {
@@ -76,8 +76,8 @@ int umode_allow_unkickable_oper(Client *client, int what)
 	return 1;
 }
 
-int nokick_can_kick(Client *client, Client *target, Channel *channel, char *comment,
-                    long client_flags, long target_flags, char **reject_reason)
+int nokick_can_kick(Client *client, Client *target, Channel *channel, const char *comment,
+                    const char *client_member_modes, const char *target_member_modes, const char **reject_reason)
 {
 	static char errmsg[NICKLEN+256];
 
@@ -91,7 +91,7 @@ int nokick_can_kick(Client *client, Client *target, Channel *channel, char *comm
 
 		sendnotice(target,
 			"*** umode q: %s tried to kick you from channel %s (%s)",
-			client->name, channel->chname, comment);
+			client->name, channel->name, comment);
 		
 		return EX_ALWAYS_DENY;
 	}

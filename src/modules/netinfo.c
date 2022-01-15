@@ -32,7 +32,7 @@ ModuleHeader MOD_HEADER
 	"5.0",
 	"command /netinfo", 
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
     };
 
 MOD_INIT()
@@ -61,7 +61,7 @@ MOD_UNLOAD()
  * parv[1] = max global count
  * parv[2] = time of end sync
  * parv[3] = unreal protocol using (numeric)
- * parv[4] = cloak-crc (> u2302)
+ * parv[4] = cloak key check (> u2302)
  * parv[5] = free(**)
  * parv[6] = free(**)
  * parv[7] = free(**)
@@ -70,7 +70,6 @@ MOD_UNLOAD()
 CMD_FUNC(cmd_netinfo)
 {
 	long 		lmax;
-	time_t	 	xx;
 	long 		endsync, protocol;
 	char		buf[512];
 
@@ -83,7 +82,8 @@ CMD_FUNC(cmd_netinfo)
 
 	if (IsNetInfo(client))
 	{
-		sendto_realops("Already got NETINFO from Link %s", client->name);
+		unreal_log(ULOG_WARNING, "link", "NETINFO_ALREADY_RECEIVED", client,
+		           "Got NETINFO from server $client, but we already received it earlier!");
 		return;
 	}
 
@@ -96,46 +96,46 @@ CMD_FUNC(cmd_netinfo)
 	if (lmax > irccounts.global_max)
 	{
 		irccounts.global_max = lmax;
-		sendto_realops("Max Global Count is now %li (set by link %s)",
-		    lmax, client->name);
+		unreal_log(ULOG_INFO, "link", "NEW_GLOBAL_RECORD", client,
+		           "Record global users is now $record_global_users (set by server $client)",
+		           log_data_integer("record_global_users", lmax));
 	}
 
-	xx = TStime();
-	if ((xx - endsync) < -2)
-	{
-		char *emsg = "";
-		if (xx - endsync < -10)
-		{
-			emsg = " [\002PLEASE SYNC YOUR CLOCKS!\002]";
-		}
-		sendto_umode_global(UMODE_OPER,
-			"Possible negative TS split at link %s (%lld - %lld = %lld)%s",
-			client->name, (long long)(xx), (long long)(endsync), (long long)(xx - endsync), emsg);
-	}
-	sendto_umode_global(UMODE_OPER,
-	    "Link %s -> %s is now synced [secs: %lld recv: %ld.%hu sent: %ld.%hu]",
-	    client->name, me.name, (long long)(TStime() - endsync), client->local->receiveK,
-	    client->local->receiveB, client->local->sendK, client->local->sendB);
+	unreal_log(ULOG_INFO, "link", "SERVER_SYNCED", client,
+	           "Link $client -> $me is now synced "
+	           "[secs: $synced_after_seconds, recv: $received_bytes, sent: $sent_bytes]",
+	           log_data_client("me", &me),
+	           log_data_integer("synced_after_seconds", TStime() - endsync),
+	           log_data_integer("received_bytes", client->local->traffic.bytes_received),
+	           log_data_integer("sent_bytes", client->local->traffic.bytes_sent));
 
-	if (!(strcmp(ircnetwork, parv[8]) == 0))
+	if (!(strcmp(NETWORK_NAME, parv[8]) == 0))
 	{
-		sendto_umode_global(UMODE_OPER,
-			"Network name mismatch from link %s (%s != %s)",
-			client->name, parv[8], ircnetwork);
+		unreal_log(ULOG_WARNING, "link", "NETWORK_NAME_MISMATCH", client,
+		           "Network name mismatch: server $client has '$their_network_name', "
+		           "server $me has '$our_network_name'.",
+		           log_data_client("me", &me),
+		           log_data_string("their_network_name", parv[8]),
+		           log_data_string("our_network_name", NETWORK_NAME));
 	}
 
 	if ((protocol != UnrealProtocol) && (protocol != 0))
 	{
-		sendto_umode_global(UMODE_OPER,
-			"Link %s is running Protocol %li while %s is running %d",
-			client->name, protocol, me.name, UnrealProtocol);
+		unreal_log(ULOG_INFO, "link", "LINK_PROTOCOL_MISMATCH", client,
+		           "Server $client is running UnrealProtocol $their_link_protocol, "
+		           "server $me uses $our_link_protocol.",
+		           log_data_client("me", &me),
+		           log_data_integer("their_link_protocol", protocol),
+		           log_data_integer("our_link_protocol", UnrealProtocol));
 	}
-	strlcpy(buf, CLOAK_KEYCRC, sizeof(buf));
+	strlcpy(buf, CLOAK_KEY_CHECKSUM, sizeof(buf));
 	if (*parv[4] != '*' && strcmp(buf, parv[4]))
 	{
-		sendto_realops
-			("Link %s has a DIFFERENT CLOAK KEY - %s != %s. \002YOU SHOULD CORRECT THIS ASAP\002.",
-				client->name, parv[4], buf);
+		unreal_log(ULOG_WARNING, "link", "CLOAK_KEY_MISMATCH", client,
+		           "Server $client has a DIFFERENT CLOAK KEY (OR METHOD)!!! You should fix this ASAP!\n"
+		           "When the cloaking configuration is different on servers, this will cause "
+		           "channel bans on cloaked hosts/IPs not to work correctly, "
+		           "meaning users can bypass channel bans!");
 	}
 	SetNetInfo(client);
 }

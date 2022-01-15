@@ -22,144 +22,285 @@
 
 #include "unrealircd.h"
 
-Extban MODVAR ExtBan_Table[EXTBANTABLESZ]; /* this should be fastest */
-unsigned MODVAR short ExtBan_highest = 0;
+/** List of all extbans, their handlers, etc */
+MODVAR Extban *extbans = NULL;
 
 void set_isupport_extban(void)
 {
-	int i;
-	char extbanstr[EXTBANTABLESZ+1], *m;
+	char extbanstr[512];
+	Extban *e;
+	char *p = extbanstr;
 
-	m = extbanstr;
-	for (i = 0; i <= ExtBan_highest; i++)
-	{
-		if (ExtBan_Table[i].flag)
-			*m++ = ExtBan_Table[i].flag;
-	}
-	*m = 0;
+	for (e = extbans; e; e = e->next)
+		*p++ = e->letter;
+	*p = '\0';
+
 	ISupportSetFmt(NULL, "EXTBAN", "~,%s", extbanstr);
 }
 
-Extban *findmod_by_bantype(char c)
+Extban *findmod_by_bantype(const char *str, const char **remainder)
 {
-int i;
+	Extban *e;
+	int ban_name_length;
+	const char *p = strchr(str, ':');
 
-	for (i=0; i <= ExtBan_highest; i++)
-		if (ExtBan_Table[i].flag == c)
-			return &ExtBan_Table[i];
+	if (!p || !p[1])
+	{
+		if (remainder)
+			*remainder = NULL;
+		return NULL;
+	}
+	if (remainder)
+		*remainder = p+1;
+
+	ban_name_length = p - str - 1;
+
+	for (e=extbans; e; e = e->next)
+	{
+		if ((ban_name_length == 1) && (e->letter == str[1]))
+			return e;
+		if (e->name)
+		{
+			int namelen = strlen(e->name);
+			if ((namelen == ban_name_length) && !strncmp(e->name, str+1, namelen))
+				return e;
+		}
+	}
 
 	 return NULL;
 }
 
+/* Check if this is a valid extended ban name */
+int is_valid_extban_name(const char *p)
+{
+	if (!*p)
+		return 0; /* empty name */
+	for (; *p; p++)
+		if (!isalnum(*p) && !strchr("_-", *p))
+			return 0;
+	return 1;
+}
+
+static void extban_add_sorted(Extban *n)
+{
+	Extban *m;
+
+	if (extbans == NULL)
+	{
+		extbans = n;
+		return;
+	}
+
+	for (m = extbans; m; m = m->next)
+	{
+		if (m->letter == '\0')
+			abort();
+		if (sort_character_lowercase_before_uppercase(n->letter, m->letter))
+		{
+			/* Insert us before */
+			if (m->prev)
+				m->prev->next = n;
+			else
+				extbans = n; /* new head */
+			n->prev = m->prev;
+
+			n->next = m;
+			m->prev = n;
+			return;
+		}
+		if (!m->next)
+		{
+			/* Append us at end */
+			m->next = n;
+			n->prev = m;
+			return;
+		}
+	}
+}
+
 Extban *ExtbanAdd(Module *module, ExtbanInfo req)
 {
-	int slot;
+	Extban *e;
+	int existing = 0;
 
-	if (findmod_by_bantype(req.flag))
+	if (!req.name)
 	{
-		if (module)
-			module->errorcode = MODERR_EXISTS;
-		return NULL; 
-	}
-
-	/* TODO: perhaps some sanity checking on a-zA-Z0-9? */
-	for (slot = 0; slot < EXTBANTABLESZ; slot++)
-		if (ExtBan_Table[slot].flag == '\0')
-			break;
-	if (slot >= EXTBANTABLESZ - 1)
-	{
-		if (module)
-			module->errorcode = MODERR_NOSPACE;
+		module->errorcode = MODERR_INVALID;
+		unreal_log(ULOG_ERROR, "module", "EXTBANADD_API_ERROR", NULL,
+			   "ExtbanAdd(): name must be specified for ban (new in U6). Module: $module_name",
+			   log_data_string("module_name", module->header->name));
 		return NULL;
 	}
-	ExtBan_Table[slot].flag = req.flag;
-	ExtBan_Table[slot].is_ok = req.is_ok;
-	ExtBan_Table[slot].conv_param = req.conv_param;
-	ExtBan_Table[slot].is_banned = req.is_banned;
-	ExtBan_Table[slot].owner = module;
-	ExtBan_Table[slot].options = req.options;
+
+	if (!req.is_banned_events && req.is_banned)
+	{
+		module->errorcode = MODERR_INVALID;
+		unreal_log(ULOG_ERROR, "module", "EXTBANADD_API_ERROR", NULL,
+			   "ExtbanAdd(): module must indicate via .is_banned_events on which BANCHK_* "
+			   "events to listen on (new in U6). Module: $module_name",
+			   log_data_string("module_name", module->header->name));
+		return NULL;
+	}
+
+	if (!isalnum(req.letter))
+	{
+		module->errorcode = MODERR_INVALID;
+		unreal_log(ULOG_ERROR, "module", "EXTBANADD_API_ERROR", NULL,
+		           "ExtbanAdd(): module tried to add extban which is not alphanumeric. "
+		           "Module: $module_name",
+		           log_data_string("module_name", module->header->name));
+		return NULL;
+	}
+
+	if (!is_valid_extban_name(req.name))
+	{
+		module->errorcode = MODERR_INVALID;
+		unreal_log(ULOG_ERROR, "module", "EXTBANADD_API_ERROR", NULL,
+		           "ExtbanAdd(): module tried to add extban with an invalid name ($extban_name). "
+		           "Module: $module_name",
+		           log_data_string("module_name", module->header->name),
+		           log_data_string("extban_name", req.name));
+		return NULL;
+	}
+
+	for (e=extbans; e; e = e->next)
+	{
+		if (e->letter == req.letter)
+		{
+			if (e->unloaded)
+			{
+				e->unloaded = 0;
+				existing = 1;
+				break;
+			} else {
+				if (module)
+					module->errorcode = MODERR_EXISTS;
+				return NULL;
+			}
+		}
+	}
+
+	if (!e)
+	{
+		/* Not found, create */
+		e = safe_alloc(sizeof(Extban));
+		e->letter = req.letter;
+		extban_add_sorted(e);
+	}
+	e->letter = req.letter;
+	safe_strdup(e->name, req.name);
+	e->is_ok = req.is_ok;
+	e->conv_param = req.conv_param;
+	e->is_banned = req.is_banned;
+	e->is_banned_events = req.is_banned_events;
+	e->owner = module;
+	e->options = req.options;
 	if (module)
 	{
 		ModuleObject *banobj = safe_alloc(sizeof(ModuleObject));
-		banobj->object.extban = &ExtBan_Table[slot];
+		banobj->object.extban = e;
 		banobj->type = MOBJ_EXTBAN;
 		AddListItem(banobj, module->objects);
 		module->errorcode = MODERR_NOERROR;
 	}
-	ExtBan_highest = slot;
 	set_isupport_extban();
-	return &ExtBan_Table[slot];
+	return e;
 }
 
-void ExtbanDel(Extban *eb)
+static void unload_extban_commit(Extban *e)
 {
-	/* Just zero it all away.. */
+	/* Should we mass unban everywhere?
+	 * Hmmm. Not needed per se, user can always unset
+	 * themselves. Leaning towards no atm.
+	 */
+	// noop
 
-	if (eb->owner)
+	/* Then unload the extban */
+	DelListItem(e, extbans);
+	safe_free(e);
+	set_isupport_extban();
+}
+
+void ExtbanDel(Extban *e)
+{
+	/* Always free the module object */
+	if (e->owner)
 	{
 		ModuleObject *banobj;
-		for (banobj = eb->owner->objects; banobj; banobj = banobj->next)
+		for (banobj = e->owner->objects; banobj; banobj = banobj->next)
 		{
-			if (banobj->type == MOBJ_EXTBAN && banobj->object.extban == eb)
+			if (banobj->type == MOBJ_EXTBAN && banobj->object.extban == e)
 			{
-				DelListItem(banobj, eb->owner->objects);
+				DelListItem(banobj, e->owner->objects);
 				safe_free(banobj);
 				break;
 			}
 		}
 	}
-	memset(eb, 0, sizeof(Extban));
-	set_isupport_extban();
-	/* Hmm do we want to go trough all chans and remove the bans?
-	 * I would say 'no' because perhaps we are just reloading,
-	 * and else.. well... screw them?
-	 */
-}
 
-/* NOTE: the routines below can safely assume the ban has at
- * least the '~t:' part (t=type). -- Syzop
- */
+	/* Whether we can actually (already) free the Extban, it depends... */
+	if (loop.rehashing)
+		e->unloaded = 1;
+	else
+		unload_extban_commit(e);
+}
 
 /** General is_ok for n!u@h stuff that also deals with recursive extbans.
  */
-int extban_is_ok_nuh_extban(Client *client, Channel* channel, char *para, int checkt, int what, int what2)
+int extban_is_ok_nuh_extban(BanContext *b)
 {
-	char *mask = (para + 3);
-	Extban *p = NULL;
 	int isok;
 	static int extban_is_ok_recursion = 0;
 
 	/* Mostly copied from clean_ban_mask - but note MyUser checks aren't needed here: extban->is_ok() according to cmd_mode isn't called for nonlocal. */
-	if (is_extended_ban(mask))
+	if (is_extended_ban(b->banstr))
 	{
-		if (extban_is_ok_recursion)
-			return 0; /* Fail: more than one stacked extban */
+		const char *nextbanstr;
+		Extban *extban = NULL;
 
-		if ((checkt == EXBCHK_PARAM) && RESTRICT_EXTENDEDBANS && !ValidatePermissionsForPath("immune:restrict-extendedbans",client,NULL,channel,NULL))
+		/* We're dealing with a stacked extended ban.
+		 * Rules:
+		 * 1) You can only stack once, so: ~x:~y:something and not ~x:~y:~z...
+		 * 2) The second item may never be an action modifier, nor have the
+		 *    EXTBOPT_NOSTACKCHILD letter set (for things like a textban).
+		 */
+
+		if (extban_is_ok_recursion)
+			return 0; /* Rule #1 violation (more than one stacked extban) */
+
+		if ((b->is_ok_check == EXBCHK_PARAM) && RESTRICT_EXTENDEDBANS && !ValidatePermissionsForPath("immune:restrict-extendedbans",b->client,NULL,b->channel,NULL))
 		{
 			/* Test if this specific extban has been disabled.
 			 * (We can be sure RESTRICT_EXTENDEDBANS is not *. Else this extended ban wouldn't be happening at all.)
 			 */
-			if (strchr(RESTRICT_EXTENDEDBANS, mask[1]))
+			if (strchr(RESTRICT_EXTENDEDBANS, b->banstr[1]))
 			{
-				sendnotice(client, "Setting/removing of extended bantypes '%s' has been disabled.", RESTRICT_EXTENDEDBANS);
+				sendnotice(b->client, "Setting/removing of extended bantypes '%s' has been disabled.", RESTRICT_EXTENDEDBANS);
 				return 0; /* Fail */
 			}
 		}
-		p = findmod_by_bantype(mask[1]);
-		if (!p)
+		extban = findmod_by_bantype(b->banstr, &nextbanstr);
+		if (!extban)
 		{
-			if (what == MODE_DEL)
+			if (b->what == MODE_DEL)
 			{
 				return 1; /* Always allow killing unknowns. */
 			}
 			return 0; /* Don't add unknown extbans. */
 		}
-		/* Now we have to ask the stacked extban if it's ok. */
-		if (p->is_ok)
+
+		if ((extban->options & EXTBOPT_ACTMODIFIER) || (extban->options & EXTBOPT_NOSTACKCHILD))
 		{
+			/* Rule #2 violation */
+			return 0;
+		}
+
+		/* Now we have to ask the stacked extban if it's ok. */
+		if (extban->is_ok)
+		{
+			b->banstr = nextbanstr;
 			extban_is_ok_recursion++;
-			isok = p->is_ok(client, channel, mask, checkt, what, what2);
+			isok = extban->is_ok(b);
 			extban_is_ok_recursion--;
 			return isok;
 		}
@@ -171,19 +312,15 @@ int extban_is_ok_nuh_extban(Client *client, Channel* channel, char *para, int ch
  * to ensure the parameter is nick!user@host.
  * most of the code is just copied from clean_ban_mask.
  */
-char *extban_conv_param_nuh(char *para)
+const char *extban_conv_param_nuh(BanContext *b, Extban *extban)
 {
 	char *cp, *user, *host, *mask, *ret = NULL;
 	static char retbuf[USERLEN + NICKLEN + HOSTLEN + 32];
 	char tmpbuf[USERLEN + NICKLEN + HOSTLEN + 32];
-	char pfix[8];
 
-	if (strlen(para)<3)
-		return NULL; /* normally impossible */
-
-	strlcpy(tmpbuf, para, sizeof(retbuf));
-	mask = tmpbuf + 3;
-	strlcpy(pfix, tmpbuf, mask - tmpbuf + 1);
+	/* Work on a copy */
+	strlcpy(tmpbuf, b->banstr, sizeof(retbuf));
+	mask = tmpbuf;
 
 	if (!*mask)
 		return NULL; /* empty extban */
@@ -202,13 +339,13 @@ char *extban_conv_param_nuh(char *para)
 	if (!ret)
 		ret = make_nick_user_host(trim_str(cp,NICKLEN), trim_str(user,USERLEN), trim_str(host,HOSTLEN));
 
-	ircsnprintf(retbuf, sizeof(retbuf), "%s%s", pfix, ret);
+	strlcpy(retbuf, ret, sizeof(retbuf));
 	return retbuf;
 }
 
 /** conv_param to deal with stacked extbans.
  */
-char *extban_conv_param_nuh_or_extban(char *para)
+const char *extban_conv_param_nuh_or_extban(BanContext *b, Extban *self_extban)
 {
 #if (USERLEN + NICKLEN + HOSTLEN + 32) > 256
  #error "wtf?"
@@ -217,83 +354,77 @@ char *extban_conv_param_nuh_or_extban(char *para)
 	static char printbuf[256];
 	char *mask;
 	char tmpbuf[USERLEN + NICKLEN + HOSTLEN + 32];
-	char bantype = para[1];
-	char *ret = NULL;
-	Extban *p = NULL;
+	const char *ret = NULL;
+	const char *nextbanstr;
+	Extban *extban = NULL;
 	static int extban_recursion = 0;
 
-	if ((strlen(para)>3) && is_extended_ban(para+3))
-	{
-		/* We're dealing with a stacked extended ban.
-		 * Rules:
-		 * 1) You can only stack once, so: ~x:~y:something and not ~x:~y:~z...
-		 * 2) The first item must be an action modifier, such as ~q/~n/~j
-		 * 3) The second item may never be an action modifier, nor have the
-		 *    EXTBOPT_NOSTACKCHILD flag set (for things like a textban).
-		 */
-		 
-		/* Rule #1. Yes the recursion check is also in extban_is_ok_nuh_extban,
-		 * but it's possible to get here without the is_ok() function ever
-		 * being called (think: non-local client). And no, don't delete it
-		 * there either. It needs to be in BOTH places. -- Syzop
-		 */
-		if (extban_recursion)
-			return NULL;
+	if (!is_extended_ban(b->banstr))
+		return extban_conv_param_nuh(b, self_extban);
 
-		/* Rule #2 */
-		p = findmod_by_bantype(para[1]);
-		if (p && !(p->options & EXTBOPT_ACTMODIFIER))
-		{
-			/* Rule #2 violation */
-			return NULL;
-		}
-		
-		strlcpy(tmpbuf, para, sizeof(tmpbuf));
-		mask = tmpbuf + 3;
-		/* Already did restrict-extended bans check. */
-		p = findmod_by_bantype(mask[1]);
-		if (!p)
-		{
-			/* Handling unknown bantypes in is_ok. Assume that it's ok here. */
-			return para;
-		}
-		if ((p->options & EXTBOPT_ACTMODIFIER) || (p->options & EXTBOPT_NOSTACKCHILD))
-		{
-			/* Rule #3 violation */
-			return NULL;
-		}
-		
-		if (p->conv_param)
-		{
-			extban_recursion++;
-			ret = p->conv_param(mask);
-			extban_recursion--;
-			if (ret)
-			{
-				/*
-				 * If bans are stacked, then we have to use two buffers
-				 * to prevent ircsnprintf() from going into a loop.
-				 */
-				ircsnprintf(printbuf, sizeof(printbuf), "~%c:%s", bantype, ret); /* Make sure our extban prefix sticks. */
-				memcpy(retbuf, printbuf, sizeof(retbuf));
-				return retbuf;
-			}
-			else
-			{
-				return NULL; /* Fail. */
-			}
-		}
-		/* I honestly don't know what the deal is with the 80 char cap in clean_ban_mask is about. So I'm leaving it out here. -- aquanight */
-		/* I don't know why it's 80, but I like a limit anyway. A ban of 500 characters can never be good... -- Syzop */
-		if (strlen(para) > 80)
-		{
-			strlcpy(retbuf, para, 128);
-			return retbuf;
-		}
-		return para;
-	}
-	else
+	/* We're dealing with a stacked extended ban.
+	 * Rules:
+	 * 1) You can only stack once, so: ~x:~y:something and not ~x:~y:~z...
+	 * 2) The second item may never be an action modifier, nor have the
+	 *    EXTBOPT_NOSTACKCHILD letter set (for things like a textban).
+	 */
+	 
+	/* Rule #1. Yes the recursion check is also in extban_is_ok_nuh_extban,
+	 * but it's possible to get here without the is_ok() function ever
+	 * being called (think: non-local client). And no, don't delete it
+	 * there either. It needs to be in BOTH places. -- Syzop
+	 */
+	if (extban_recursion)
+		return NULL;
+
+	strlcpy(tmpbuf, b->banstr, sizeof(tmpbuf));
+	extban = findmod_by_bantype(tmpbuf, &nextbanstr);
+
+	if (!extban)
 	{
-		return extban_conv_param_nuh(para);
+		/* Handling unknown bantypes in is_ok. Assume that it's ok here. */
+		return b->banstr;
 	}
+
+	b->banstr = nextbanstr;
+
+	if ((extban->options & EXTBOPT_ACTMODIFIER) || (extban->options & EXTBOPT_NOSTACKCHILD))
+	{
+		/* Rule #2 violation */
+		return NULL;
+	}
+
+	if (extban->conv_param)
+	{
+		//BanContext *b = safe_alloc(sizeof(BanContext));
+		//b->banstr = mask; <-- this is redundant right? we can use existing 'b' context??
+		extban_recursion++;
+		ret = extban->conv_param(b, extban);
+		extban_recursion--;
+		ret = prefix_with_extban(ret, b, extban, retbuf, sizeof(retbuf));
+		//safe_free(b);
+		return ret;
+	}
+	/* I honestly don't know what the deal is with the 80 char cap in clean_ban_mask is about. So I'm leaving it out here. -- aquanight */
+	/* I don't know why it's 80, but I like a limit anyway. A ban of 500 characters can never be good... -- Syzop */
+	if (strlen(b->banstr) > 80)
+	{
+		strlcpy(retbuf, b->banstr, 128);
+		return retbuf;
+	}
+	return b->banstr;
+}
+
+char *prefix_with_extban(const char *remainder, BanContext *b, Extban *extban, char *buf, size_t buflen)
+{
+	/* Yes, we support this because it makes code at the caller cleaner */
+	if (remainder == NULL)
+		return NULL;
+
+	if (iConf.named_extended_bans && !(b->conv_options & BCTX_CONV_OPTION_WRITE_LETTER_BANS))
+		snprintf(buf, buflen, "~%s:%s", extban->name, remainder);
+	else
+		snprintf(buf, buflen, "~%c:%s", extban->letter, remainder);
+
+	return buf;
 }

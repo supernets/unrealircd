@@ -32,7 +32,7 @@ ModuleHeader MOD_HEADER
 	"5.0",
 	"command /squit", 
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
     };
 
 MOD_INIT()
@@ -59,9 +59,9 @@ MOD_UNLOAD()
 */
 CMD_FUNC(cmd_squit)
 {
-	char *server;
+	const char *server;
 	Client *target;
-	char *comment = (parc > 2 && parv[parc - 1]) ? parv[parc - 1] : client->name;
+	const char *comment = (parc > 2 && parv[parc - 1]) ? parv[parc - 1] : client->name;
 
 	// FIXME: this function is way too confusing, and full of old shit?
 
@@ -130,8 +130,10 @@ CMD_FUNC(cmd_squit)
 	 */
 	if (MyConnect(target) && !MyUser(client))
 	{
-		sendto_umode_global(UMODE_OPER, "Received SQUIT %s from %s (%s)",
-		    target->name, get_client_name(client, FALSE), comment);
+		unreal_log(ULOG_INFO, "link", "SQUIT", client,
+		           "SQUIT: Forced server disconnect of $target by $client ($reason)",
+		           log_data_client("target", target),
+		           log_data_string("reason", comment));
 	}
 	else if (MyConnect(target))
 	{
@@ -141,8 +143,10 @@ CMD_FUNC(cmd_squit)
 			           me.name);
 			return;
 		}
-		sendto_umode_global(UMODE_OPER, "Received SQUIT %s from %s (%s)",
-		    target->name, get_client_name(client, FALSE), comment);
+		unreal_log(ULOG_INFO, "link", "SQUIT", client,
+		           "SQUIT: Forced server disconnect of $target by $client ($reason)",
+		           log_data_client("target", target),
+		           log_data_string("reason", comment));
 	}
 
 	exit_client_ex(target, client->direction, recv_mtags, comment);

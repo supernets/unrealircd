@@ -32,7 +32,7 @@ ModuleHeader MOD_HEADER
 	"5.0", /* Version */
 	"command /sdesc", /* Short description of module */
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
     };
 
 MOD_INIT()
@@ -80,13 +80,13 @@ CMD_FUNC(cmd_sdesc)
 				REALLEN);
 			return;
 		}
-		parv[1][REALLEN] = '\0';
 	}
 
-	ircsnprintf(client->srvptr->info, sizeof(client->srvptr->info), "%s", parv[1]);
+	strlncpy(client->uplink->info, parv[1], sizeof(client->uplink->info), REALLEN);
 
 	sendto_server(client, 0, 0, NULL, ":%s SDESC :%s", client->name, parv[1]);
 
-	sendto_ops("Server description for %s is now '%s' (changed by %s)",
-		client->srvptr->name, client->srvptr->info, client->name);
+	unreal_log(ULOG_INFO, "sdesc", "SDESC_COMMAND", client,
+	           "Server description for $server is now '$server.server.info' (changed by $client)",
+	           log_data_client("server", client->uplink));
 }

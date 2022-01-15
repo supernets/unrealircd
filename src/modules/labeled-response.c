@@ -28,7 +28,7 @@ ModuleHeader MOD_HEADER
 	"5.0",
 	"Labeled response CAP",
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
 	};
 
 /* Data structures */
@@ -43,8 +43,8 @@ struct LabeledResponseContext {
 };
 
 /* Forward declarations */
-int lr_pre_command(Client *from, MessageTag *mtags, char *buf);
-int lr_post_command(Client *from, MessageTag *mtags, char *buf);
+int lr_pre_command(Client *from, MessageTag *mtags, const char *buf);
+int lr_post_command(Client *from, MessageTag *mtags, const char *buf);
 int lr_close_connection(Client *client);
 int lr_packet(Client *from, Client *to, Client *intended_to, char **msg, int *len);
 void *_labeled_response_save_context(void);
@@ -61,7 +61,7 @@ static long CAP_LABELED_RESPONSE = 0L;
 
 static char packet[8192];
 
-int labeled_response_mtag_is_ok(Client *client, char *name, char *value);
+int labeled_response_mtag_is_ok(Client *client, const char *name, const char *value);
 
 MOD_TEST()
 {
@@ -111,7 +111,7 @@ MOD_UNLOAD()
 	return MOD_SUCCESS;
 }
 
-int lr_pre_command(Client *from, MessageTag *mtags, char *buf)
+int lr_pre_command(Client *from, MessageTag *mtags, const char *buf)
 {
 	memset(&currentcmd, 0, sizeof(currentcmd));
 	labeled_response_inhibit = labeled_response_inhibit_end = labeled_response_force = 0;
@@ -156,7 +156,7 @@ char *gen_start_batch(void)
 	return buf;
 }
 
-int lr_post_command(Client *from, MessageTag *mtags, char *buf)
+int lr_post_command(Client *from, MessageTag *mtags, const char *buf)
 {
 	/* ** IMPORTANT **
 	 * Take care NOT to return here, use 'goto done' instead
@@ -336,7 +336,7 @@ int lr_packet(Client *from, Client *to, Client *intended_to, char **msg, int *le
 /** This function verifies if the client sending the
  * tag is permitted to do so and uses a permitted syntax.
  */
-int labeled_response_mtag_is_ok(Client *client, char *name, char *value)
+int labeled_response_mtag_is_ok(Client *client, const char *name, const char *value)
 {
 	if (BadPtr(value))
 		return 0;

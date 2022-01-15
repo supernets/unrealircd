@@ -32,7 +32,7 @@ ModuleHeader MOD_HEADER
 	"5.0",
 	"command /globops", 
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
     };
 
 MOD_INIT()
@@ -57,9 +57,7 @@ MOD_UNLOAD()
  */
 CMD_FUNC(cmd_globops)
 {
-	char *message;
-
-	message = parc > 1 ? parv[1] : NULL;
+	const char *message = parc > 1 ? parv[1] : NULL;
 
 	if (BadPtr(message))
 	{

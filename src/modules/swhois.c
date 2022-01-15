@@ -34,7 +34,7 @@ ModuleHeader MOD_HEADER
 	"5.0",
 	"command /swhois", 
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
     };
 
 MOD_INIT()
@@ -77,7 +77,7 @@ CMD_FUNC(cmd_swhois)
 	if (parc < 3)
 		return;
 
-	target = find_person(parv[1], NULL);
+	target = find_user(parv[1], NULL);
 	if (!target)
 		return;
 

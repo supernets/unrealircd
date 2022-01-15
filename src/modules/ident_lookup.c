@@ -10,7 +10,7 @@ ModuleHeader MOD_HEADER
 	"1.0",
 	"Ident lookups (RFC1413)",
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
 };
 
 /* Forward declarations */
@@ -43,7 +43,6 @@ MOD_UNLOAD()
 
 static void ident_lookup_failed(Client *client)
 {
-	Debug((DEBUG_NOTICE, "ident_lookup_failed() for %p", client));
 	ircstats.is_abad++;
 	if (client->local->authfd != -1)
 	{
@@ -68,12 +67,12 @@ static EVENT(check_ident_timeout)
 			if (IsIdentLookupSent(client))
 			{
 				/* set::ident::connect-timeout */
-				if ((TStime() - client->local->firsttime) > IDENT_CONNECT_TIMEOUT)
+				if ((TStime() - client->local->creationtime) > IDENT_CONNECT_TIMEOUT)
 					ident_lookup_failed(client);
 			} else
 			{
 				/* set::ident::read-timeout */
-				if ((TStime() - client->local->firsttime) > IDENT_READ_TIMEOUT)
+				if ((TStime() - client->local->creationtime) > IDENT_READ_TIMEOUT)
 					ident_lookup_failed(client);
 			}
 		}
@@ -93,7 +92,8 @@ static int ident_lookup_connect(Client *client)
 	}
 	if (++OpenFiles >= maxclients+1)
 	{
-		sendto_ops("Can't allocate fd, too many connections.");
+		unreal_log(ULOG_FATAL, "io", "IDENT_ERROR_MAXCLIENTS", client,
+		           "Cannot do ident connection for $client.details: All connections in use");
 		fd_close(client->local->authfd);
 		--OpenFiles;
 		client->local->authfd = -1;

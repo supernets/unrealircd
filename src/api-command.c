@@ -23,8 +23,8 @@
 #include "unrealircd.h"
 
 /* Forward declarations */
-static Command *CommandAddInternal(Module *module, char *cmd, CmdFunc func, AliasCmdFunc aliasfunc, unsigned char params, int flags);
-static RealCommand *add_Command_backend(char *cmd);
+static Command *CommandAddInternal(Module *module, const char *cmd, CmdFunc func, AliasCmdFunc aliasfunc, unsigned char params, int flags);
+static RealCommand *add_Command_backend(const char *cmd);
 
 /** @defgroup CommandAPI Command API
  * @{
@@ -32,7 +32,7 @@ static RealCommand *add_Command_backend(char *cmd);
 
 /** Returns 1 if the specified command exists
  */
-int CommandExists(char *name)
+int CommandExists(const char *name)
 {
 	RealCommand *p;
 	
@@ -53,7 +53,7 @@ int CommandExists(char *name)
  * @param flags		Who may execute this command - one or more CMD_* flags
  * @returns The newly registered command, or NULL in case of error (eg: already exist)
  */
-Command *CommandAdd(Module *module, char *cmd, CmdFunc func, unsigned char params, int flags)
+Command *CommandAdd(Module *module, const char *cmd, CmdFunc func, unsigned char params, int flags)
 {
 	if (flags & CMD_ALIAS)
 	{
@@ -75,7 +75,7 @@ Command *CommandAdd(Module *module, char *cmd, CmdFunc func, unsigned char param
  * @param flags		Who may execute this command - one or more CMD_* flags
  * @returns The newly registered command (alias), or NULL in case of error (eg: already exist)
  */
-Command *AliasAdd(Module *module, char *cmd, AliasCmdFunc aliasfunc, unsigned char params, int flags)
+Command *AliasAdd(Module *module, const char *cmd, AliasCmdFunc aliasfunc, unsigned char params, int flags)
 {
 	if (!(flags & CMD_ALIAS))
 		flags |= CMD_ALIAS;
@@ -84,7 +84,7 @@ Command *AliasAdd(Module *module, char *cmd, AliasCmdFunc aliasfunc, unsigned ch
 
 /** @} */
 
-static Command *CommandAddInternal(Module *module, char *cmd, CmdFunc func, AliasCmdFunc aliasfunc, unsigned char params, int flags)
+static Command *CommandAddInternal(Module *module, const char *cmd, CmdFunc func, AliasCmdFunc aliasfunc, unsigned char params, int flags)
 {
 	Command *command = NULL;
 	RealCommand *c;
@@ -191,7 +191,7 @@ void CommandDel(Command *command)
  * @note If mtags is NULL then new message tags are created for the command
  *       (and destroyed before return).
  */
-void do_cmd(Client *client, MessageTag *mtags, char *cmd, int parc, char *parv[])
+void do_cmd(Client *client, MessageTag *mtags, const char *cmd, int parc, const char *parv[])
 {
 	RealCommand *cmptr;
 
@@ -233,7 +233,7 @@ void init_CommandHash(void)
 	CommandAdd(NULL, MSG_MODULE, cmd_module, MAXPARA, CMD_USER);
 }
 
-static RealCommand *add_Command_backend(char *cmd)
+static RealCommand *add_Command_backend(const char *cmd)
 {
 	RealCommand *c = safe_alloc(sizeof(RealCommand));
 
@@ -250,7 +250,7 @@ static RealCommand *add_Command_backend(char *cmd)
  */
 
 /** Find a command by name and flags */
-RealCommand *find_command(char *cmd, int flags)
+RealCommand *find_command(const char *cmd, int flags)
 {
 	RealCommand *p;
 	for (p = CommandHash[toupper(*cmd)]; p; p = p->next) {
@@ -269,7 +269,7 @@ RealCommand *find_command(char *cmd, int flags)
 }
 
 /** Find a command by name (no access rights check) */
-RealCommand *find_command_simple(char *cmd)
+RealCommand *find_command_simple(const char *cmd)
 {
 	RealCommand *c;
 

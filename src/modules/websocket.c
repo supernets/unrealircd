@@ -6,6 +6,7 @@
  */
    
 #include "unrealircd.h"
+#include "dns.h"
 
 #define WEBSOCKET_VERSION "1.1.0"
 
@@ -15,7 +16,7 @@ ModuleHeader MOD_HEADER
 	WEBSOCKET_VERSION,
 	"WebSocket support (RFC6455)",
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
     };
 
 #if CHAR_MIN < 0
@@ -40,6 +41,8 @@ struct WebSocketUser {
 	int lefttoparselen; /**< Length of lefttoparse buffer */
 	WebSocketType type; /**< WEBSOCKET_TYPE_BINARY or WEBSOCKET_TYPE_TEXT */
 	char *sec_websocket_protocol; /**< Only valid during parsing of the request, after that it is NULL again */
+	char *forwarded; /**< Unparsed `Forwarded:` header, RFC 7239 */
+	int secure; /**< If there is a Forwarded header, this indicates if the remote connection is secure */
 };
 
 #define WSU(client)	((WebSocketUser *)moddata_client(client, websocket_md).ptr)
@@ -56,19 +59,33 @@ struct WebSocketUser {
 #define WSOP_PING         0x09
 #define WSOP_PONG         0x0a
 
+/* used to parse http Forwarded header (RFC 7239) */
+#define IPLEN 48
+#define FHEADER_NAMELEN	20
+
+struct HTTPForwardedHeader
+{
+	int secure;
+	char hostname[HOSTLEN+1];
+	char ip[IPLEN+1];
+};
+
 /* Forward declarations */
 int websocket_config_test(ConfigFile *cf, ConfigEntry *ce, int type, int *errs);
 int websocket_config_run_ex(ConfigFile *cf, ConfigEntry *ce, int type, void *ptr);
 int websocket_packet_out(Client *from, Client *to, Client *intended_to, char **msg, int *length);
-int websocket_packet_in(Client *client, char *readbuf, int *length);
+int websocket_packet_in(Client *client, const char *readbuf, int *length);
 void websocket_mdata_free(ModData *m);
-int websocket_handle_packet(Client *client, char *readbuf, int length);
-int websocket_handle_handshake(Client *client, char *readbuf, int *length);
+int websocket_handle_packet(Client *client, const char *readbuf, int length);
+int websocket_handle_handshake(Client *client, const char *readbuf, int *length);
 int websocket_handshake_send_response(Client *client);
-int websocket_handle_packet_ping(Client *client, char *buf, int len);
-int websocket_handle_packet_pong(Client *client, char *buf, int len);
+int websocket_handle_packet_ping(Client *client, const char *buf, int len);
+int websocket_handle_packet_pong(Client *client, const char *buf, int len);
 int websocket_create_packet(int opcode, char **buf, int *len);
-int websocket_send_pong(Client *client, char *buf, int len);
+int websocket_send_pong(Client *client, const char *buf, int len);
+int websocket_secure_connect(Client *client);
+struct HTTPForwardedHeader *websocket_parse_forwarded_header(char *input);
+int websocket_ip_compare(const char *ip1, const char *ip2);
 
 /* Global variables */
 ModDataInfo *websocket_md;
@@ -89,6 +106,7 @@ MOD_INIT()
 	HookAdd(modinfo->handle, HOOKTYPE_CONFIGRUN_EX, 0, websocket_config_run_ex);
 	HookAdd(modinfo->handle, HOOKTYPE_PACKET, INT_MAX, websocket_packet_out);
 	HookAdd(modinfo->handle, HOOKTYPE_RAWPACKET_IN, INT_MIN, websocket_packet_in);
+	HookAdd(modinfo->handle, HOOKTYPE_SECURE_CONNECT, 0, websocket_secure_connect);
 
 	memset(&mreq, 0, sizeof(mreq));
 	mreq.name = "websocket";
@@ -114,10 +132,6 @@ MOD_UNLOAD()
 	return MOD_SUCCESS;
 }
 
-#ifndef CheckNull
- #define CheckNull(x) if ((!(x)->ce_vardata) || (!(*((x)->ce_vardata)))) { config_error("%s:%i: missing parameter", (x)->ce_fileptr->cf_filename, (x)->ce_varlinenum); errors++; continue; }
-#endif
-
 int websocket_config_test(ConfigFile *cf, ConfigEntry *ce, int type, int *errs)
 {
 	int errors = 0;
@@ -129,16 +143,16 @@ int websocket_config_test(ConfigFile *cf, ConfigEntry *ce, int type, int *errs)
 		return 0;
 
 	/* We are only interrested in listen::options::websocket.. */
-	if (!ce || !ce->ce_varname || strcmp(ce->ce_varname, "websocket"))
+	if (!ce || !ce->name || strcmp(ce->name, "websocket"))
 		return 0;
 
-	for (cep = ce->ce_entries; cep; cep = cep->ce_next)
+	for (cep = ce->items; cep; cep = cep->next)
 	{
-		if (!strcmp(cep->ce_varname, "type"))
+		if (!strcmp(cep->name, "type"))
 		{
 			CheckNull(cep);
 			has_type = 1;
-			if (!strcmp(cep->ce_vardata, "text"))
+			if (!strcmp(cep->value, "text"))
 			{
 				if (non_utf8_nick_chars_in_use && !errored_once_nick)
 				{
@@ -153,19 +167,33 @@ int websocket_config_test(ConfigFile *cf, ConfigEntry *ce, int type, int *errs)
 					errors++;
 				}
 			}
-			else if (!strcmp(cep->ce_vardata, "binary"))
+			else if (!strcmp(cep->value, "binary"))
 			{
 			}
 			else
 			{
 				config_error("%s:%i: listen::options::websocket::type must be either 'binary' or 'text' (not '%s')",
-					cep->ce_fileptr->cf_filename, cep->ce_varlinenum, cep->ce_vardata);
+					cep->file->filename, cep->line_number, cep->value);
 				errors++;
+			}
+		} else if (!strcmp(cep->name, "forward"))
+		{
+			if (!cep->value)
+			{
+				config_error_empty(cep->file->filename, cep->line_number, "listen::options::websocket::forward", cep->name);
+				errors++;
+				continue;
+			}
+			if (!is_valid_ip(cep->value))
+			{
+				config_error("%s:%i: invalid IP address '%s' in listen::options::websocket::forward", cep->file->filename, cep->line_number, cep->value);
+				errors++;
+				continue;
 			}
 		} else
 		{
 			config_error("%s:%i: unknown directive listen::options::websocket::%s",
-				cep->ce_fileptr->cf_filename, cep->ce_varlinenum, cep->ce_varname);
+				cep->file->filename, cep->line_number, cep->name);
 			errors++;
 			continue;
 		}
@@ -174,7 +202,7 @@ int websocket_config_test(ConfigFile *cf, ConfigEntry *ce, int type, int *errs)
 	if (!has_type)
 	{
 		config_error("%s:%i: websocket set, but type unspecified. Use something like: listen { ip *; port 443; websocket { type text; } }",
-			ce->ce_fileptr->cf_filename, ce->ce_varlinenum);
+			ce->file->filename, ce->line_number);
 		errors++;
 	}
 
@@ -192,18 +220,18 @@ int websocket_config_run_ex(ConfigFile *cf, ConfigEntry *ce, int type, void *ptr
 		return 0;
 
 	/* We are only interrested in listen::options::websocket.. */
-	if (!ce || !ce->ce_varname || strcmp(ce->ce_varname, "websocket"))
+	if (!ce || !ce->name || strcmp(ce->name, "websocket"))
 		return 0;
 
 	l = (ConfigItem_listen *)ptr;
 
-	for (cep = ce->ce_entries; cep; cep = cep->ce_next)
+	for (cep = ce->items; cep; cep = cep->next)
 	{
-		if (!strcmp(cep->ce_varname, "type"))
+		if (!strcmp(cep->name, "type"))
 		{
-			if (!strcmp(cep->ce_vardata, "binary"))
+			if (!strcmp(cep->value, "binary"))
 				l->websocket_options = WEBSOCKET_TYPE_BINARY;
-			else if (!strcmp(cep->ce_vardata, "text"))
+			else if (!strcmp(cep->value, "text"))
 			{
 				l->websocket_options = WEBSOCKET_TYPE_TEXT;
 				if ((tempiConf.allowed_channelchars == ALLOWED_CHANNELCHARS_ANY) && !warned_once_channel)
@@ -217,6 +245,9 @@ int websocket_config_run_ex(ConfigFile *cf, ConfigEntry *ce, int type, void *ptr
 					warned_once_channel = 1;
 				}
 			}
+		} else if (!strcmp(cep->name, "forward"))
+		{
+			safe_strdup(l->websocket_forward, cep->value);
 		}
 	}
 	return 1;
@@ -230,6 +261,8 @@ void websocket_mdata_free(ModData *m)
 	{
 		safe_free(wsu->handshake_key);
 		safe_free(wsu->lefttoparse);
+		safe_free(wsu->sec_websocket_protocol);
+		safe_free(wsu->forwarded);
 		safe_free(m->ptr);
 	}
 }
@@ -239,6 +272,8 @@ void websocket_mdata_free(ModData *m)
  */
 int websocket_packet_out(Client *from, Client *to, Client *intended_to, char **msg, int *length)
 {
+	static char utf8buf[510];
+
 	if (MyConnect(to) && WSU(to) && WSU(to)->handshake_completed)
 	{
 		if (WEBSOCKET_TYPE(to) == WEBSOCKET_TYPE_BINARY)
@@ -246,7 +281,7 @@ int websocket_packet_out(Client *from, Client *to, Client *intended_to, char **m
 		else if (WEBSOCKET_TYPE(to) == WEBSOCKET_TYPE_TEXT)
 		{
 			/* Some more conversions are needed */
-			char *safe_msg = unrl_utf8_make_valid(*msg);
+			char *safe_msg = unrl_utf8_make_valid(*msg, utf8buf, sizeof(utf8buf), 1);
 			*msg = safe_msg;
 			*length = *msg ? strlen(safe_msg) : 0;
 			websocket_create_packet(WSOP_TEXT, msg, length);
@@ -256,7 +291,7 @@ int websocket_packet_out(Client *from, Client *to, Client *intended_to, char **m
 	return 0;
 }
 
-int websocket_handle_websocket(Client *client, char *readbuf2, int length2)
+int websocket_handle_websocket(Client *client, const char *readbuf2, int length2)
 {
 	int n;
 	char *ptr;
@@ -308,9 +343,13 @@ int websocket_handle_websocket(Client *client, char *readbuf2, int length2)
  * 0 means: don't process this data, but you can read another packet if you want
  * >0 means: process this data (regular IRC data, non-websocket stuff)
  */
-int websocket_packet_in(Client *client, char *readbuf, int *length)
+int websocket_packet_in(Client *client, const char *readbuf, int *length)
 {
-	if ((client->local->receiveM == 0) && WEBSOCKET_PORT(client) && !WSU(client) && (*length > 8) && !strncmp(readbuf, "GET ", 4))
+	if ((client->local->traffic.messages_received == 0) &&
+	    WEBSOCKET_PORT(client) &&
+	    !WSU(client) &&
+	    (*length > 8) &&
+	    !strncmp(readbuf, "GET ", 4))
 	{
 		/* Allocate a new WebSocketUser struct for this session */
 		moddata_client(client, websocket_md).ptr = safe_alloc(sizeof(WebSocketUser));
@@ -461,6 +500,141 @@ int websocket_handshake_helper(char *buffer, int len, char **key, char **value, 
 	return 0;
 }
 
+#define FHEADER_STATE_NAME	0
+#define FHEADER_STATE_VALUE	1
+#define FHEADER_STATE_VALUE_QUOTED	2
+
+#define FHEADER_ACTION_APPEND	0
+#define FHEADER_ACTION_IGNORE	1
+#define FHEADER_ACTION_PROCESS	2
+
+/** If a valid Forwarded: http header is received from a trusted source (proxy server), this function will
+  * extract remote IP address and secure (https) status from it. If more than one field with same name is received,
+  * we'll accept the last one. This should work correctly with chained proxies. */
+struct HTTPForwardedHeader *websocket_parse_forwarded_header(char *input)
+{
+	static struct HTTPForwardedHeader forwarded;
+	int i, length;
+	int state = FHEADER_STATE_NAME, action = FHEADER_ACTION_APPEND;
+	char name[FHEADER_NAMELEN+1];
+	char value[IPLEN+1];
+	int name_length = 0;
+	int value_length = 0;
+	char c;
+	
+	memset(&forwarded, 0, sizeof(struct HTTPForwardedHeader));
+	
+	length = strlen(input);
+	for (i = 0; i < length; i++)
+	{
+		c = input[i];
+		switch (c)
+		{
+			case '"':
+				switch (state)
+				{
+					case FHEADER_STATE_NAME:
+						action = FHEADER_ACTION_APPEND;
+						break;
+					case FHEADER_STATE_VALUE:
+						action = FHEADER_ACTION_IGNORE;
+						state = FHEADER_STATE_VALUE_QUOTED;
+						break;
+					case FHEADER_STATE_VALUE_QUOTED:
+						action = FHEADER_ACTION_IGNORE;
+						state = FHEADER_STATE_VALUE;
+						break;
+				}
+				break;
+			case ',': case ';': case ' ':
+				switch (state)
+				{
+					case FHEADER_STATE_NAME: /* name without value */
+						name_length = 0;
+						action = FHEADER_ACTION_IGNORE;
+						break;
+					case FHEADER_STATE_VALUE: /* end of value */
+						action = FHEADER_ACTION_PROCESS;
+						break;
+					case FHEADER_STATE_VALUE_QUOTED: /* quoted character, process as normal */
+						action = FHEADER_ACTION_APPEND;
+						break;
+				}
+				break;
+			case '=':
+				switch (state)
+				{
+					case FHEADER_STATE_NAME: /* end of name */
+						name[name_length] = '\0';
+						state = FHEADER_STATE_VALUE;
+						action = FHEADER_ACTION_IGNORE;
+						break;
+					case FHEADER_STATE_VALUE: case FHEADER_STATE_VALUE_QUOTED: /* none of the values is expected to contain = but proceed anyway */
+						action = FHEADER_ACTION_APPEND;
+						break;
+				}
+				break;
+			default:
+				action = FHEADER_ACTION_APPEND;
+				break;
+		}
+		switch (action)
+		{
+			case FHEADER_ACTION_APPEND:
+				if (state == FHEADER_STATE_NAME)
+				{
+					if (name_length < FHEADER_NAMELEN)
+					{
+						name[name_length++] = c;
+					} else
+					{
+						/* truncate */
+					}
+				} else
+				{
+					if (value_length < IPLEN)
+					{
+						value[value_length++] = c;
+					} else
+					{
+						/* truncate */
+					}
+				}
+				break;
+			case FHEADER_ACTION_IGNORE: default:
+				break;
+			case FHEADER_ACTION_PROCESS:
+				value[value_length] = '\0';
+				name[name_length] = '\0';
+				if (!strcasecmp(name, "for"))
+				{
+					strlcpy(forwarded.ip, value, IPLEN+1);
+				} else if (!strcasecmp(name, "proto"))
+				{
+					if (!strcasecmp(value, "https"))
+					{
+						forwarded.secure = 1;
+					} else if (!strcasecmp(value, "http"))
+					{
+						forwarded.secure = 0;
+					} else
+					{
+						/* ignore unknown value */
+					}
+				} else
+				{
+					/* ignore unknown field name */
+				}
+				value_length = 0;
+				name_length = 0;
+				state = FHEADER_STATE_NAME;
+				break;
+		}
+	}
+	
+	return &forwarded;
+}
+
 /** Finally, validate the websocket request (handshake) and proceed or reject. */
 int websocket_handshake_valid(Client *client)
 {
@@ -468,7 +642,7 @@ int websocket_handshake_valid(Client *client)
 	{
 		if (is_module_loaded("webredir"))
 		{
-			char *parx[2] = { NULL, NULL };
+			const char *parx[2] = { NULL, NULL };
 			do_cmd(client, NULL, "GET", 1, parx);
 		}
 		dead_socket(client, "Invalid WebSocket request");
@@ -510,13 +684,83 @@ int websocket_handshake_valid(Client *client)
 			safe_free(WSU(client)->sec_websocket_protocol);
 		}
 	}
+	if (WSU(client)->forwarded)
+	{
+		/* check for source ip */
+		if (BadPtr(client->local->listener->websocket_forward) || !websocket_ip_compare(client->local->listener->websocket_forward, client->ip))
+		{
+			unreal_log(ULOG_WARNING, "websocket", "UNAUTHORIZED_FORWARDED_HEADER", client, "Received unauthorized Forwarded header from $ip", log_data_string("ip", client->ip));
+			dead_socket(client, "Forwarded: no access");
+			return 0;
+		}
+		/* parse the header */
+		struct HTTPForwardedHeader *forwarded;
+		forwarded = websocket_parse_forwarded_header(WSU(client)->forwarded);
+		/* check header values */
+		if (!is_valid_ip(forwarded->ip))
+		{
+			unreal_log(ULOG_WARNING, "websocket", "INVALID_FORWARDED_IP", client, "Received invalid IP in Forwarded header from $ip", log_data_string("ip", client->ip));
+			dead_socket(client, "Forwarded: invalid IP");
+			return 0;
+		}
+		/* store data */
+		WSU(client)->secure = forwarded->secure;
+		safe_strdup(client->ip, forwarded->ip);
+		/* Update client->local->hostp */
+		strlcpy(client->local->sockhost, forwarded->ip, sizeof(client->local->sockhost)); /* in case dns lookup fails or is disabled */
+		/* (free old) */
+		if (client->local->hostp)
+		{
+			unreal_free_hostent(client->local->hostp);
+			client->local->hostp = NULL;
+		}
+		/* (create new) */
+		if (!DONT_RESOLVE)
+		{
+			/* taken from socket.c */
+			struct hostent *he;
+			unrealdns_delreq_bycptr(client); /* in case the proxy ip is still in progress of being looked up */
+			ClearDNSLookup(client);
+			he = unrealdns_doclient(client); /* call this once more */
+			if (!client->local->hostp)
+			{
+				if (he)
+					client->local->hostp = he;
+				else
+					SetDNSLookup(client);
+			} else
+			{
+				/* Race condition detected, DNS has been done, continue with auth */
+			}
+		}
+		/* blacklist_start_check() */
+		if (RCallbacks[CALLBACKTYPE_BLACKLIST_CHECK] != NULL)
+			RCallbacks[CALLBACKTYPE_BLACKLIST_CHECK]->func.intfunc(client);
+
+		/* Check (g)zlines right now; these are normally checked upon accept(),
+		 * but since we know the IP only now after PASS/WEBIRC, we have to check
+		 * here again...
+		 */
+		check_banned(client, 0);
+	}
 	return 1;
+}
+
+int websocket_secure_connect(Client *client)
+{
+	/* Remove secure mode (-z) if the WEBIRC gateway did not ensure
+	 * us that their [client]--[webirc gateway] connection is also
+	 * secure (eg: using https)
+	 */
+	if (IsSecureConnect(client) && WSU(client) && WSU(client)->forwarded && !WSU(client)->secure)
+		client->umodes &= ~UMODE_SECURE;
+	return 0;
 }
 
 /** Handle client GET WebSocket handshake.
  * Yes, I'm going to assume that the header fits in one packet and one packet only.
  */
-int websocket_handle_handshake(Client *client, char *readbuf, int *length)
+int websocket_handle_handshake(Client *client, const char *readbuf, int *length)
 {
 	char *key, *value;
 	int r, end_of_request;
@@ -566,12 +810,17 @@ int websocket_handle_handshake(Client *client, char *readbuf, int *length)
 		{
 			/* Save it here, will be processed later */
 			safe_strdup(WSU(client)->sec_websocket_protocol, value);
+		} else
+		if (!strcasecmp(key, "Forwarded"))
+		{
+			/* will be processed later too */
+			safe_strdup(WSU(client)->forwarded, value);
 		}
 	}
 
 	if (end_of_request)
 	{
-		if (!websocket_handshake_valid(client))
+		if (!websocket_handshake_valid(client) || IsDead(client))
 			return -1;
 		websocket_handshake_send_response(client);
 		return 0;
@@ -589,16 +838,12 @@ int websocket_handle_handshake(Client *client, char *readbuf, int *length)
 int websocket_handshake_send_response(Client *client)
 {
 	char buf[512], hashbuf[64];
-	SHA_CTX hash;
 	char sha1out[20]; /* 160 bits */
 
 	WSU(client)->handshake_completed = 1;
 
 	snprintf(buf, sizeof(buf), "%s%s", WSU(client)->handshake_key, WEBSOCKET_MAGIC_KEY);
-	SHA1_Init(&hash);
-	SHA1_Update(&hash, buf, strlen(buf));
-	SHA1_Final(sha1out, &hash);
-
+	sha1hash_binary(sha1out, buf, strlen(buf));
 	b64_encode(sha1out, sizeof(sha1out), hashbuf, sizeof(hashbuf));
 
 	snprintf(buf, sizeof(buf),
@@ -660,14 +905,16 @@ void add_lf_if_needed(char **buf, int *len)
  *          OR 0 to indicate a possible short read (want more data)
  *          OR -1 in case of an error.
  */
-int websocket_handle_packet(Client *client, char *readbuf, int length)
+int websocket_handle_packet(Client *client, const char *readbuf, int length)
 {
 	char opcode; /**< Opcode */
 	char masked; /**< Masked */
 	int len; /**< Length of the packet */
 	char maskkey[4]; /**< Key used for masking */
-	char *p, *payload;
+	const char *p;
 	int total_packet_size;
+	char *payload = NULL;
+	static char payloadbuf[READBUF_SIZE];
 
 	if (length < 4)
 	{
@@ -728,14 +975,20 @@ int websocket_handle_packet(Client *client, char *readbuf, int length)
 
 	memcpy(maskkey, p, 4);
 	p+= 4;
-	payload = (len > 0) ? p : NULL;
+
+	if (len > 0)
+	{
+		memcpy(payloadbuf, p, len);
+		payload = payloadbuf;
+	} /* else payload is NULL */
 
 	if (len > 0)
 	{
 		/* Unmask this thing (page 33, section 5.3) */
 		int n;
 		char v;
-		for (n = 0; n < len; n++)
+		char *p;
+		for (p = payload, n = 0; n < len; n++)
 		{
 			v = *p;
 			*p++ = v ^ maskkey[n % 4];
@@ -777,7 +1030,7 @@ int websocket_handle_packet(Client *client, char *readbuf, int length)
 	return -1; /* NOTREACHED */
 }
 
-int websocket_handle_packet_ping(Client *client, char *buf, int len)
+int websocket_handle_packet_ping(Client *client, const char *buf, int len)
 {
 	if (len > 500)
 	{
@@ -785,11 +1038,11 @@ int websocket_handle_packet_ping(Client *client, char *buf, int len)
 		return -1;
 	}
 	websocket_send_pong(client, buf, len);
-	client->local->since++; /* lag penalty of 1 second */
+	add_fake_lag(client, 1000); /* lag penalty of 1 second */
 	return 0;
 }
 
-int websocket_handle_packet_pong(Client *client, char *buf, int len)
+int websocket_handle_packet_pong(Client *client, const char *buf, int len)
 {
 	/* We don't care */
 	return 0;
@@ -799,7 +1052,7 @@ int websocket_handle_packet_pong(Client *client, char *buf, int len)
  * This is the simple version that is used ONLY for WSOP_PONG,
  * as it does not take \r\n into account.
  */
-int websocket_create_packet_simple(int opcode, char **buf, int *len)
+int websocket_create_packet_simple(int opcode, const char **buf, int *len)
 {
 	static char sendbuf[8192];
 
@@ -871,8 +1124,12 @@ int websocket_create_packet(int opcode, char **buf, int *len)
 		if (bytes_in_sendbuf + bytes_single_frame > sizeof(sendbuf))
 		{
 			/* Overflow. This should never happen. */
-			sendto_ops("[websocket] [BUG] Overflow prevented: %d + %d > %d",
-				bytes_in_sendbuf, bytes_single_frame, (int)sizeof(sendbuf));
+			unreal_log(ULOG_WARNING, "websocket", "BUG_WEBSOCKET_OVERFLOW", NULL,
+			           "[BUG] [websocket] Overflow prevented in websocket_create_packet(): "
+			           "$bytes_in_sendbuf + $bytes_single_frame > $sendbuf_size",
+			           log_data_integer("bytes_in_sendbuf", bytes_in_sendbuf),
+			           log_data_integer("bytes_single_frame", bytes_single_frame),
+			           log_data_integer("sendbuf_size", sizeof(sendbuf)));
 			return -1;
 		}
 
@@ -906,9 +1163,9 @@ int websocket_create_packet(int opcode, char **buf, int *len)
 }
 
 /** Create and send a WSOP_PONG frame */
-int websocket_send_pong(Client *client, char *buf, int len)
+int websocket_send_pong(Client *client, const char *buf, int len)
 {
-	char *b = buf;
+	const char *b = buf;
 	int l = len;
 
 	if (websocket_create_packet_simple(WSOP_PONG, &b, &l) < 0)
@@ -924,3 +1181,33 @@ int websocket_send_pong(Client *client, char *buf, int len)
 	send_queued(client);
 	return 0;
 }
+
+/** Compare IP addresses (for authorization checking) */
+int websocket_ip_compare(const char *ip1, const char *ip2)
+{
+	uint32_t ip4[2];
+	uint16_t ip6[16];
+	int i;
+	if (inet_pton(AF_INET, ip1, &ip4[0]) == 1) /* IPv4 */
+	{
+		if (inet_pton(AF_INET, ip2, &ip4[1]) == 1) /* both are valid, let's compare */
+		{
+			return ip4[0] == ip4[1];
+		}
+		return 0;
+	}
+	if (inet_pton(AF_INET6, ip1, &ip6[0]) == 1) /* IPv6 */
+	{
+		if (inet_pton(AF_INET6, ip2, &ip6[8]) == 1)
+		{
+			for (i = 0; i < 8; i++)
+			{
+				if (ip6[i] != ip6[i+8])
+					return 0;
+			}
+			return 1;
+		}
+	}
+	return 0; /* neither valid IPv4 nor IPv6 */
+}
+

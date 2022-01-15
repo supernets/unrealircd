@@ -31,7 +31,7 @@ ModuleHeader MOD_HEADER
 	"5.0", /* Version */
 	"command /lag", /* Short description of module */
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
     };
 
 /* This is called on module init, before Server Ready */
@@ -78,7 +78,7 @@ CMD_FUNC(cmd_lag)
 		return;
 	}
 
-	if (hunt_server(client, recv_mtags, ":%s LAG :%s", 1, parc, parv) == HUNTED_NOSUCH)
+	if (hunt_server(client, recv_mtags, "LAG", 1, parc, parv) == HUNTED_NOSUCH)
 		return;
 
 	sendnotice(client, "Lag reply -- %s %s %lld", me.name, parv[1], (long long)TStime());

@@ -32,7 +32,7 @@ ModuleHeader MOD_HEADER
 	"5.0",
 	"command /eos", 
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
     };
 
 MOD_INIT()
@@ -63,12 +63,8 @@ CMD_FUNC(cmd_eos)
 {
 	if (!IsServer(client))
 		return;
-	client->serv->flags.synced = 1;
+	client->server->flags.synced = 1;
 	/* pass it on ^_- */
-#ifdef DEBUGMODE
-	ircd_log(LOG_ERROR, "[EOSDBG] cmd_eos: got sync from %s (path:%s)", client->name, client->direction->name);
-	ircd_log(LOG_ERROR, "[EOSDBG] cmd_eos: broadcasting it back to everyone except route from %s", client->direction->name);
-#endif
 	sendto_server(client, 0, 0, NULL, ":%s EOS", client->id);
 
 	RunHook(HOOKTYPE_SERVER_SYNCED, client);

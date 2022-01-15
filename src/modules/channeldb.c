@@ -11,7 +11,7 @@ ModuleHeader MOD_HEADER = {
 	"1.0",
 	"Stores and retrieves channel settings for persistent (+P) channels",
 	"UnrealIRCd Team",
-	"unrealircd-5",
+	"unrealircd-6",
 };
 
 /* Database version */
@@ -27,15 +27,14 @@ ModuleHeader MOD_HEADER = {
 #define MAGIC_CHANNEL_START	0x11111111
 #define MAGIC_CHANNEL_END	0x22222222
 
-#ifdef DEBUGMODE
- #define BENCHMARK
-#endif
+// #undef BENCHMARK
 
 #define WARN_WRITE_ERROR(fname) \
 	do { \
-		sendto_realops_and_log("[channeldb] Error writing to temporary database file " \
-		                       "'%s': %s (DATABASE NOT SAVED)", \
-		                       fname, unrealdb_get_error_string()); \
+		unreal_log(ULOG_ERROR, "channeldb", "CHANNELDB_FILE_WRITE_ERROR", NULL, \
+			   "[channeldb] Error writing to temporary database file $filename: $system_error", \
+			   log_data_string("filename", fname), \
+			   log_data_string("system_error", unrealdb_get_error_string())); \
 	} while(0)
 
 #define W_SAFE(x) \
@@ -72,7 +71,6 @@ EVENT(write_channeldb_evt);
 int write_channeldb(void);
 int write_channel_entry(UnrealDB *db, const char *tmpfname, Channel *channel);
 int read_channeldb(void);
-static void set_channel_mode(Channel *channel, char *modes, char *parameters);
 
 /* Global variables */
 static uint32_t channeldb_version = CHANNELDB_VERSION;
@@ -132,7 +130,7 @@ MOD_LOAD()
 
 MOD_UNLOAD()
 {
-	if (loop.ircd_terminating)
+	if (loop.terminating)
 		write_channeldb();
 	freecfg(&test);
 	freecfg(&cfg);
@@ -168,34 +166,34 @@ int channeldb_config_test(ConfigFile *cf, ConfigEntry *ce, int type, int *errs)
 	if (type != CONFIG_SET)
 		return 0;
 
-	if (!ce || strcmp(ce->ce_varname, "channeldb"))
+	if (!ce || strcmp(ce->name, "channeldb"))
 		return 0;
 
-	for (cep = ce->ce_entries; cep; cep = cep->ce_next)
+	for (cep = ce->items; cep; cep = cep->next)
 	{
-		if (!cep->ce_vardata)
+		if (!cep->value)
 		{
-			config_error("%s:%i: blank set::channeldb::%s without value", cep->ce_fileptr->cf_filename, cep->ce_varlinenum, cep->ce_varname);
+			config_error("%s:%i: blank set::channeldb::%s without value", cep->file->filename, cep->line_number, cep->name);
 			errors++;
 		} else
-		if (!strcmp(cep->ce_varname, "database"))
+		if (!strcmp(cep->name, "database"))
 		{
-			convert_to_absolute_path(&cep->ce_vardata, PERMDATADIR);
-			safe_strdup(test.database, cep->ce_vardata);
+			convert_to_absolute_path(&cep->value, PERMDATADIR);
+			safe_strdup(test.database, cep->value);
 		} else
-		if (!strcmp(cep->ce_varname, "db-secret"))
+		if (!strcmp(cep->name, "db-secret"))
 		{
-			char *err;
-			if ((err = unrealdb_test_secret(cep->ce_vardata)))
+			const char *err;
+			if ((err = unrealdb_test_secret(cep->value)))
 			{
-				config_error("%s:%i: set::channeldb::db-secret: %s", cep->ce_fileptr->cf_filename, cep->ce_varlinenum, err);
+				config_error("%s:%i: set::channeldb::db-secret: %s", cep->file->filename, cep->line_number, err);
 				errors++;
 				continue;
 			}
-			safe_strdup(test.db_secret, cep->ce_vardata);
+			safe_strdup(test.db_secret, cep->value);
 		} else
 		{
-			config_error("%s:%i: unknown directive set::channeldb::%s", cep->ce_fileptr->cf_filename, cep->ce_varlinenum, cep->ce_varname);
+			config_error("%s:%i: unknown directive set::channeldb::%s", cep->file->filename, cep->line_number, cep->name);
 			errors++;
 		}
 	}
@@ -227,15 +225,15 @@ int channeldb_config_run(ConfigFile *cf, ConfigEntry *ce, int type)
 	if (type != CONFIG_SET)
 		return 0;
 
-	if (!ce || strcmp(ce->ce_varname, "channeldb"))
+	if (!ce || strcmp(ce->name, "channeldb"))
 		return 0;
 
-	for (cep = ce->ce_entries; cep; cep = cep->ce_next)
+	for (cep = ce->items; cep; cep = cep->next)
 	{
-		if (!strcmp(cep->ce_varname, "database"))
-			safe_strdup(cfg.database, cep->ce_vardata);
-		else if (!strcmp(cep->ce_varname, "db-secret"))
-			safe_strdup(cfg.db_secret, cep->ce_vardata);
+		if (!strcmp(cep->name, "database"))
+			safe_strdup(cfg.database, cep->value);
+		else if (!strcmp(cep->name, "db-secret"))
+			safe_strdup(cfg.db_secret, cep->value);
 	}
 	return 1;
 }
@@ -300,7 +298,7 @@ int write_channeldb(void)
 #endif
 	if (rename(tmpfname, cfg.database) < 0)
 	{
-		sendto_realops_and_log("[channeldb] Error renaming '%s' to '%s': %s (DATABASE NOT SAVED)", tmpfname, cfg.database, strerror(errno));
+		config_error("[channeldb] Error renaming '%s' to '%s': %s (DATABASE NOT SAVED)", tmpfname, cfg.database, strerror(errno));
 		return 0;
 	}
 #ifdef BENCHMARK
@@ -333,9 +331,11 @@ int write_listmode(UnrealDB *db, const char *tmpfname, Ban *lst)
 
 int write_channel_entry(UnrealDB *db, const char *tmpfname, Channel *channel)
 {
+	char modebuf[BUFSIZE], parabuf[BUFSIZE];
+
 	W_SAFE(unrealdb_write_int32(db, MAGIC_CHANNEL_START));
 	/* Channel name */
-	W_SAFE(unrealdb_write_str(db, channel->chname));
+	W_SAFE(unrealdb_write_str(db, channel->name));
 	/* Channel creation time */
 	W_SAFE(unrealdb_write_int64(db, channel->creationtime));
 	/* Topic (topic, setby, seton) */
@@ -343,7 +343,7 @@ int write_channel_entry(UnrealDB *db, const char *tmpfname, Channel *channel)
 	W_SAFE(unrealdb_write_str(db, channel->topic_nick));
 	W_SAFE(unrealdb_write_int64(db, channel->topic_time));
 	/* Basic channel modes (eg: +sntkl key 55) */
-	channel_modes(&me, modebuf, parabuf, sizeof(modebuf), sizeof(parabuf), channel);
+	channel_modes(&me, modebuf, parabuf, sizeof(modebuf), sizeof(parabuf), channel, 1);
 	W_SAFE(unrealdb_write_str(db, modebuf));
 	W_SAFE(unrealdb_write_str(db, parabuf));
 	/* Mode lock */
@@ -506,8 +506,11 @@ int read_channeldb(void)
 		R_SAFE(unrealdb_read_str(db, &modes2));
 		R_SAFE(unrealdb_read_str(db, &mode_lock));
 		/* If we got this far, we can create/initialize the channel with the above */
-		channel = get_channel(&me, chname, CREATE);
-		channel->creationtime = creationtime;
+		channel = make_channel(chname);
+		if (IsInvalidChannelTS(creationtime))
+			channel->creationtime = TStime();
+		else
+			channel->creationtime = creationtime;
 		safe_strdup(channel->topic, topic);
 		safe_strdup(channel->topic_nick, topic_nick);
 		channel->topic_time = topic_time;
@@ -529,37 +532,14 @@ int read_channeldb(void)
 	unrealdb_close(db);
 
 	if (added)
-		sendto_realops_and_log("[channeldb] Added %d persistent channels (+P)", added);
+		config_status("[channeldb] Added %d persistent channels (+P)", added);
 #ifdef BENCHMARK
 	gettimeofday(&tv_beta, NULL);
-	ircd_log(LOG_ERROR, "[channeldb] Benchmark: LOAD DB: %ld microseconds",
-		((tv_beta.tv_sec - tv_alpha.tv_sec) * 1000000) + (tv_beta.tv_usec - tv_alpha.tv_usec));
+	unreal_log(ULOG_DEBUG, "channeldb", "CHANNELDB_BENCHMARK", NULL,
+	           "[channeldb] Benchmark: LOAD DB: $time_msec microseconds",
+	           log_data_integer("time_msec", ((tv_beta.tv_sec - tv_alpha.tv_sec) * 1000000) + (tv_beta.tv_usec - tv_alpha.tv_usec)));
 #endif
 	return 1;
 }
 #undef FreeChannelEntry
 #undef R_SAFE
-
-static void set_channel_mode(Channel *channel, char *modes, char *parameters)
-{
-	char buf[512];
-	char *p, *param;
-	int myparc = 1, i;
-	char *myparv[64];
-
-	memset(&myparv, 0, sizeof(myparv));
-	myparv[0] = raw_strdup(modes);
-
-	strlcpy(buf, parameters, sizeof(buf));
-	for (param = strtoken(&p, buf, " "); param; param = strtoken(&p, NULL, " "))
-		myparv[myparc++] = raw_strdup(param);
-	myparv[myparc] = NULL;
-
-	SetULine(&me); // hack for crash.. set ulined so no access checks.
-	do_mode(channel, &me, NULL, myparc, myparv, 0, 0);
-	ClearULine(&me); // and clear it again..
-
-	for (i = 0; i < myparc; i++)
-		safe_free(myparv[i]);
-}
-// FIXME: move above function to m_mode and make efunc, available for all modules anyway
