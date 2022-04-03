@@ -520,17 +520,17 @@ int stats_command(Client *client, const char *para)
 
 int stats_oper(Client *client, const char *para)
 {
-	ConfigItem_oper *oper_p;
+	ConfigItem_oper *o;
 	ConfigItem_mask *m;
 
-	for (oper_p = conf_oper; oper_p; oper_p = oper_p->next)
+	for (o = conf_oper; o; o = o->next)
 	{
-		for (m = oper_p->mask; m; m = m->next)
+		for (m = o->mask; m; m = m->next)
 		{
-	  		sendnumeric(client, RPL_STATSOLINE,
-	  			'O', m->mask, oper_p->name,
-	  			"-",
-	  			oper_p->class->name? oper_p->class->name : "");
+			sendnumeric(client, RPL_STATSOLINE,
+			            'O', m->mask, o->name,
+			            o->operclass ? o->operclass: "",
+			            o->class->name ? o->class->name : "");
 		}
 	}
 	return 0;
@@ -540,11 +540,20 @@ static char *stats_port_helper(ConfigItem_listen *listener)
 {
 	static char buf[256];
 
-	ircsnprintf(buf, sizeof(buf), "%s%s%s%s",
+	ircsnprintf(buf, sizeof(buf), "%s%s%s",
 	    (listener->options & LISTENER_CLIENTSONLY)? "clientsonly ": "",
 	    (listener->options & LISTENER_SERVERSONLY)? "serversonly ": "",
-	    (listener->options & LISTENER_TLS)?         "tls ": "",
-	    !(listener->options & LISTENER_TLS)?        "plaintext ": "");
+	    (listener->options & LISTENER_DEFER_ACCEPT)? "defer-accept ": "");
+
+	/* And one of these.. */
+	if (listener->options & LISTENER_CONTROL)
+		strlcat(buf, "control ", sizeof(buf));
+	else if (listener->socket_type == SOCKET_TYPE_UNIX)
+		;
+	else if (listener->options & LISTENER_TLS)
+		strlcat(buf, "tls ", sizeof(buf));
+	else
+		strlcat(buf, "plaintext ", sizeof(buf));
 	return buf;
 }
 
@@ -558,13 +567,22 @@ int stats_port(Client *client, const char *para)
 			continue;
 		if ((listener->options & LISTENER_SERVERSONLY) && !ValidatePermissionsForPath("server:info:stats",client,NULL,NULL,NULL))
 			continue;
-		sendnotice(client, "*** Listener on %s:%i (%s): has %i client(s), options: %s %s",
-		           listener->ip,
-		           listener->port,
-		           listener->ipv6 ? "IPv6" : "IPv4",
-		           listener->clients,
-		           stats_port_helper(listener),
-		           listener->flag.temporary ? "[TEMPORARY]" : "");
+		if (listener->socket_type == SOCKET_TYPE_UNIX)
+		{
+			sendnotice(client, "*** Listener on %s (UNIX): has %i client(s), options: %s %s",
+				   listener->file,
+				   listener->clients,
+				   stats_port_helper(listener),
+				   listener->flag.temporary ? "[TEMPORARY]" : "");
+		} else {
+			sendnotice(client, "*** Listener on %s:%i (%s): has %i client(s), options: %s %s",
+				   listener->ip,
+				   listener->port,
+				   listener->socket_type == SOCKET_TYPE_IPV6 ? "IPv6" : "IPv4",
+				   listener->clients,
+				   stats_port_helper(listener),
+				   listener->flag.temporary ? "[TEMPORARY]" : "");
+		}
 	}
 	return 0;
 }

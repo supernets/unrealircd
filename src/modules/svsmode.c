@@ -136,7 +136,7 @@ void unban_user(Client *client, Channel *channel, Client *acptr, char chmode)
 		}
 		else if (chmode != 'I' && *ban->banstr == '~' && (extban = findmod_by_bantype(ban->banstr, &nextbanstr)))
 		{
-			if ((extban->options & EXTBOPT_CHSVSMODE) && (extban->is_banned_events & b->ban_check_types))
+			if (extban->is_banned_events & b->ban_check_types)
 			{
 				b->banstr = nextbanstr;
 				if (extban->is_banned(b))
@@ -176,7 +176,7 @@ void clear_bans(Client *client, Channel *channel, char chmode)
 		bnext = ban->next;
 		if (chmode != 'I' && (*ban->banstr == '~') && (extban = findmod_by_bantype(ban->banstr, NULL)))
 		{
-			if (!(extban->options & EXTBOPT_CHSVSMODE))							
+			if (!(extban->is_banned_events & BANCHK_JOIN))
 				continue;
 		}
 		add_send_mode_param(channel, client, '-',  chmode, ban->banstr);
@@ -298,7 +298,7 @@ void channel_svsmode(Client *client, int parc, const char *parv[])
 		sendto_channel(channel, client, client, 0, 0, SEND_LOCAL, mtags,
 		               ":%s MODE %s %s %s",
 		               client->name, channel->name,  modebuf, parabuf);
-		sendto_server(NULL, 0, 0, mtags, ":%s MODE %s %s %s", client->id, channel->name, modebuf, parabuf);
+		sendto_server(NULL, 0, 0, mtags, ":%s MODE %s %s %s%s", client->id, channel->name, modebuf, parabuf, IsServer(client)?" 0":"");
 
 		/* Activate this hook just like cmd_mode.c */
 		RunHook(HOOKTYPE_REMOTE_CHANMODE, client, channel, mtags, modebuf, parabuf, 0, 0, &destroy_channel);
@@ -615,7 +615,7 @@ void add_send_mode_param(Channel *channel, Client *from, char what, char mode, c
 		sendto_channel(channel, from, from, 0, 0, SEND_LOCAL, mtags,
 		               ":%s MODE %s %s %s",
 		               from->name, channel->name, modebuf, parabuf);
-		sendto_server(NULL, 0, 0, mtags, ":%s MODE %s %s %s", from->id, channel->name, modebuf, parabuf);
+		sendto_server(NULL, 0, 0, mtags, ":%s MODE %s %s %s%s", from->id, channel->name, modebuf, parabuf, IsServer(from)?" 0":"");
 		free_message_tags(mtags);
 		send = 0;
 		*parabuf = 0;

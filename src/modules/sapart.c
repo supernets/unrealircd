@@ -170,9 +170,9 @@ CMD_FUNC(cmd_sapart)
 	if (comment)
 	{
 		snprintf(commentx, sizeof(commentx), "SAPart: %s", comment);
-		//sendnotice(target, "*** You were forced to part %s (%s)", request, commentx);
+		sendnotice(target, "*** You were forced to part %s (%s)", request, commentx);
 	} else {
-		//sendnotice(target, "*** You were forced to part %s", request);
+		sendnotice(target, "*** You were forced to part %s", request);
 	}
 
 	parv[0] = target->name; // nick

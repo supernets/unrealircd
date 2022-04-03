@@ -263,12 +263,18 @@ typedef struct Log Log;
 struct Log {
 	Log *prev, *next;
 	LogSource *sources;
+	int type;
 	char destination[CHANNELLEN+1];
+	int show_event;
+	/* for destination::file */
 	char *file;
 	char *filefmt;
 	long maxsize;
-	int type;
 	int logfd;
+	/* for destination::channel */
+	int color;
+	int json_message_tag;
+	int oper_only;
 };
 
 /** This is used for deciding the <index> in logs[<index>] and temp_logs[<index>] */
@@ -317,6 +323,7 @@ typedef enum LogDestination { LOG_DEST_SNOMASK=0, LOG_DEST_OPER=1, LOG_DEST_REMO
  * @{
  */
 typedef enum ClientStatus {
+	CLIENT_STATUS_CONTROL			= -8,	/**< Client is on the control channel */
 	CLIENT_STATUS_LOG			= -7,	/**< Client is a log file */
 	CLIENT_STATUS_TLS_STARTTLS_HANDSHAKE	= -8,	/**< Client is doing a STARTTLS handshake */
 	CLIENT_STATUS_CONNECTING		= -6,	/**< Client is an outgoing connect */
@@ -339,6 +346,7 @@ typedef enum ClientStatus {
 /** Client is not fully registered yet. May become a user or a server, we don't know yet. */
 #define	IsUnknown(x)		(((x)->status == CLIENT_STATUS_UNKNOWN) || ((x)->status == CLIENT_STATUS_TLS_STARTTLS_HANDSHAKE))	
 #define	IsServer(x)		((x)->status == CLIENT_STATUS_SERVER)	/**< Is a server that has completed the connection handshake */
+#define	IsControl(x)		((x)->status == CLIENT_STATUS_CONTROL)	/**< Is on the control channel (not on IRC) */
 #define	IsLog(x)		((x)->status == CLIENT_STATUS_LOG)	/**< Is a log file, not a user or server */
 #define IsStartTLSHandshake(x)	((x)->status == CLIENT_STATUS_TLS_STARTTLS_HANDSHAKE)	/**< Currently doing a STARTTLS handshake */
 #define IsTLSAcceptHandshake(x)	((x)->status == CLIENT_STATUS_TLS_ACCEPT_HANDSHAKE)	/**< Currently doing a TLS handshake - incoming */
@@ -355,6 +363,8 @@ typedef enum ClientStatus {
 #define	SetServer(x)		((x)->status = CLIENT_STATUS_SERVER)
 #define	SetUser(x)		((x)->status = CLIENT_STATUS_USER)
 #define	SetLog(x)		((x)->status = CLIENT_STATUS_LOG)
+#define	SetControl(x)		((x)->status = CLIENT_STATUS_CONTROL)
+#define	SetUser(x)		((x)->status = CLIENT_STATUS_USER)
 
 /** @} */
 
@@ -366,7 +376,7 @@ typedef enum ClientStatus {
 #define	CLIENT_FLAG_DEAD		0x00000002	/**< Client is dead: already quit/exited and removed from all lists -- Remaining part will soon be freed in main loop */
 #define	CLIENT_FLAG_DEADSOCKET		0x00000004	/**< Local socket is dead but otherwise the client still exists fully -- Will soon exit in main loop */
 #define	CLIENT_FLAG_KILLED		0x00000008	/**< Prevents "QUIT" from being sent for this */
-#define CLIENT_FLAG_IPV6		0x00000010	/**< Connection is using IPv6 */
+#define CLIENT_FLAG_MONITOR_REHASH	0x00000010	/**< Client is monitoring rehash output */
 #define CLIENT_FLAG_OUTGOING		0x00000020	/**< Outgoing connection (do not touch cptr->listener->clients) */
 #define	CLIENT_FLAG_CLOSING		0x00000040	/**< Set when closing to suppress errors */
 #define	CLIENT_FLAG_LISTEN		0x00000080	/**< Used to mark clients which we listen() on */
@@ -464,8 +474,8 @@ typedef enum ClientStatus {
 #define IsDNSLookup(x)			((x)->flags & CLIENT_FLAG_DNSLOOKUP)
 #define IsEAuth(x)			((x)->flags & CLIENT_FLAG_EAUTH)
 #define IsIdentSuccess(x)		((x)->flags & CLIENT_FLAG_IDENTSUCCESS)
-#define IsIPV6(x)			((x)->flags & CLIENT_FLAG_IPV6)
 #define IsKilled(x)			((x)->flags & CLIENT_FLAG_KILLED)
+#define IsMonitorRehash(x)		((x)->flags & CLIENT_FLAG_MONITOR_REHASH)
 #define IsListening(x)			((x)->flags & CLIENT_FLAG_LISTEN)
 #define IsLocalhost(x)			((x)->flags & CLIENT_FLAG_LOCALHOST)
 #define IsMap(x)			((x)->flags & CLIENT_FLAG_MAP)
@@ -496,8 +506,8 @@ typedef enum ClientStatus {
 #define SetDNSLookup(x)			do { (x)->flags |= CLIENT_FLAG_DNSLOOKUP; } while(0)
 #define SetEAuth(x)			do { (x)->flags |= CLIENT_FLAG_EAUTH; } while(0)
 #define SetIdentSuccess(x)		do { (x)->flags |= CLIENT_FLAG_IDENTSUCCESS; } while(0)
-#define SetIPV6(x)			do { (x)->flags |= CLIENT_FLAG_IPV6; } while(0)
 #define SetKilled(x)			do { (x)->flags |= CLIENT_FLAG_KILLED; } while(0)
+#define SetMonitorRehash(x)		do { (x)->flags |= CLIENT_FLAG_MONITOR_REHASH; } while(0)
 #define SetListening(x)			do { (x)->flags |= CLIENT_FLAG_LISTEN; } while(0)
 #define SetLocalhost(x)			do { (x)->flags |= CLIENT_FLAG_LOCALHOST; } while(0)
 #define SetMap(x)			do { (x)->flags |= CLIENT_FLAG_MAP; } while(0)
@@ -526,8 +536,8 @@ typedef enum ClientStatus {
 #define ClearDNSLookup(x)		do { (x)->flags &= ~CLIENT_FLAG_DNSLOOKUP; } while(0)
 #define ClearEAuth(x)			do { (x)->flags &= ~CLIENT_FLAG_EAUTH; } while(0)
 #define ClearIdentSuccess(x)		do { (x)->flags &= ~CLIENT_FLAG_IDENTSUCCESS; } while(0)
-#define ClearIPV6(x)			do { (x)->flags &= ~CLIENT_FLAG_IPV6; } while(0)
 #define ClearKilled(x)			do { (x)->flags &= ~CLIENT_FLAG_KILLED; } while(0)
+#define ClearMonitorRehash(x)		do { (x)->flags &= ~CLIENT_FLAG_MONITOR_REHASH; } while(0)
 #define ClearListening(x)		do { (x)->flags &= ~CLIENT_FLAG_LISTEN; } while(0)
 #define ClearLocalhost(x)		do { (x)->flags &= ~CLIENT_FLAG_LOCALHOST; } while(0)
 #define ClearMap(x)			do { (x)->flags &= ~CLIENT_FLAG_MAP; } while(0)
@@ -546,6 +556,9 @@ typedef enum ClientStatus {
 #define ClearULine(x)			do { (x)->flags &= ~CLIENT_FLAG_ULINE; } while(0)
 #define ClearVirus(x)			do { (x)->flags &= ~CLIENT_FLAG_VIRUS; } while(0)
 #define ClearIdentLookupSent(x)		do { (x)->flags &= ~CLIENT_FLAG_IDENTLOOKUPSENT; } while(0)
+#define IsIPV6(x)			((x)->local->socket_type == SOCKET_TYPE_IPV6)
+#define IsUnixSocket(x)			((x)->local->socket_type == SOCKET_TYPE_UNIX)
+#define SetIPV6(x)			do { (x)->local->socket_type = SOCKET_TYPE_IPV6; } while(0)
 /** @} */
 
 
@@ -779,11 +792,11 @@ struct LoopStruct {
 	unsigned do_bancheck : 1; /* perform *line bancheck? */
 	unsigned do_bancheck_spamf_user : 1; /* perform 'user' spamfilter bancheck */
 	unsigned do_bancheck_spamf_away : 1; /* perform 'away' spamfilter bancheck */
-	unsigned rehashing : 1;
 	unsigned terminating : 1;
 	unsigned config_load_failed : 1;
 	unsigned rehash_download_busy : 1; /* don't return "all downloads complete", needed for race condition */
 	unsigned tainted : 1;
+	int rehashing;
 	Client *rehash_save_client;
 	void (*boot_function)();
 };
@@ -851,6 +864,8 @@ struct SWhois {
 #define CMD_VIRUS		0x0080
 /** Command requires IRCOp privileges */
 #define CMD_OPER		0x0200
+/** Command is for control channel only (unrealircd.ctl socket) */
+#define CMD_CONTROL		0x0400
 
 /** Command function - used by all command handlers.
  * This is used in the code like <pre>CMD_FUNC(cmd_yourcmd)</pre> as a function definition.
@@ -1212,6 +1227,7 @@ extern void unload_all_unused_moddata(void);
 #define LISTENER_TLS		0x000010
 #define LISTENER_BOUND		0x000020
 #define LISTENER_DEFER_ACCEPT	0x000040
+#define LISTENER_CONTROL	0x000080	/**< Control channel */
 
 #define IsServersOnlyListener(x)	((x) && ((x)->options & LISTENER_SERVERSONLY))
 
@@ -1240,6 +1256,7 @@ typedef enum FloodOption {
 	FLD_KNOCK		= 4,	/**< knock-flood */
 	FLD_CONVERSATIONS	= 5,	/**< max-concurrent-conversations */
 	FLD_LAG_PENALTY		= 6,	/**< lag-penalty / lag-penalty-bytes */
+	FLD_VHOST		= 7,	/**< vhost-flood */
 } FloodOption;
 #define MAXFLOODOPTIONS 10
 
@@ -1250,6 +1267,11 @@ struct TrafficStats {
 	long long bytes_sent;		/* Bytes sent */
 	long long bytes_received;	/* Received bytes */
 };
+
+/** Socket type (IPv4, IPv6, UNIX) */
+typedef enum {
+	SOCKET_TYPE_IPV4=0, SOCKET_TYPE_IPV6=1, SOCKET_TYPE_UNIX=2
+} SocketType;
 
 /** This shows the Client struct (any client), the User struct (a user), Server (a server) that are commonly accessed both in the core and by 3rd party coders.
  * @defgroup CommonStructs Common structs
@@ -1288,6 +1310,7 @@ struct Client {
  */
 struct LocalClient {
 	int fd;				/**< File descriptor, can be <0 if socket has been closed already. */
+	SocketType socket_type;		/**< Type of socket: IPv4, IPV6, UNIX */
 	SSL *ssl;			/**< OpenSSL/LibreSSL struct for TLS connection */
 	time_t fake_lag;		/**< Time when user will next be allowed to send something (actually fake_lag<currenttime+10) */
 	int fake_lag_msec;		/**< Used for calculating 'fake_lag' penalty (modulo) */
@@ -1606,6 +1629,7 @@ struct ConfigItem_oper {
 	char *vhost;
 	int maxlogins;
 	int server_notice_colors;
+	int server_notice_show_event;
 };
 
 /** The TLS options that are used in set::tls and otherblocks::tls-options.
@@ -1666,11 +1690,12 @@ struct ConfigItem_tld {
 struct ConfigItem_listen {
 	ConfigItem_listen *prev, *next;
 	ConfigFlag flag;
+	SocketType socket_type;
+	char *file;
 	char *ip;
 	int port;
 	int options, clients;
 	int fd;
-	int ipv6;
 	SSL_CTX *ssl_ctx;
 	TLSOptions *tls_options;
 	int websocket_options; /* should be in module, but lazy */

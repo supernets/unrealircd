@@ -2,6 +2,7 @@
 
 PID_FILE="@PIDFILE@"
 PID_BACKUP="@PIDFILE@.bak"
+UNREALIRCDCTL="@BINDIR@/unrealircdctl"
 
 # When built with --with-asan, ASan does not dump core by default because
 # older gcc/clang might dump a 16TB core file. We explicitly enable it here.
@@ -87,16 +88,13 @@ elif [ "$1" = "stop" ] ; then
 		kill -9 `cat $PID_FILE` 1>/dev/null 2>&1
 	fi
 elif [ "$1" = "rehash" ] ; then
-	echo "Rehashing UnrealIRCd"
-	if [ ! -r $PID_FILE ] ; then
-		echo "ERROR: UnrealIRCd is not running"
-		exit 1
-	fi
-	kill -1 `cat $PID_FILE`
-	if [ "$?" != 0 ]; then
-		echo "ERROR: UnrealIRCd is not running"
-		exit 1
-	fi
+	$UNREALIRCDCTL $*
+elif [ "$1" = "status" ] ; then
+	$UNREALIRCDCTL $*
+elif [ "$1" = "module-status" ] ; then
+	$UNREALIRCDCTL $*
+elif [ "$1" = "reloadtls" ] ; then
+	$UNREALIRCDCTL $*
 elif [ "$1" = "restart" ] ; then
 	echo "Restarting UnrealIRCd"
 	$0 stop
@@ -117,23 +115,12 @@ elif [ "$1" = "configtest" ] ; then
 elif [ "$1" = "module" ] ; then
 	shift
 	@BINDIR@/unrealircd -m $*
-elif [ "$1" = "reloadtls" ] ; then
-	echo "Reloading SSL/TLS certificates"
-	if [ ! -r $PID_FILE ] ; then
-		echo "ERROR: UnrealIRCd is not running"
-		exit 1
-	fi
-	kill -USR1 `cat $PID_FILE`
-	if [ "$?" != 0 ]; then
-		echo "ERROR: UnrealIRCd is not running"
-		exit 1
-	fi
 elif [ "$1" = "mkpasswd" ] ; then
-	@BINDIR@/unrealircd -P $2 $3
+	$UNREALIRCDCTL $*
 elif [ "$1" = "version" ] ; then
 	@BINDIR@/unrealircd -v
 elif [ "$1" = "gencloak" ] ; then
-	@BINDIR@/unrealircd -k
+	$UNREALIRCDCTL $*
 elif [ "$1" = "backtrace" ] ; then
 	cd @TMPDIR@
 
@@ -224,34 +211,7 @@ __EOF__
 	echo ""
 	echo "Thanks!"
 elif [ "$1" = "spki" -o "$1" = "spkifp" ] ; then
-	CERT="@CONFDIR@/tls/server.cert.pem"
-	if [ "$2" != "" ]; then
-		CERT="$2"
-	else
-		echo "NOTE: This script uses the default certificate location (any set::tls settings"
-		echo "are ignored). If this is not what you want then specify a certificate"
-		echo "explicitly like this: ./unrealircd spkifp conf/tls/example.pem"
-		echo ""
-	fi
-	if [ ! -f "$CERT" ]; then
-		echo "Could not open certificate: $CERT"
-		echo "You can specify a certificate like this: ./unrealircd spkifp conf/tls/example.pem"
-		exit 1
-	fi
-	openssl x509 -noout -in "$CERT" -pubkey | openssl asn1parse -noout -inform pem -out @TMPDIR@/tmp.public.key
-	HASH="`openssl dgst -sha256 -binary @TMPDIR@/tmp.public.key | openssl enc -base64`"
-	rm -f @TMPDIR@/tmp.public.key
-	if [ "$HASH" = "" ]; then
-		echo "Sorry, something went wrong when generating the SPKI fingerprint."
-		echo "Is the 'openssl' tool properly installed?"
-		exit 1
-	fi
-	echo "The SPKI fingerprint for certificate $CERT is:"
-	echo "$HASH"
-	echo ""
-	echo "You normally add this password on the other side of the link as:"
-	echo "password \"$HASH\" { spkifp; };"
-	echo ""
+	$UNREALIRCDCTL $*
 elif [ "$1" = "hot-patch" -o "$1" = "cold-patch" ] ; then
 	if [ ! -d "@BUILDDIR@" ]; then
 		echo "UnrealIRCd source not found. Sorry, it is not possible to patch."
@@ -282,6 +242,11 @@ elif [ "$1" = "hot-patch" -o "$1" = "cold-patch" ] ; then
 		exit 1
 	fi
 
+	if ! patch --dry-run -p1 -N <patch 1>/dev/null 2>&1; then
+		echo "Patch failed to apply (no files changed)"
+		exit 1
+	fi
+
 	if ! patch -p1 <patch; then
 		echo "Patch failed to apply"
 		exit 1
@@ -291,11 +256,18 @@ elif [ "$1" = "hot-patch" -o "$1" = "cold-patch" ] ; then
 	make || gmake || exit 1
 	make install || gmake install || exit 1
 
-	cd -
+	cd @SCRIPTDIR@
 	if [ "$1" = "hot-patch" ]; then
 		echo "Patch applied successfully and installed. Rehashing your IRCd..."
-		./unrealircd rehash
-		echo "Done! All should be good now."
+		if ./unrealircd rehash; then
+			echo "Patch installed and server rehashed correctly. All should be good now!"
+		else
+			echo "Patching the source code and recompiling succeeded,"
+			echo "however rehashing the current UnrealIRCd process FAILED"
+			echo "so it is NOT running the patched code yet."
+			echo "IMPORTANT: Check error output above!"
+			exit 1
+		fi
 	else
 		echo "Patch applied successfully. You must now restart your IRC server."
 	fi
@@ -316,6 +288,8 @@ else
 	echo "unrealircd rehash        Reload the configuration file"
 	echo "unrealircd reloadtls     Reload the SSL/TLS certificates"
 	echo "unrealircd restart       Restart the IRC Server (stop+start)"
+	echo "unrealircd status        Show current status of the IRC Server"
+	echo "unrealircd module-status Show all currently loaded modules"
 	echo "unrealircd upgrade       Upgrade UnrealIRCd to the latest version"
 	echo "unrealircd upgrade-conf  Upgrade the configuration file from UnrealIRCd"
 	echo "                         3.2.x/4.x to 5.x format"

@@ -32,7 +32,7 @@ int OpenFiles = 0;    /* GLOBAL - number of files currently open */
 int readcalls = 0;
 
 void completed_connection(int, int, void *);
-void set_sock_opts(int, Client *, int);
+void set_sock_opts(int, Client *, SocketType);
 void set_ipv6_opts(int);
 void close_listener(ConfigItem_listen *listener);
 static char readbuf[BUFSIZE];
@@ -41,6 +41,7 @@ extern char *version;
 MODVAR time_t last_allinuse = 0;
 
 void start_of_normal_client_handshake(Client *client);
+extern void start_of_control_client_handshake(Client *client);
 void proceed_normal_client_handshake(Client *client, struct hostent *he);
 
 /** Close all connections - only used when we terminate the server (eg: /DIE or SIGTERM) */
@@ -69,6 +70,15 @@ void close_connections(void)
 		{
 			fd_close(client->local->authfd);
 			client->local->fd = -1;
+		}
+	}
+
+	list_for_each_entry(client, &control_list, lclient_node)
+	{
+		if (client->local->fd >= 0)
+		{
+			fd_close(client->local->fd);
+			client->local->fd = -2;
 		}
 	}
 
@@ -101,10 +111,17 @@ static void listener_accept(int listener_fd, int revents, void *data)
 			 * Of course the underlying cause of this issue should be investigated, as this
 			 * is very much a workaround.
 			 */
-			unreal_log(ULOG_FATAL, "listen", "ACCEPT_ERROR", NULL, "Cannot accept incoming connection on IP \"$listen_ip\" port $listen_port: $socket_error",
-				   log_data_socket_error(listener->fd),
-				   log_data_string("listen_ip", listener->ip),
-				   log_data_integer("listen_port", listener->port));
+			if (listener->file)
+			{
+				unreal_log(ULOG_FATAL, "listen", "ACCEPT_ERROR", NULL, "Cannot accept incoming connection on file $file: $socket_error",
+					   log_data_socket_error(listener->fd),
+					   log_data_string("file", listener->file));
+			} else {
+				unreal_log(ULOG_FATAL, "listen", "ACCEPT_ERROR", NULL, "Cannot accept incoming connection on IP \"$listen_ip\" port $listen_port: $socket_error",
+					   log_data_socket_error(listener->fd),
+					   log_data_string("listen_ip", listener->ip),
+					   log_data_integer("listen_port", listener->port));
+			}
 			close_listener(listener);
 			start_listeners();
 		}
@@ -113,45 +130,67 @@ static void listener_accept(int listener_fd, int revents, void *data)
 
 	ircstats.is_ac++;
 
-	set_sock_opts(cli_fd, NULL, listener->ipv6);
+	set_sock_opts(cli_fd, NULL, listener->socket_type);
 
-	if ((++OpenFiles >= maxclients) || (cli_fd >= maxclients))
+	/* Allow connections to the control socket, even if maxclients is reached */
+	if (listener->options & LISTENER_CONTROL)
 	{
-		ircstats.is_ref++;
-		if (last_allinuse < TStime() - 15)
+		/* ... but not unlimited ;) */
+		if ((++OpenFiles >= maxclients+(CLIENTS_RESERVE/2)) || (cli_fd >= maxclients+(CLIENTS_RESERVE/2)))
 		{
-			unreal_log(ULOG_FATAL, "listen", "ACCEPT_ERROR_MAXCLIENTS", NULL, "Cannot accept incoming connection on IP \"$listen_ip\" port $listen_port: All connections in use",
-				   log_data_string("listen_ip", listener->ip),
-				   log_data_integer("listen_port", listener->port));
-			last_allinuse = TStime();
+			ircstats.is_ref++;
+			if (last_allinuse < TStime() - 15)
+			{
+				unreal_log(ULOG_FATAL, "listen", "ACCEPT_ERROR_MAXCLIENTS", NULL, "Cannot accept incoming connection on file $file: All connections in use",
+					   log_data_string("file", listener->file));
+				last_allinuse = TStime();
+			}
+			fd_close(cli_fd);
+			--OpenFiles;
+			return;
 		}
+	} else
+	{
+		if ((++OpenFiles >= maxclients) || (cli_fd >= maxclients))
+		{
+			ircstats.is_ref++;
+			if (last_allinuse < TStime() - 15)
+			{
+				if (listener->file)
+				{
+					unreal_log(ULOG_FATAL, "listen", "ACCEPT_ERROR_MAXCLIENTS", NULL, "Cannot accept incoming connection on file $file: All connections in use",
+						   log_data_string("file", listener->file));
+				} else {
+					unreal_log(ULOG_FATAL, "listen", "ACCEPT_ERROR_MAXCLIENTS", NULL, "Cannot accept incoming connection on IP \"$listen_ip\" port $listen_port: All connections in use",
+						   log_data_string("listen_ip", listener->ip),
+						   log_data_integer("listen_port", listener->port));
+				}
+				last_allinuse = TStime();
+			}
 
-		(void)send(cli_fd, "ERROR :All connections in use\r\n", 31, 0);
+			(void)send(cli_fd, "ERROR :All connections in use\r\n", 31, 0);
 
-		fd_close(cli_fd);
-		--OpenFiles;
-		return;
+			fd_close(cli_fd);
+			--OpenFiles;
+			return;
+		}
 	}
 
 	/* add_connection() may fail. we just don't care. */
 	add_connection(listener, cli_fd);
 }
 
-/** Create a listener port.
- * @param listener	The listen { } block configuration
- * @param ip		IP address to bind on
- * @param port		Port to bind on
- * @param ipv6		IPv6 (1) or IPv4 (0)
- * @returns 0 on success and <0 on error. Yeah, confusing.
- */
-int unreal_listen(ConfigItem_listen *listener, char *ip, int port, int ipv6)
+int unreal_listen_inet(ConfigItem_listen *listener)
 {
+	const char *ip = listener->ip;
+	int port = listener->port;
+
 	if (BadPtr(ip))
 		ip = "*";
-	
+
 	if (*ip == '*')
 	{
-		if (ipv6)
+		if (listener->socket_type == SOCKET_TYPE_IPV6)
 			ip = "::";
 		else
 			ip = "0.0.0.0";
@@ -160,11 +199,11 @@ int unreal_listen(ConfigItem_listen *listener, char *ip, int port, int ipv6)
 	/* At first, open a new socket */
 	if (listener->fd >= 0)
 		abort(); /* Socket already exists but we are asked to create and listen on one. Bad! */
-	
+
 	if (port == 0)
 		abort(); /* Impossible as well, right? */
 
-	listener->fd = fd_socket(ipv6 ? AF_INET6 : AF_INET, SOCK_STREAM, 0, "Listener socket");
+	listener->fd = fd_socket(listener->socket_type == SOCKET_TYPE_IPV6 ? AF_INET6 : AF_INET, SOCK_STREAM, 0, "Listener socket");
 	if (listener->fd < 0)
 	{
 		unreal_log(ULOG_FATAL, "listen", "LISTEN_SOCKET_ERROR", NULL,
@@ -187,9 +226,9 @@ int unreal_listen(ConfigItem_listen *listener, char *ip, int port, int ipv6)
 		return -1;
 	}
 
-	set_sock_opts(listener->fd, NULL, ipv6);
+	set_sock_opts(listener->fd, NULL, listener->socket_type);
 
-	if (!unreal_bind(listener->fd, ip, port, ipv6))
+	if (!unreal_bind(listener->fd, ip, port, listener->socket_type))
 	{
 		unreal_log(ULOG_FATAL, "listen", "LISTEN_BIND_ERROR", NULL,
 		           "Could not listen on IP \"$listen_ip\" on port $listen_port: $socket_error",
@@ -240,23 +279,95 @@ int unreal_listen(ConfigItem_listen *listener, char *ip, int port, int ipv6)
 	return 0;
 }
 
-/** Activate a listen { } block */
-int add_listener(ConfigItem_listen *conf)
+int unreal_listen_unix(ConfigItem_listen *listener)
 {
-	if (unreal_listen(conf, conf->ip, conf->port, conf->ipv6))
+	if (listener->socket_type != SOCKET_TYPE_UNIX)
+		abort(); /* "impossible" */
+
+	/* At first, open a new socket */
+	if (listener->fd >= 0)
+		abort(); /* Socket already exists but we are asked to create and listen on one. Bad! */
+
+	listener->fd = fd_socket(AF_UNIX, SOCK_STREAM, 0, "Listener socket (UNIX)");
+	if (listener->fd < 0)
 	{
-		/* Error is already handled upstream */
-		conf->fd = -2;
+		unreal_log(ULOG_FATAL, "listen", "LISTEN_SOCKET_ERROR", NULL,
+		           "Could not create UNIX domain socket for $file: $socket_error",
+			   log_data_socket_error(-1),
+			   log_data_string("file", listener->file));
+		return -1;
 	}
 
-	if (conf->fd >= 0)
+	if (++OpenFiles >= maxclients)
 	{
-		conf->options |= LISTENER_BOUND;
+		unreal_log(ULOG_FATAL, "listen", "LISTEN_ERROR_MAXCLIENTS", NULL,
+		           "Could not create UNIX domain socket for $file: all connections in use",
+		           log_data_string("file", listener->file));
+		fd_close(listener->fd);
+		listener->fd = -1;
+		--OpenFiles;
+		return -1;
+	}
+
+	set_sock_opts(listener->fd, NULL, listener->socket_type);
+
+	if (!unreal_bind(listener->fd, listener->file, 0, SOCKET_TYPE_UNIX))
+	{
+		unreal_log(ULOG_FATAL, "listen", "LISTEN_BIND_ERROR", NULL,
+		           "Could not listen on UNIX domain socket $file: $socket_error",
+		           log_data_socket_error(listener->fd),
+		           log_data_string("file", listener->file));
+		fd_close(listener->fd);
+		listener->fd = -1;
+		--OpenFiles;
+		return -1;
+	}
+
+	if (listen(listener->fd, LISTEN_SIZE) < 0)
+	{
+		unreal_log(ULOG_FATAL, "listen", "LISTEN_LISTEN_ERROR", NULL,
+		           "Could not listen on UNIX domain socket $file: $socket_error",
+		           log_data_socket_error(listener->fd),
+		           log_data_string("file", listener->file));
+		fd_close(listener->fd);
+		listener->fd = -1;
+		--OpenFiles;
+		return -1;
+	}
+
+	fd_setselect(listener->fd, FD_SELECT_READ, listener_accept, listener);
+
+	return 0;
+}
+
+/** Create a listener port.
+ * @param listener	The listen { } block configuration
+ * @returns 0 on success and <0 on error. Yeah, confusing.
+ */
+int unreal_listen(ConfigItem_listen *listener)
+{
+	if ((listener->socket_type == SOCKET_TYPE_IPV4) || (listener->socket_type == SOCKET_TYPE_IPV6))
+		return unreal_listen_inet(listener);
+	return unreal_listen_unix(listener);
+}
+
+/** Activate a listen { } block */
+int add_listener(ConfigItem_listen *listener)
+{
+	if (unreal_listen(listener))
+	{
+		/* Error is already handled upstream */
+		listener->fd = -2;
+	}
+
+	if (listener->fd >= 0)
+	{
+		listener->options |= LISTENER_BOUND;
 		return 1;
 	}
 	else
 	{
-		conf->fd = -1;
+		listener->fd = -1;
 		return -1;
 	}
 }
@@ -433,7 +544,7 @@ void consider_ident_lookup(Client *client)
 	char buf[BUFSIZE];
 
 	/* If ident checking is disabled or it's an outgoing connect, then no ident check */
-	if ((IDENT_CHECK == 0) || (client->server && IsHandshake(client)))
+	if ((IDENT_CHECK == 0) || (client->server && IsHandshake(client)) || IsUnixSocket(client))
 	{
 		ClearIdentLookupSent(client);
 		ClearIdentLookup(client);
@@ -560,37 +671,38 @@ void set_socket_buffers(int fd, int rcvbuf, int sndbuf)
 }
 
 /** Set the appropriate socket options */
-void set_sock_opts(int fd, Client *client, int ipv6)
+void set_sock_opts(int fd, Client *client, SocketType socket_type)
 {
 	int opt;
 
-	if (ipv6)
+	if (socket_type == SOCKET_TYPE_IPV6)
 		set_ipv6_opts(fd);
 
-#ifdef SO_REUSEADDR
-	opt = 1;
-	if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (void *)&opt, sizeof(opt)) < 0)
+	if ((socket_type == SOCKET_TYPE_IPV4) || (socket_type == SOCKET_TYPE_IPV6))
 	{
-		unreal_log(ULOG_WARNING, "socket", "SOCKET_ERROR_SETSOCKOPTS", client,
-		           "Could not setsockopt(SO_REUSEADDR): $socket_error",
-			   log_data_socket_error(-1));
-	}
+#ifdef SO_REUSEADDR
+		opt = 1;
+		if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (void *)&opt, sizeof(opt)) < 0)
+		{
+			unreal_log(ULOG_WARNING, "socket", "SOCKET_ERROR_SETSOCKOPTS", client,
+				   "Could not setsockopt(SO_REUSEADDR): $socket_error",
+				   log_data_socket_error(-1));
+		}
 #endif
 
 #if defined(SO_USELOOPBACK) && !defined(_WIN32)
-	opt = 1;
-	if (setsockopt(fd, SOL_SOCKET, SO_USELOOPBACK, (void *)&opt, sizeof(opt)) < 0)
-	{
-		unreal_log(ULOG_WARNING, "socket", "SOCKET_ERROR_SETSOCKOPTS", client,
-		           "Could not setsockopt(SO_USELOOPBACK): $socket_error",
-			   log_data_socket_error(-1));
-	}
+		opt = 1;
+		if (setsockopt(fd, SOL_SOCKET, SO_USELOOPBACK, (void *)&opt, sizeof(opt)) < 0)
+		{
+			unreal_log(ULOG_WARNING, "socket", "SOCKET_ERROR_SETSOCKOPTS", client,
+				   "Could not setsockopt(SO_USELOOPBACK): $socket_error",
+				   log_data_socket_error(-1));
+		}
 #endif
 
-	/* Previously we also called set_socket_buffers() to set some
-	 * specific buffer limits. This is no longer needed on modern OS's.
-	 * Setting it explicitly actually slows things down.
-	 */
+	}
+
+	/* The following code applies to all socket types: IPv4, IPv6, UNIX domain sockets */
 
 	/* Set to non blocking: */
 #if !defined(_WIN32)
@@ -641,7 +753,7 @@ int is_loopback_ip(char *ip)
 
 	for (e = conf_listen; e; e = e->next)
 	{
-		if ((e->options & LISTENER_BOUND) && !strcmp(ip, e->ip))
+		if ((e->options & LISTENER_BOUND) && e->ip && !strcmp(ip, e->ip))
 			return 1;
 	}
 	return 0;
@@ -718,15 +830,15 @@ Client *add_connection(ConfigItem_listen *listener, int fd)
 	Client *client;
 	const char *ip;
 	int port = 0;
-	
+
 	client = make_client(NULL, &me);
+	client->local->socket_type = listener->socket_type;
 
-	/* If listener is IPv6 then mark client (client) as IPv6 */
-	if (listener->ipv6)
-		SetIPV6(client);
+	if (listener->socket_type == SOCKET_TYPE_UNIX)
+		ip = "127.0.0.1";
+	else
+		ip = getpeerip(client, fd, &port);
 
-	ip = getpeerip(client, fd, &port);
-	
 	if (!ip)
 	{
 		/* On Linux 2.4 and FreeBSD the socket may just have been disconnected
@@ -762,29 +874,38 @@ refuse_client:
 		SetLocalhost(client);
 	}
 
-	/* Check set::max-unknown-connections-per-ip */
-	if (check_too_many_unknown_connections(client))
+	if (!(listener->options & LISTENER_CONTROL))
 	{
-		ircsnprintf(zlinebuf, sizeof(zlinebuf),
-		            "ERROR :Closing Link: [%s] (Too many unknown connections from your IP)\r\n",
-		            client->ip);
-		(void)send(fd, zlinebuf, strlen(zlinebuf), 0);
-		goto refuse_client;
-	}
+		/* Check set::max-unknown-connections-per-ip */
+		if (check_too_many_unknown_connections(client))
+		{
+			ircsnprintf(zlinebuf, sizeof(zlinebuf),
+				    "ERROR :Closing Link: [%s] (Too many unknown connections from your IP)\r\n",
+				    client->ip);
+			(void)send(fd, zlinebuf, strlen(zlinebuf), 0);
+			goto refuse_client;
+		}
 
-	/* Check (G)Z-Lines and set::anti-flood::connect-flood */
-	if (check_banned(client, NO_EXIT_CLIENT))
-		goto refuse_client;
+		/* Check (G)Z-Lines and set::anti-flood::connect-flood */
+		if (check_banned(client, NO_EXIT_CLIENT))
+			goto refuse_client;
+	}
 
 	client->local->listener = listener;
 	if (client->local->listener != NULL)
 		client->local->listener->clients++;
 	add_client_to_list(client);
 
-	irccounts.unknown++;
-	client->status = CLIENT_STATUS_UNKNOWN;
-
-	list_add(&client->lclient_node, &unknown_list);
+	if (!(listener->options & LISTENER_CONTROL))
+	{
+		/* IRC: unknown connection */
+		irccounts.unknown++;
+		client->status = CLIENT_STATUS_UNKNOWN;
+		list_add(&client->lclient_node, &unknown_list);
+	} else {
+		client->status = CLIENT_STATUS_CONTROL;
+		list_add(&client->lclient_node, &control_list);
+	}
 
 	if ((listener->options & LISTENER_TLS) && ctx_server)
 	{
@@ -809,7 +930,9 @@ refuse_client:
 				goto refuse_client;
 			}
 		}
-	}
+	} else
+	if (listener->options & LISTENER_CONTROL)
+		start_of_control_client_handshake(client);
 	else
 		start_of_normal_client_handshake(client);
 	return client;
@@ -828,7 +951,7 @@ void start_of_normal_client_handshake(Client *client)
 
 	RunHook(HOOKTYPE_HANDSHAKE, client);
 
-	if (!DONT_RESOLVE)
+	if (!DONT_RESOLVE && !IsUnixSocket(client))
 	{
 		if (should_show_connect_info(client))
 			sendto_one(client, NULL, ":%s %s", me.name, REPORT_DO_DNS);
@@ -1027,6 +1150,20 @@ void process_clients(void)
 			}
 		}
 	} while(&client->lclient_node != &unknown_list);
+
+	do {
+		list_for_each_entry(client, &control_list, lclient_node)
+		{
+			if ((client->local->fd >= 0) && DBufLength(&client->local->recvQ) && !IsDead(client))
+			{
+				parse_client_queued(client);
+				if (IsDead(client))
+					break;
+			}
+		}
+	} while(&client->lclient_node != &control_list);
+
+
 }
 
 /** Check if 'ip' is a valid IP address, and if so what type.
@@ -1038,16 +1175,16 @@ void process_clients(void)
 int is_valid_ip(const char *ip)
 {
 	char scratch[64];
-	
+
 	if (BadPtr(ip))
 		return 0;
 
 	if (inet_pton(AF_INET, ip, scratch) == 1)
 		return 4; /* IPv4 */
-	
+
 	if (inet_pton(AF_INET6, ip, scratch) == 1)
 		return 6; /* IPv6 */
-	
+
 	return 0; /* not an IP address */
 }
 
@@ -1060,9 +1197,19 @@ int ipv6_capable(void)
 	int s = socket(AF_INET6, SOCK_STREAM, 0);
 	if (s < 0)
 		return 0; /* NO ipv6 */
-	
+
 	CLOSE_SOCK(s);
 	return 1; /* YES */
+}
+
+/** Return 1 if UNIX sockets of type SOCK_STREAM are supported, and 0 otherwise */
+int unix_sockets_capable(void)
+{
+	int fd = fd_socket(AF_UNIX, SOCK_STREAM, 0, "Testing UNIX socket");
+	if (fd < 0)
+		return 0;
+	fd_close(fd);
+	return 1;
 }
 
 /** Attempt to deliver data to a client.
@@ -1156,7 +1303,7 @@ int deliver_it(Client *client, char *str, int len, int *want_read)
 int unreal_connect(int fd, const char *ip, int port, int ipv6)
 {
 	int n;
-	
+
 	if (ipv6)
 	{
 		struct sockaddr_in6 server;
@@ -1182,25 +1329,17 @@ int unreal_connect(int fd, const char *ip, int port, int ipv6)
 	{
 		return 0; /* FATAL ERROR */
 	}
-	
+
 	return 1; /* SUCCESS (probably still in progress) */
 }
 
 /** Bind to an IP/port (port may be 0 for auto).
  * @returns 0 on failure, other on success.
  */
-int unreal_bind(int fd, const char *ip, int port, int ipv6)
+int unreal_bind(int fd, const char *ip, int port, SocketType socket_type)
 {
-	if (ipv6)
+	if (socket_type == SOCKET_TYPE_IPV4)
 	{
-		struct sockaddr_in6 server;
-		memset(&server, 0, sizeof(server));
-		server.sin6_family = AF_INET6;
-		server.sin6_port = htons(port);
-		if (inet_pton(AF_INET6, ip, &server.sin6_addr.s6_addr) != 1)
-			return 0;
-		return !bind(fd, (struct sockaddr *)&server, sizeof(server));
-	} else {
 		struct sockaddr_in server;
 		memset(&server, 0, sizeof(server));
 		server.sin_family = AF_INET;
@@ -1209,4 +1348,43 @@ int unreal_bind(int fd, const char *ip, int port, int ipv6)
 			return 0;
 		return !bind(fd, (struct sockaddr *)&server, sizeof(server));
 	}
+	else if (socket_type == SOCKET_TYPE_IPV6)
+	{
+		struct sockaddr_in6 server;
+		memset(&server, 0, sizeof(server));
+		server.sin6_family = AF_INET6;
+		server.sin6_port = htons(port);
+		if (inet_pton(AF_INET6, ip, &server.sin6_addr.s6_addr) != 1)
+			return 0;
+		return !bind(fd, (struct sockaddr *)&server, sizeof(server));
+	} else
+	{
+		struct sockaddr_un server;
+		mode_t saved_umask;
+		int ret;
+
+		unlink(ip); /* (ignore errors) */
+
+		memset(&server, 0, sizeof(server));
+		server.sun_family = AF_UNIX;
+		strlcpy(server.sun_path, ip, sizeof(server.sun_path));
+		saved_umask = umask(077); // TODO: make this configurable
+		ret = !bind(fd, (struct sockaddr *)&server, sizeof(server));
+		umask(saved_umask);
+
+		return ret;
+	}
 }
+
+#ifdef _WIN32
+void init_winsock(void)
+{
+	WSADATA WSAData;
+	if (WSAStartup(MAKEWORD(1, 1), &WSAData) != 0)
+	{
+		MessageBox(NULL, "Unable to initialize WinSock", "UnrealIRCD Initalization Error", MB_OK);
+		fprintf(stderr, "Unable to initialize WinSock\n");
+		exit(1);
+	}
+}
+#endif

@@ -41,6 +41,7 @@ int tkl_config_test_except(ConfigFile *, ConfigEntry *, int, int *);
 int tkl_config_run_except(ConfigFile *, ConfigEntry *, int);
 int tkl_config_test_set(ConfigFile *, ConfigEntry *, int, int *);
 int tkl_config_run_set(ConfigFile *, ConfigEntry *, int);
+int tkl_ip_change(Client *client, const char *oldip);
 CMD_FUNC(cmd_gline);
 CMD_FUNC(cmd_shun);
 CMD_FUNC(cmd_tempshun);
@@ -213,6 +214,7 @@ MOD_INIT()
 	HookAdd(modinfo->handle, HOOKTYPE_CONFIGRUN, 0, tkl_config_run_ban);
 	HookAdd(modinfo->handle, HOOKTYPE_CONFIGRUN, 0, tkl_config_run_except);
 	HookAdd(modinfo->handle, HOOKTYPE_CONFIGRUN, 0, tkl_config_run_set);
+	HookAdd(modinfo->handle, HOOKTYPE_IP_CHANGE, 2000000000, tkl_ip_change);
 	CommandAdd(modinfo->handle, "GLINE", cmd_gline, 3, CMD_OPER);
 	CommandAdd(modinfo->handle, "SHUN", cmd_shun, 3, CMD_OPER);
 	CommandAdd(modinfo->handle, "TEMPSHUN", cmd_tempshun, 2, CMD_OPER);
@@ -950,6 +952,12 @@ char *spamfilter_id(TKL *tk)
 
 	snprintf(buf, sizeof(buf), "%p", (void *)tk);
 	return buf;
+}
+
+int tkl_ip_change(Client *client, const char *oldip)
+{
+	check_banned(client, 0);
+	return 0;
 }
 
 /** GLINE - Global kline.
@@ -4772,23 +4780,15 @@ int _match_spamfilter(Client *client, const char *str_in, int target, const char
 
 		if (ret)
 		{
-			/* We have a match! */
-			char destinationbuf[48];
-
-			if (destination) {
-				destinationbuf[0] = ' ';
-				strlcpy(destinationbuf+1, destination, sizeof(destinationbuf)-1); /* cut it off */
-			} else
-				destinationbuf[0] = '\0';
-
-			/* Hold on.. perhaps it's on the exceptions list... */
+			/* We have a match! But.. perhaps it's on the exceptions list? */
 			if (!winner_tkl && destination && target_is_spamexcept(destination))
 				return 0; /* No problem! */
 
 			unreal_log(ULOG_INFO, "tkl", "SPAMFILTER_MATCH", client,
-			           "[Spamfilter] $client.details matches filter '$tkl': [cmd: $command$destination: '$str'] [reason: $tkl.reason] [action: $tkl.ban_action]",
+			           "[Spamfilter] $client.details matches filter '$tkl': [cmd: $command$_space$destination: '$str'] [reason: $tkl.reason] [action: $tkl.ban_action]",
 				   log_data_tkl("tkl", tkl),
 				   log_data_string("command", cmd),
+				   log_data_string("_space", destination ? " " : ""),
 				   log_data_string("destination", destination ? destination : ""),
 				   log_data_string("str", str));
 

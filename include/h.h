@@ -28,6 +28,34 @@
 #include "setup.h"
 #include "fdlist.h"
 
+extern int dorehash, dorestart, doreloadcert;
+#ifndef _WIN32
+extern char **myargv;
+#else
+extern LPCSTR cmdLine;
+#endif
+/* Externals */
+extern MODVAR char *buildid;
+extern MODVAR char backupbuf[8192];
+extern EVENT(unrealdns_removeoldrecords);
+extern EVENT(unrealdb_expire_secret_cache);
+extern void init_glines(void);
+extern void tkl_init(void);
+extern void process_clients(void);
+extern void unrealdb_test(void);
+extern void ignore_this_signal();
+extern void s_rehash();
+extern void s_reloadcert();
+extern void s_restart();
+extern void s_die();
+#ifndef _WIN32
+// nix specific
+extern char unreallogo[];
+#else
+// windows specific
+extern SERVICE_STATUS_HANDLE IRCDStatusHandle;
+extern SERVICE_STATUS IRCDStatus;
+#endif
 extern MODVAR char *extraflags;
 extern MODVAR int tainted;
 extern MODVAR Member *freemember;
@@ -117,7 +145,7 @@ extern void ipport_seperate(const char *string, char **ip, char **port);
 extern ConfigItem_class	*find_class(const char *name);
 extern ConfigItem_oper		*find_oper(const char *name);
 extern ConfigItem_operclass	*find_operclass(const char *name);
-extern ConfigItem_listen *find_listen(const char *ipmask, int port, int ipv6);
+extern ConfigItem_listen *find_listen(const char *ipmask, int port, SocketType socket_type);
 extern ConfigItem_sni *find_sni(const char *name);
 extern ConfigItem_ulines	*find_uline(const char *host);
 extern ConfigItem_tld		*find_tld(Client *cptr);
@@ -153,6 +181,7 @@ extern MODVAR struct list_head lclient_list;
 extern MODVAR struct list_head server_list;
 extern MODVAR struct list_head oper_list;
 extern MODVAR struct list_head unknown_list;
+extern MODVAR struct list_head control_list;
 extern MODVAR struct list_head global_server_list;
 extern MODVAR struct list_head dead_list;
 extern RealCommand *find_command(const char *cmd, int flags);
@@ -489,6 +518,7 @@ extern int  channel_canjoin(Client *client, const char *name);
 extern char *collapse(char *pattern);
 extern void dcc_sync(Client *client);
 extern void request_rehash(Client *client);
+extern int rehash_internal(Client *client);
 extern void s_die();
 extern int match_simple(const char *mask, const char *name);
 extern int match_esc(const char *mask, const char *name);
@@ -507,7 +537,7 @@ extern void rehash_motdrules();
 extern void read_motd(const char *filename, MOTDFile *motd); /* s_serv.c */
 extern void send_proto(Client *, ConfigItem_link *);
 extern void unload_all_modules(void);
-extern void set_sock_opts(int fd, Client *cptr, int ipv6);
+extern void set_sock_opts(int fd, Client *cptr, SocketType socket_type);
 extern void stripcrlf(char *line);
 extern int strnatcmp(char const *a, char const *b);
 extern int strnatcasecmp(char const *a, char const *b);
@@ -663,7 +693,6 @@ extern int spamfilter_getconftargets(const char *s);
 extern void remove_all_snomasks(Client *client);
 extern void remove_oper_modes(Client *client);
 extern char *spamfilter_inttostring_long(int v);
-extern MODVAR char backupbuf[];
 extern int is_invited(Client *client, Channel *channel);
 extern void channel_modes(Client *client, char *mbuf, char *pbuf, size_t mbuf_size, size_t pbuf_size, Channel *channel, int hide_local_modes);
 extern int op_can_override(const char *acl, Client *client,Channel *channel,void* extra);
@@ -859,6 +888,7 @@ extern const char *cmdname_by_spamftarget(int target);
 extern void unrealdns_delreq_bycptr(Client *cptr);
 extern void unrealdns_gethostbyname_link(const char *name, ConfigItem_link *conf, int ipv4_only);
 extern void unrealdns_delasyncconnects(void);
+extern EVENT(unrealdns_timeout);
 extern int is_autojoin_chan(const char *chname);
 extern void unreal_free_hostent(struct hostent *he);
 extern struct hostent *unreal_create_hostent(const char *name, const char *ip);
@@ -915,10 +945,14 @@ extern void report_crash(void);
 extern void modulemanager(int argc, char *argv[]);
 extern int inet_pton4(const char *src, unsigned char *dst);
 extern int inet_pton6(const char *src, unsigned char *dst);
-extern int unreal_bind(int fd, const char *ip, int port, int ipv6);
+extern int unreal_bind(int fd, const char *ip, int port, SocketType socket_type);
 extern int unreal_connect(int fd, const char *ip, int port, int ipv6);
 extern int is_valid_ip(const char *str);
 extern int ipv6_capable(void);
+extern int unix_sockets_capable(void);
+#ifdef _WIN32
+extern void init_winsock(void);
+#endif
 extern MODVAR Client *remote_rehash_client;
 extern MODVAR int debugfd;
 extern void convert_to_absolute_path(char **path, const char *reldir);
@@ -929,7 +963,7 @@ extern Cmode_t get_extmode_bitbychar(char m);
 extern long find_user_mode(char mode);
 extern void start_listeners(void);
 extern void buildvarstring(const char *inbuf, char *outbuf, size_t len, const char *name[], const char *value[]);
-extern void reinit_tls(void);
+extern int reinit_tls(void);
 extern CMD_FUNC(cmd_error);
 extern CMD_FUNC(cmd_dns);
 extern CMD_FUNC(cmd_info);
@@ -1135,6 +1169,8 @@ extern void flood_limit_exceeded_log(Client *client, const char *floodname);
 /* logging */
 extern int config_test_log(ConfigFile *conf, ConfigEntry *ce);
 extern int config_run_log(ConfigFile *conf, ConfigEntry *ce);
+extern const char *log_level_terminal_color(LogLevel loglevel);
+#define TERMINAL_COLOR_RESET "\033[0m"
 extern LogType log_type_stringtoval(const char *str);
 extern const char *log_type_valtostring(LogType v);
 #ifdef DEBUGMODE
@@ -1208,3 +1244,8 @@ extern void make_umodestr(void);
 extern void initwhowas(void);
 extern void uid_init(void);
 extern const char *uid_get(void);
+/* proc i/o */
+extern void add_proc_io_server(void);
+extern void procio_post_rehash(int failure);
+/* end of proc i/o */
+extern int minimum_msec_since_last_run(struct timeval *tv_old, long minimum);

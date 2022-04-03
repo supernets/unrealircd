@@ -394,7 +394,7 @@ typedef enum ExtbanType {
 #define EXTBANTABLESZ		32
 
 typedef enum ExtbanOptions {
-        EXTBOPT_CHSVSMODE=0x1,		/**< SVSMODE -b/-e/-I will clear this ban */
+        EXTBOPT_CHSVSMODE=0x1,		/**< SVSMODE -b/-e/-I will clear this ban (UNUSED as of 6.0.1+) */
         EXTBOPT_ACTMODIFIER=0x2,	/**< Action modifier (not a matcher). These are extended bans like ~q/~n/~j. */
         EXTBOPT_NOSTACKCHILD=0x4,	/**< Disallow prefixing with another extban. Eg disallow ~n:~T:censor:xyz */
         EXTBOPT_INVEX=0x8,		/**< Available for use with +I too */
@@ -1151,12 +1151,14 @@ extern void SavePersistentLongX(ModuleInfo *modinfo, const char *varshortname, l
 #define HOOKTYPE_POST_LOCAL_NICKCHANGE	106
 /** See hooktype_post_remote_nickchange() */
 #define HOOKTYPE_POST_REMOTE_NICKCHANGE	107
-/** See hooktype_userhost_changed() */
-#define HOOKTYPE_USERHOST_CHANGED 108
-/** See hooktype_realname_changed() */
-#define HOOKTYPE_REALNAME_CHANGED 109
+/** See hooktype_userhost_change() */
+#define HOOKTYPE_USERHOST_CHANGE 108
+/** See hooktype_realname_change() */
+#define HOOKTYPE_REALNAME_CHANGE 109
 /** See hooktype_can_set_topic() */
 #define HOOKTYPE_CAN_SET_TOPIC	110
+/** See hooktype_ip_change() */
+#define HOOKTYPE_IP_CHANGE	111
 /* Adding a new hook here?
  * 1) Add the #define HOOKTYPE_.... with a new number
  * 2) Add a hook prototype (see below)
@@ -2127,14 +2129,22 @@ int hooktype_post_remote_nickchange(Client *client, MessageTag *mtags, const cha
  * @param oldhost		Old hostname of the client
  * @return The return value is ignored (use return 0)
  */
- 
-int hooktype_realname_changed(Client *client, const char *oldinfo);
+int hooktype_userhost_change(Client *client, const char *olduser, const char *oldhost);
+
 /** Called when user realname has changed.
  * @param client		The client whose realname has changed
  * @param oldinfo		Old realname of the client
  * @return The return value is ignored (use return 0)
  */
-int hooktype_userhost_changed(Client *client, const char *olduser, const char *oldhost);
+int hooktype_realname_change(Client *client, const char *oldinfo);
+
+/** Called when changing IP (eg due to PROXY/WEBIRC/etc).
+ * @param client		The client whose IP has changed
+ * @param oldip			Old IP of the client
+ * @return The return value is ignored (use return 0)
+ */
+int hooktype_ip_change(Client *client, const char *oldip);
+
 /** @} */
 
 #ifdef GCC_TYPECHECKING
@@ -2247,8 +2257,9 @@ _UNREAL_ERROR(_hook_error_incompatible, "Incompatible hook function. Check argum
         ((hooktype == HOOKTYPE_IS_INVITED) && !ValidateHook(hooktype_is_invited, func)) || \
         ((hooktype == HOOKTYPE_POST_LOCAL_NICKCHANGE) && !ValidateHook(hooktype_post_local_nickchange, func)) || \
         ((hooktype == HOOKTYPE_POST_REMOTE_NICKCHANGE) && !ValidateHook(hooktype_post_remote_nickchange, func)) || \
-        ((hooktype == HOOKTYPE_USERHOST_CHANGED) && !ValidateHook(hooktype_userhost_changed, func)) || \
-        ((hooktype == HOOKTYPE_REALNAME_CHANGED) && !ValidateHook(hooktype_realname_changed, func)) )\
+        ((hooktype == HOOKTYPE_USERHOST_CHANGE) && !ValidateHook(hooktype_userhost_change, func)) || \
+        ((hooktype == HOOKTYPE_REALNAME_CHANGE) && !ValidateHook(hooktype_realname_change, func)) || \
+        ((hooktype == HOOKTYPE_IP_CHANGE) && !ValidateHook(hooktype_ip_change, func)) ) \
         _hook_error_incompatible();
 #endif /* GCC_TYPECHECKING */
 

@@ -6,7 +6,7 @@
 
 [Setup]
 AppName=UnrealIRCd 6
-AppVerName=UnrealIRCd 6.0.1.1
+AppVerName=UnrealIRCd 6.0.3
 AppPublisher=UnrealIRCd Team
 AppPublisherURL=https://www.unrealircd.org
 AppSupportURL=https://www.unrealircd.org
@@ -45,6 +45,7 @@ Name: "fixperm"; Description: "Make UnrealIRCd folder writable by current user";
 ; UnrealIRCd binaries
 Source: "UnrealIRCd.exe"; DestDir: "{app}\bin"; Flags: ignoreversion signonce
 Source: "UnrealIRCd.pdb"; DestDir: "{app}\bin"; Flags: ignoreversion
+Source: "unrealircdctl.exe"; DestDir: "{app}\bin"; Flags: ignoreversion signonce
 Source: "unrealsvc.exe";  DestDir: "{app}\bin"; Flags: ignoreversion signonce
 
 ; TLS certificate generation helpers

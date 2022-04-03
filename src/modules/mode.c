@@ -370,28 +370,19 @@ void _do_mode(Channel *channel, Client *client, MessageTag *recv_mtags, int parc
 			       ":%s MODE %s %s %s",
 			       client->name, channel->name, modebuf, parabuf);
 
-		if (IsServer(client) && sendts != -1)
+		if (IsServer(client) || IsMe(client))
 		{
 			sendto_server(client, 0, 0, mtags,
 				      ":%s MODE %s %s %s %lld",
 				      client->id, channel->name,
 				      modebuf, parabuf,
-				      (long long)sendts);
-		} else
-		if (samode && IsMe(client))
-		{
-			/* SAMODE is a special case: always send a TS of 0 (omitting TS==desync) */
-			sendto_server(client, 0, 0, mtags,
-				      ":%s MODE %s %s %s 0",
-				      client->id, channel->name,
-				      modebuf, parabuf);
+				      (sendts != -1) ? (long long)sendts : 0LL);
 		} else
 		{
 			sendto_server(client, 0, 0, mtags,
 				      ":%s MODE %s %s %s",
 				      client->id, channel->name,
 				      modebuf, parabuf);
-			/* tell them it's not a timestamp, in case the last param is a number. */
 		}
 
 		if (MyConnect(client))
@@ -1159,6 +1150,22 @@ CMD_FUNC(_cmd_umode)
 				goto def;
 			case 't':
 			case 'x':
+				/* set::anti-flood::vhost-flood */
+				if (MyUser(client))
+				{
+					if ((what == MODE_DEL) && !ValidatePermissionsForPath("immune:vhost-flood",client,NULL,NULL,NULL) &&
+							flood_limit_exceeded(client, FLD_VHOST))
+					{
+						/* Throttle... */
+						if (!modex_err)
+						{
+							sendnotice(client, "*** Setting -%c too fast. Please try again later.", *m);
+							modex_err = 1;
+						}
+						break;
+					}
+				}
+
 				switch (UHOST_ALLOWED)
 				{
 				case UHALLOW_ALWAYS:

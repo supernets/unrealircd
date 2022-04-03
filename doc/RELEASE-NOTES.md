@@ -1,8 +1,139 @@
+UnrealIRCd 6.0.3
+=================
+
+A number of serious issues were discovered in UnrealIRCd 6. Among these is
+an issue which will likely crash the IRCd sooner or later if you /REHASH
+with any active clients connected.
+We suggest everyone who is running UnrealIRCd 6 to upgrade to 6.0.3.
+
+If you are already running UnrealIRCd 6 then read below. Otherwise, jump
+straight to the [summary about UnrealIRCd 6](#Summary) to learn more
+about UnrealIRCd 6.
+
+Fixes:
+* Crash in `WATCH` if the IRCd has been rehashed at least once. After doing
+  a `REHASH` with active clients it will likely corrupt memory. It may take
+  several days until after the rehash for the crash to occur, or even
+  weeks/months on smaller networks (accidental triggering, that is).
+* A `REHASH` with certain remote includes setups could cause a crash or
+  other weird and confusing problems such as complaining about unable
+  to open an ipv6-database or missing snomask configuration.
+  This only affected some people with remote includes, not all.
+* Potential out-of-bounds write in sending code. In practice it seems
+  harmless on most servers but this cannot be 100% guaranteed.
+* Unlikely triggered log message would log uninitialized stack data to the
+  log file or send it to ircops.
+* Channel ops could not remove halfops from a user (`-h`).
+* After using the `RESTART` command (not recommended) the new IRCd was
+  often no longer writing to log files.
+* Fix compile problem if you choose to use cURL remote includes but don't
+  have cURL on the system and ask UnrealIRCd to compile cURL.
+
+Enhancements:
+* The default text log format on disk changed. It now includes the server
+  name where the event was generated. Without this, it was sometimes
+  difficult to trace problems, since previously it sometimes looked like
+  there was a problem on your server when it was actually another server
+  on the network.
+  * Old log format: `[DATE TIME] subsystem.EVENT_ID loglevel: ........`
+  * New log format: `[DATE TIME] servername subsystem.EVENT_ID loglevel: ........`
+
+Changes:
+* Any MOTD lines added by services via
+  [`SVSMOTD`](https://www.unrealircd.org/docs/MOTD_and_Rules#SVSMOTD)
+  are now shown at the end of the MOTD-on-connect (unless using a shortmotd).
+  Previously the lines were only shown if you manually ran the `MOTD` command.
+
+Developers and protocol:
+* `LIST C<xx` now means: filter on channels that are created less
+  than `xx` minutes ago. This is the opposite of what we had earlier.
+  `LIST T<xx` is now supported as well (topic changed in last xx minutes),
+  it was already advertised in ELIST but support was not enabled previously.
+
+UnrealIRCd 6.0.2
+-----------------
+UnrealIRCd 6.0.2 comes with several nice feature enhancements along with
+some fixes. It also includes a fix for a crash bug that can be triggered
+by ordinary users.
+
+Fixes:
+* Fix crash that can be triggered by regular users if you have any `deny dcc`
+  blocks in the config or any spamfilters with the `d` (DCC) target.
+  NOTE: You don't *have* to upgrade to 6.0.2 to fix this, you can also
+  hot-patch this issue without restart, see the news announcement.
+* Windows: fix crash with IPv6 clients (local or remote) due to GeoIP lookup
+* Fix infinite hang on "Loading IRCd configuration" if DNS is not working.
+  For example if the 1st DNS server in `/etc/resolv.conf` is down or refusing
+  requests.
+* Some `MODE` server-to-server commands were missing a timestamp at the end,
+  even though this is mandatory for modes coming from a server.
+* The [channeldb](https://www.unrealircd.org/docs/Set_block#set::channeldb)
+  module now converts letter extbans to named extbans (eg `~a` to `~account`).
+  Previously it did not, which caused letter extbans to appear in the banlist.
+  Later on, when linking servers, this would cause duplicate entries to appear
+  as well, with both the old and new format. The extbans were still effective
+  though, so this is mostly a visual +b/+e/+I list issue.
+* Some [Extended Server Bans](https://www.unrealircd.org/docs/Extended_server_bans)
+  were not working correctly for WEBIRC proxies. In particular, a server ban
+  or exempt (ELINE) on `~country:XX` was only checked against the WEBIRC proxy.
+
+Enhancements:
+* Support for [logging to a channel](https://www.unrealircd.org/docs/Log_block#Logging_to_a_channel).
+  Similar to snomasks but then for channels.
+* Command line interface changes:
+  * The [CLI tool](https://www.unrealircd.org/docs/Command_Line_Interface) now
+    communicates to the running UnrealIRCd process via a UNIX socket to
+    send commands and retrieve output.
+  * The command `./unrealircd rehash` will now show the rehash output,
+    including warnings and errors, and return a proper exit code.
+  * The same for `./unrealircd reloadtls`
+  * New command `./unrealircd status` to show if UnrealIRCd is running, the
+    version, channel and user count, ..
+  * The command `./unrealircd genlinkblock` is now
+    [documented](https://www.unrealircd.org/docs/Linking_servers_(genlinkblock))
+    and is referred to from the
+    [Linking servers tutorial](https://www.unrealircd.org/docs/Tutorial:_Linking_servers).
+  * On Windows in the `C:\Program Files\UnrealIRCd 6\bin` directory there is
+    now an `unrealircdctl.exe` that can be used to do similar things to what
+    you can do on *NIX. Supported operations are: `rehash`, `reloadtls`,
+    `mkpasswd`, `gencloak` and `spkifp`.
+* New option [set::server-notice-show-event](https://www.unrealircd.org/docs/Set_block#set::server-notice-show-event)
+  which can be set to `no` to hide the event information (eg `connect.LOCAL_CLIENT_CONNECT`)
+  in server notices. This can be overridden per-oper in the
+  [Oper block](https://www.unrealircd.org/docs/Oper_block) via oper::server-notice-show-event.
+* Support for IRC over UNIX sockets (on the same machine), if you specify a
+  file in the [listen block](https://www.unrealircd.org/docs/Listen_block)
+  instead of an ip/port. This probably won't be used much, but the option is
+  there. Users will show up with a host of `localhost` and IP `127.0.0.1` to
+  keep things simple.
+* The `MAP` command now shows percentages of users
+* Add `WHO` option to search clients by time connected (eg. `WHO <300 t` to
+  search for less than 300 seconds)
+* Rate limiting of `MODE nick -x` and `-t` via new `vhost-flood` option in
+  [set::anti-flood block](https://www.unrealircd.org/docs/Anti-flood_settings).
+
+Changes:
+* Update Russian `help.ru.conf`.
+
+Developers and protocol:
+* People packaging UnrealIRCd (eg. to an .rpm/.deb):
+  * Be sure to pass the new `--with-controlfile` configure option
+  * There is now an `unrealircdctl` tool that the `unrealircd` shell script
+    uses, it is expected to be in `bindir`.
+* `SVSMODE #chan -b nick` will now correctly remove extbans that prevent `nick`
+  from joining. This fixes a bug where it would remove too much (for `~time`)
+  or not remove extbans (most other extbans, eg `~account`).
+  `SVSMODE #chan -b` has also been fixed accordingly (remove all bans
+  preventing joins).
+  Note that all these commands do not remove bans that do not affect joins,
+  such as `~quiet` or `~text`.
+* For module coders: setting the `EXTBOPT_CHSVSMODE` flag in `extban.options`
+  is no longer useful, the flag is ignored. We now decide based on
+  `BANCHK_JOIN` being in `extban.is_banned_events` if the ban should be
+  removed or not upon SVS(2)MODE -b.
+
 UnrealIRCd 6.0.1.1
-===================
-If you are already running UnrealIRCd 6 then read below on the 
-changes between 6.0.0 and 6.0.1(.1). Otherwise, jump straight to the
-[summary about UnrealIRCd 6](#Summary) to learn more about UnrealIRCd 6.
+-------------------
 
 Fixes:
 * In 6.0.1.1: extended bans were not properly synced between U5 and U6.
@@ -89,6 +220,8 @@ Enhancements
   * Colors are enabled by default in snomask server notices, these can be disabled via
     [set::server-notice-colors](https://www.unrealircd.org/docs/Set_block#set::server-notice-colors)
     and also in [oper::server-notice-colors](https://www.unrealircd.org/docs/Oper_block)
+  * Support for [logging to a channel](https://www.unrealircd.org/docs/Log_block#Logging_to_a_channel).
+    Similar to snomasks but then for channels. *Requires UnrealIRCd 6.0.2 or later*
 * Almost all channel modes are modularized
   * Only the three list modes (+b/+e/+I) are still in the core
   * The five [level modes](https://www.unrealircd.org/docs/Channel_Modes#Access_levels)

@@ -18,7 +18,24 @@
 
 # some bits edited by baafie on March 17 2004, every change marked.
 
+# Remove trailing slash in paths (if any)
+FIX_PATHNAMES () {
+	BASEPATH="${BASEPATH%/}"
+	BINDIR="${BINDIR%/}"
+	DATADIR="${DATADIR%/}"
+	CONFDIR="${CONFDIR%/}"
+	MODULESDIR="${MODULESDIR%/}"
+	LOGDIR="${LOGDIR%/}"
+	CACHEDIR="${CACHEDIR%/}"
+	DOCDIR="${DOCDIR%/}"
+	TMPDIR="${TMPDIR%/}"
+	PRIVATELIBDIR="${PRIVATELIBDIR%/}"
+	SSLDIR="${SSLDIR%/}"
+	CURLDIR="${CURLDIR%/}"
+}
 
+# Create and run the ./configure command with the appropriate
+# options based on the users settings.
 RUN_CONFIGURE () {
 ARG=" "
 
@@ -72,6 +89,7 @@ fi
 ARG="$ARG--with-bindir=$BINDIR "
 ARG="$ARG--with-datadir=$DATADIR "
 ARG="$ARG--with-pidfile=$DATADIR/unrealircd.pid "
+ARG="$ARG--with-controlfile=$DATADIR/unrealircd.ctl "
 ARG="$ARG--with-confdir=$CONFDIR "
 ARG="$ARG--with-modulesdir=$MODULESDIR "
 ARG="$ARG--with-logdir=$LOGDIR "
@@ -292,6 +310,7 @@ while [ $# -ge 1 ] ; do
 		if [ -f "config.settings" ] ; then
 			. ./config.settings
 		fi
+		FIX_PATHNAMES
 		RUN_CONFIGURE
 		cd "$UNREALCWD"
 		exit 0
@@ -356,7 +375,7 @@ echo "We will now ask you a number of questions. You can just press ENTER to acc
 echo ""
 
 # This needs to be updated each release so auto-upgrading works for settings, modules, etc!!:
-UNREALRELEASES="unrealircd-6.0.1 unrealircd-6.0.0 unrealircd-6.0.0-rc2 unrealircd-6.0.0-rc1 unrealircd-6.0.0-beta4 unrealircd-6.0.0-beta3 unrealircd-6.0.0-beta2 unrealircd-6.0.0-beta1 unrealircd-5.2.3 unrealircd-5.2.2 unrealircd-5.2.1.1 unrealircd-5.2.1 unrealircd-5.2.1-rc1 unrealircd-5.2.0.2 unrealircd-5.2.0.1 unrealircd-5.2.0 unrealircd-5.2.0-rc1 unrealircd-5.0.9.1 unrealircd-5.0.9 unrealircd-5.0.9-rc1 unrealircd-5.0.8 unrealircd-5.0.8-rc1 unrealircd-5.0.7 unrealircd-5.0.7-rc1 unrealircd-5.0.6"
+UNREALRELEASES="unrealircd-6.0.2 unrealircd-6.0.1.1 unrealircd-6.0.1 unrealircd-6.0.0 unrealircd-6.0.0-rc2 unrealircd-6.0.0-rc1 unrealircd-6.0.0-beta4 unrealircd-6.0.0-beta3 unrealircd-6.0.0-beta2 unrealircd-6.0.0-beta1 unrealircd-5.2.3 unrealircd-5.2.2 unrealircd-5.2.1.1 unrealircd-5.2.1 unrealircd-5.2.1-rc1 unrealircd-5.2.0.2 unrealircd-5.2.0.1 unrealircd-5.2.0 unrealircd-5.2.0-rc1 unrealircd-5.0.9.1 unrealircd-5.0.9 unrealircd-5.0.9-rc1 unrealircd-5.0.8 unrealircd-5.0.8-rc1 unrealircd-5.0.7 unrealircd-5.0.7-rc1 unrealircd-5.0.6"
 if [ -f "config.settings" ]; then
 	. ./config.settings
 else
@@ -701,11 +720,12 @@ while [ -z "$TEST" ] ; do
 	TEST="$GEOIP"
 	echo ""
 	echo "GeoIP is a feature that allows converting an IP address to a location (country)"
-	echo "You have three options in UnrealIRCd:"
-	echo "     classic: This is the DEFAULT geoip engine that should work on all systems"
-	echo "libmaxminddb: This uses the libmaxminddb library. If you want to use it then"
+	echo "Possible build options:"
+	echo "     classic: This is the DEFAULT geoip engine. It should work on all systems"
+	echo "              and receives automatic updates."
+	echo "libmaxminddb: This uses the libmaxminddb library. If you want to use this, then"
 	echo "              you need to install the libmaxminddb library on your system first"
-	echo "        none: Don't built with any geoip feature"
+	echo "        none: Don't build with any geoip library (geoip-csv is still built)"
 	echo "Choose one of: classic, libmaxminddb, none"
 	echo $n "[$TEST] -> $c"
 	read cc
@@ -813,6 +833,8 @@ read EXTRAPARA
 if [ -z "$EXTRAPARA" ]; then
 	EXTRAPARA="$TEST"
 fi
+
+FIX_PATHNAMES
 
 rm -f config.settings
 cat > config.settings << __EOF__
