@@ -472,8 +472,8 @@ MultiLineMode *make_mode_str(Client *client, Channel *channel, Cmode_t oldem, in
 			if (curr == MAXMULTILINEMODES)
 			{
 				/* Should be impossible.. */
-				unreal_log(ULOG_ERROR, "mode", "MODE_MULTINE_EXCEEDED", client,
-				           "A mode string caused an avalanche effect of more than $max_multiline modes "
+				unreal_log(ULOG_ERROR, "mode", "MODE_MULTILINE_EXCEEDED", client,
+				           "A mode string caused an avalanche effect of more than $max_multiline_modes modes "
 				           "in channel $channel. Caused by client $client. Expect a desync.",
 				           log_data_integer("max_multiline_modes", MAXMULTILINEMODES),
 				           log_data_channel("channel", channel));
@@ -807,6 +807,7 @@ void do_mode_char_member_mode_new(Channel *channel, Cmode *handler, const char *
 			   "[BUG] Client $target.details on channel $channel: "
 			   "found via find_membership_link() but NOT found via find_member_link(). "
 			   "This should never happen! Please report on https://bugs.unrealircd.org/",
+			   log_data_client("target", target),
 			   log_data_channel("channel", channel));
 		return;
 	}
@@ -815,6 +816,58 @@ void do_mode_char_member_mode_new(Channel *channel, Cmode *handler, const char *
 		return; /* already set */
 	if ((what == MODE_DEL) && !strchr(member->member_modes, modechar))
 		return; /* already unset */
+
+	/* HOOKTYPE_MODE_DEOP code */
+	if (what == MODE_DEL)
+	{
+		int ret = EX_ALLOW;
+		const char *badmode = NULL;
+		Hook *h;
+		const char *my_access;
+		Membership *my_membership;
+
+		/* Set "my_access" to access flags of the requestor */
+		if (IsUser(client) && (my_membership = find_membership_link(client->user->channel, channel)))
+			my_access = my_membership->member_modes; /* client */
+		else
+			my_access = ""; /* server */
+
+		for (h = Hooks[HOOKTYPE_MODE_DEOP]; h; h = h->next)
+		{
+			int n = (*(h->func.intfunc))(client, target, channel, what, modechar, my_access, member->member_modes, &badmode);
+			if (n == EX_DENY)
+			{
+				ret = n;
+			} else
+			if (n == EX_ALWAYS_DENY)
+			{
+				ret = n;
+				break;
+			}
+		}
+
+		if (ret == EX_ALWAYS_DENY)
+		{
+			if (MyUser(client) && badmode)
+				sendto_one(client, NULL, "%s", badmode); /* send error message, if any */
+
+			if (MyUser(client))
+				return; /* stop processing this mode */
+		}
+
+		/* This probably should work but is completely untested (the operoverride stuff, I mean): */
+		if (ret == EX_DENY)
+		{
+			if (!op_can_override("channel:override:mode:del",client,channel,handler))
+			{
+				if (badmode)
+					sendto_one(client, NULL, "%s", badmode); /* send error message, if any */
+				return; /* stop processing this mode */
+			} else {
+				opermode = 1;
+			}
+		}
+	}
 
 	if (what == MODE_ADD)
 	{
@@ -1306,8 +1359,6 @@ CMD_FUNC(_cmd_umode)
 
 		/* Notify */
 		userhost_changed(client);
-		if (MyUser(client))
-			sendnumeric(client, RPL_HOSTHIDDEN, client->user->virthost);
 	}
 
 	/* -x */
@@ -1321,8 +1372,6 @@ CMD_FUNC(_cmd_umode)
 
 		/* Notify */
 		userhost_changed(client);
-		if (MyUser(client))
-			sendnumeric(client, RPL_HOSTHIDDEN, client->user->realhost);
 	}
 	/*
 	 * If I understand what this code is doing correctly...
@@ -1337,7 +1386,7 @@ CMD_FUNC(_cmd_umode)
 	{
 		list_del(&client->special_node);
 		if (MyUser(client))
-			RunHook(HOOKTYPE_LOCAL_OPER, client, 0, NULL);
+			RunHook(HOOKTYPE_LOCAL_OPER, client, 0, NULL, NULL);
 		remove_oper_privileges(client, 0);
 	}
 

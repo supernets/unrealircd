@@ -1,7 +1,7 @@
 /*
  * reputation - Provides a scoring system for "known users".
  * (C) Copyright 2015-2019 Bram Matthys (Syzop) and the UnrealIRCd team.
- * License: GPLv2
+ * License: GPLv2 or later
  *
  * How this works is simple:
  * Every 5 minutes the IP address of all the connected users receive
@@ -918,6 +918,24 @@ static inline int is_reputation_expired(ReputationEntry *e)
 	return 0;
 }
 
+/** If the reputation changed (due to server syncing) then update the
+ * individual users reputation score as well.
+ */
+void reputation_changed_update_users(ReputationEntry *e)
+{
+	Client *client;
+
+	list_for_each_entry(client, &client_list, client_node)
+	{
+		if (client->ip && !strcmp(e->ip, client->ip))
+		{
+			/* With some (possibly unneeded) care to only go forward */
+			if (Reputation(client) < e->score)
+				Reputation(client) = e->score;
+		}
+	}
+}
+
 EVENT(delete_old_records)
 {
 	int i;
@@ -1279,6 +1297,7 @@ CMD_FUNC(reputation_server_cmd)
 			   log_data_integer("score", e->score));
 #endif
 		e->score = score;
+		reputation_changed_update_users(e);
 	}
 
 	/* If we don't have any entry for this IP, add it now. */
@@ -1296,6 +1315,7 @@ CMD_FUNC(reputation_server_cmd)
 		e->score = score;
 		e->last_seen = TStime();
 		add_reputation_entry(e);
+		reputation_changed_update_users(e);
 	}
 
 	/* Propagate to the non-client direction (score may be updated) */

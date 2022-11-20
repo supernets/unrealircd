@@ -3,7 +3,7 @@
  * (C) 2021 Bram Matthys (Syzop) and the UnrealIRCd Team
  *
  * See file AUTHORS in IRC package for additional names of
- * the programmers. 
+ * the programmers.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -43,6 +43,26 @@ int log_sources_match(LogSource *logsource, LogLevel loglevel, const char *subsy
 void do_unreal_log_internal(LogLevel loglevel, const char *subsystem, const char *event_id, Client *client, int expand_msg, const char *msg, va_list vl);
 void log_blocks_switchover(void);
 
+/** Calculate expansion of a JSON string thanks to double escaping.
+ * orig => JSON => IRC
+ *    " => \"   => \\"
+ *    \ => \\   => \\\\
+ */
+int json_dump_string_length(const char *s)
+{
+	int len = 0;
+	for (; *s; s++)
+	{
+		if (*s == '\\')
+			len += 4;
+		else if (*s == '"')
+			len += 3;
+		else
+			len++;
+	}
+	return len;
+}
+
 /** Convert a regular string value to a JSON string.
  * In UnrealIRCd, this must be used instead of json_string()
  * as we may use non-UTF8 sequences. Also, this takes care
@@ -53,13 +73,16 @@ void log_blocks_switchover(void);
  */
 json_t *json_string_unreal(const char *s)
 {
-	static char buf[8192];
+	char buf1[512], buf2[512];
 	char *verified_s;
+	const char *stripped;
 
 	if (s == NULL)
 		return json_null();
 
-	verified_s = unrl_utf8_make_valid(s, buf, sizeof(buf), 0);
+	stripped = StripControlCodesEx(s, buf1, sizeof(buf1), UNRL_STRIP_LOW_ASCII|UNRL_STRIP_KEEP_LF);
+	verified_s = unrl_utf8_make_valid(buf1, buf2, sizeof(buf2), 0);
+
 	return json_string(verified_s);
 }
 
@@ -561,6 +584,9 @@ void json_expand_client(json_t *j, const char *key, Client *client, int detail)
 	if (client->local && client->local->creationtime)
 		json_object_set_new(child, "connected_since", json_timestamp(client->local->creationtime));
 
+	if (client->local && client->local->idle_since)
+		json_object_set_new(child, "idle_since", json_timestamp(client->local->idle_since));
+
 	if (client->user)
 	{
 		char buf[512];
@@ -572,6 +598,10 @@ void json_expand_client(json_t *j, const char *key, Client *client, int detail)
 		json_object_set_new(user, "username", json_string_unreal(client->user->username));
 		if (!BadPtr(client->info))
 			json_object_set_new(user, "realname", json_string_unreal(client->info));
+		if (has_user_mode(client, 'x') && client->user->virthost && strcmp(client->user->virthost, client->user->realhost))
+			json_object_set_new(user, "vhost", json_string_unreal(client->user->virthost));
+		if (*client->user->cloakedhost)
+			json_object_set_new(user, "cloakedhost", json_string_unreal(client->user->cloakedhost));
 		if (client->uplink)
 			json_object_set_new(user, "servername", json_string_unreal(client->uplink->name));
 		if (IsLoggedIn(client))
@@ -592,6 +622,26 @@ void json_expand_client(json_t *j, const char *key, Client *client, int detail)
 		str = get_operclass(client);
 		if (str)
 			json_object_set_new(user, "operclass", json_string_unreal(str));
+		if (client->user->channel)
+		{
+			Membership *m;
+			int cnt = 0;
+			int len = 0;
+			json_t *channels = json_array();
+			json_object_set_new(user, "channels", channels);
+			for (m = client->user->channel; m; m = m->next)
+			{
+				len += json_dump_string_length(m->channel->name);
+				if (len > 384)
+				{
+					/* Truncated */
+					json_array_append_new(channels, json_string_unreal("..."));
+					break;
+				}
+				json_array_append_new(channels, json_string_unreal(m->channel->name));
+			}
+		}
+		RunHook(HOOKTYPE_JSON_EXPAND_CLIENT_USER, client, detail, child, user);
 	} else
 	if (IsMe(client))
 	{
@@ -645,7 +695,9 @@ void json_expand_client(json_t *j, const char *key, Client *client, int detail)
 		}
 		if (!BadPtr(client->server->features.nickchars))
 			json_object_set_new(features, "nick_character_sets", json_string_unreal(client->server->features.nickchars));
+		RunHook(HOOKTYPE_JSON_EXPAND_CLIENT_SERVER, client, detail, child, server);
 	}
+	RunHook(HOOKTYPE_JSON_EXPAND_CLIENT, client, detail, child);
 }
 
 void json_expand_channel(json_t *j, const char *key, Channel *channel, int detail)
@@ -675,6 +727,7 @@ void json_expand_channel(json_t *j, const char *key, Channel *channel, int detai
 	}
 
 	// Possibly later: If detail is set to 1 then expand more...
+	RunHook(HOOKTYPE_JSON_EXPAND_CHANNEL, channel, detail, child);
 }
 
 const char *timestamp_iso8601_now(void)
@@ -883,9 +936,11 @@ LogData *log_data_link_block(ConfigItem_link *link)
 	safe_strdup(d->key, "link_block");
 	d->value.object = j = json_object();
 	json_object_set_new(j, "name", json_string_unreal(link->servername));
+	json_object_set_new(j, "file", json_string_unreal(link->outgoing.file));
 	json_object_set_new(j, "hostname", json_string_unreal(link->outgoing.hostname));
 	json_object_set_new(j, "ip", json_string_unreal(link->connect_ip));
 	json_object_set_new(j, "port", json_integer(link->outgoing.port));
+	json_object_set_new(j, "class", json_string_unreal(link->class->name));
 
 	if (!link->outgoing.bind_ip && iConf.link_bindip)
 		bind_ip = iConf.link_bindip;

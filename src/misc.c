@@ -916,145 +916,74 @@ int is_autojoin_chan(const char *chname)
 	return 0;
 }
 
-/** Free all masks in the mask list */
-void unreal_delete_masks(ConfigItem_mask *m)
-{
-	ConfigItem_mask *m_next;
-
-	for (; m; m = m_next)
-	{
-		m_next = m->next;
-
-		safe_free(m->mask);
-
-		safe_free(m);
-	}
-}
-
-/** Internal function to add one individual mask to the list */
-static void unreal_add_mask(ConfigItem_mask **head, ConfigEntry *ce)
-{
-	ConfigItem_mask *m = safe_alloc(sizeof(ConfigItem_mask));
-
-	/* Since we allow both mask "xyz"; and mask { abc; def; };... */
-	if (ce->value)
-		safe_strdup(m->mask, ce->value);
-	else
-		safe_strdup(m->mask, ce->name);
-
-	add_ListItem((ListStruct *)m, (ListStruct **)head);
-}
-
-/** Add mask entries from config */
-void unreal_add_masks(ConfigItem_mask **head, ConfigEntry *ce)
+/** Add name entries from config */
+void unreal_add_names(NameList **n, ConfigEntry *ce)
 {
 	if (ce->items)
 	{
 		ConfigEntry *cep;
 		for (cep = ce->items; cep; cep = cep->next)
-			unreal_add_mask(head, cep);
+			_add_name_list(n, cep->value ? cep->value : cep->name);
 	} else
+	if (ce->value)
 	{
-		unreal_add_mask(head, ce);
+		_add_name_list(n, ce->value);
 	}
 }
 
-/** Check if a client matches any of the masks in the mask list.
- * The following rules apply:
- * - If you have only negating entries, like '!abc' and '!def', then
- *   we assume an implicit * rule first, since that is clearly what
- *   the user wants.
- * - If you have a mix, like '*.com', '!irc1*', '!irc2*' then the
- *   implicit * is dropped and we assume you only want to match *.com,
- *   with the exception of irc1*.com and irc2*.com.
- * - If you only have normal entries without ! then things are
- *   as they always are.
- * @param client	The client to run the mask match against
- * @param mask		The mask entry from the config file
- * @returns 1 on match, 0 on non-match.
- */
-int unreal_mask_match(Client *client, ConfigItem_mask *mask)
+/** Add name/value entries from config */
+void unreal_add_name_values(NameValuePrioList **n, const char *name, ConfigEntry *ce)
 {
-	int retval = 1;
-	ConfigItem_mask *m;
-
-	if (!mask)
-		return 0; /* Empty mask block is no match */
-
-	/* First check normal matches (without ! prefix) */
-	for (m = mask; m; m = m->next)
+	if (ce->items)
 	{
-		if (m->mask[0] != '!')
-		{
-			retval = 0; /* no implicit * */
-			if (match_user(m->mask, client, MATCH_CHECK_REAL|MATCH_CHECK_EXTENDED))
-			{
-				retval = 1;
-				break;
-			}
-		}
-	}
-
-	if (retval)
+		ConfigEntry *cep;
+		for (cep = ce->items; cep; cep = cep->next)
+			add_nvplist(n, 0, name, cep->value ? cep->value : cep->name);
+	} else
+	if (ce->value)
 	{
-		/* We matched. Check for exceptions (with ! prefix) */
-		for (m = mask; m; m = m->next)
-		{
-			if ((m->mask[0] == '!') && match_user(m->mask+1, client, MATCH_CHECK_REAL|MATCH_CHECK_EXTENDED))
-				return 0;
-		}
+		add_nvplist(n, 0, name, ce->value);
 	}
-
-	return retval;
 }
 
-/** Check if a string matches any of the masks in the mask list.
- * The following rules apply:
- * - If you have only negating entries, like '!abc' and '!def', then
- *   we assume an implicit * rule first, since that is clearly what
- *   the user wants.
- * - If you have a mix, like '*.com', '!irc1*', '!irc2*' then the
- *   implicit * is dropped and we assume you only want to match *.com,
- *   with the exception of irc1*.com and irc2*.com.
- * - If you only have normal entries without ! then things are
- *   as they always are.
- * @param name	The name to run the mask matching on
- * @param mask	The mask entry from the config file
- * @returns 1 on match, 0 on non-match.
- */
-int unreal_mask_match_string(const char *name, ConfigItem_mask *mask)
+/** Prints the name:value pair of a NameValuePrioList */
+const char *namevalue(NameValuePrioList *n)
 {
-	int retval = 1;
-	ConfigItem_mask *m;
+	static char buf[512];
 
-	if (!mask)
-		return 0; /* Empty mask block is no match */
+	if (!n->name)
+		return "";
 
-	/* First check normal matches (without ! prefix) */
-	for (m = mask; m; m = m->next)
-	{
-		if (m->mask[0] != '!')
-		{
-			retval = 0; /* no implicit * */
-			if (match_simple(m->mask, name))
-			{
-				retval = 1;
-				break;
-			}
-		}
-	}
+	if (!n->value)
+		return n->name;
 
-	if (retval)
-	{
-		/* We matched. Check for exceptions (with ! prefix) */
-		for (m = mask; m; m = m->next)
-		{
-			if ((m->mask[0] == '!') && match_simple(m->mask+1, name))
-				return 0;
-		}
-	}
+	snprintf(buf, sizeof(buf), "%s:%s", n->name, n->value);
+	return buf;
+}
 
-	return retval;
+/** Version of namevalue() but replaces spaces with underscores.
+ * Used in for example numeric sending routines where a field
+ * may not contain any spaces.
+ */
+const char *namevalue_nospaces(NameValuePrioList *n)
+{
+	static char buf[512];
+	char *p;
+
+	if (!n->name)
+		return "";
+
+	if (!n->value)
+		strlcpy(buf, n->name, sizeof(buf));
+
+	snprintf(buf, sizeof(buf), "%s:%s", n->name, n->value);
+
+	/* Replace spaces with underscores */
+	for (p=buf; *p; p++)
+		if (*p == ' ')
+			*p = '_';
+
+	return buf;
 }
 
 /** Our own strcasestr implementation because strcasestr is
@@ -1459,6 +1388,11 @@ void labeled_response_force_end_default_handler(void)
 /** Ad default handler for if the slog module is not loaded */
 void do_unreal_log_remote_deliver_default_handler(LogLevel loglevel, const char *subsystem, const char *event_id, MultiLine *msg, const char *json_serialized)
 {
+}
+
+int make_oper_default_handler(Client *client, const char *operblock_name, const char *operclass, ConfigItem_class *clientclass, long modes, const char *snomask, const char *vhost)
+{
+	return 0;
 }
 
 /** my_timegm: mktime()-like function which will use GMT/UTC.
@@ -2538,4 +2472,142 @@ int minimum_msec_since_last_run(struct timeval *tv_old, long minimum)
 		return 1;
 	}
 	return 0;
+}
+
+/** Strip color, bold, underline, and reverse codes from a string.
+ * @param text			The input text
+ * @param output		The buffer for the output text
+ * @param outputlen		The length of the output buffer
+ * @param strip_flags		Zero or (a combination of) UNRL_STRIP_LOW_ASCII / UNRL_STRIP_KEEP_LF.
+ * @returns The new string, which will be 'output', or in unusual cases (outputlen==0) will be NULL.
+ */
+const char *StripControlCodesEx(const char *text, char *output, size_t outputlen, int strip_flags)
+{
+	int i = 0, len = strlen(text), save_len=0;
+	char nc = 0, col = 0, rgb = 0;
+	char *o = output;
+	const char *save_text=NULL;
+
+	/* Handle special cases first.. */
+
+	if (outputlen == 0)
+		return NULL;
+
+	if (outputlen == 1)
+	{
+		*output = '\0';
+		return output;
+	}
+
+	/* Reserve room for the NUL byte */
+	outputlen--;
+
+	while (len > 0) 
+	{
+		if ( col && ((isdigit(*text) && nc < 2) || (*text == ',' && nc < 3)))
+		{
+			nc++;
+			if (*text == ',')
+				nc = 0;
+		}
+		/* Syntax for RGB is ^DHHHHHH where H is a hex digit.
+		 * If < 6 hex digits are specified, the code is displayed
+		 * as text
+		 */
+		else if ((rgb && isxdigit(*text) && nc < 6) || (rgb && *text == ',' && nc < 7))
+		{
+			nc++;
+			if (*text == ',')
+				nc = 0;
+		}
+		else 
+		{
+			if (col)
+				col = 0;
+			if (rgb)
+			{
+				if (nc != 6)
+				{
+					text = save_text+1;
+					len = save_len-1;
+					rgb = 0;
+					continue;
+				}
+				rgb = 0;
+			}
+			switch (*text)
+			{
+			case 3:
+				/* color */
+				col = 1;
+				nc = 0;
+				break;
+			case 4:
+				/* RGB */
+				save_text = text;
+				save_len = len;
+				rgb = 1;
+				nc = 0;
+				break;
+			case 2:
+				/* bold */
+				break;
+			case 31:
+				/* underline */
+				break;
+			case 22:
+				/* reverse */
+				break;
+			case 15:
+				/* plain */
+				break;
+			case 29:
+				/* italic */
+				break;
+			case 30:
+				/* strikethrough */
+				break;
+			case 17:
+				/* monospace */
+				break;
+			case 0xe2:
+				if (!strncmp(text+1, "\x80\x8b", 2))
+				{
+					/* +2 means we skip 3 */
+					text += 2;
+					len  -= 2;
+					break;
+				}
+				/*fallthrough*/
+			default:
+				if ((*text >= ' ') ||
+				    !(strip_flags & UNRL_STRIP_LOW_ASCII) ||
+				    ((strip_flags & UNRL_STRIP_KEEP_LF) && (*text == '\n'))
+				    )
+				{
+					*o++ = *text;
+					outputlen--;
+					if (outputlen == 0)
+					{
+						*o = '\0';
+						return output;
+					}
+				}
+				break;
+			}
+		}
+		text++;
+		len--;
+	}
+
+	*o = '\0';
+	return output;
+}
+
+/* strip color, bold, underline, and reverse codes from a string */
+const char *StripControlCodes(const char *text)
+{
+	static unsigned char new_str[4096];
+
+	return StripControlCodesEx(text, new_str, sizeof(new_str), 0);
 }

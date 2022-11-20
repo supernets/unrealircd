@@ -30,7 +30,6 @@
 #include "unrealircd.h"
 
 MODVAR int dontspread = 0;
-static char buf[BUFSIZE];
 
 /** Inhibit labeled/response reply. This means it will result in an empty ACK
  *  because we cannot handle the command via labeled-reponse. Rare, but
@@ -69,11 +68,9 @@ void iNAH_host(Client *client, const char *host)
 	safe_strdup(client->user->virthost, host);
 	if (MyConnect(client))
 		sendto_server(NULL, 0, 0, NULL, ":%s SETHOST :%s", client->id, client->user->virthost);
-	client->umodes |= UMODE_SETHOST;
+	client->umodes |= UMODE_SETHOST|UMODE_HIDE;
 
 	userhost_changed(client);
-
-	sendnumeric(client, RPL_HOSTHIDDEN, client->user->virthost);
 }
 
 /** Convert a user mode string to a bitmask - only used by config.
@@ -420,6 +417,7 @@ void build_umode_string(Client *client, long old, long sendmask, char *umode_buf
 void send_umode_out(Client *client, int show_to_user, long old)
 {
 	Client *acptr;
+	char buf[512];
 
 	build_umode_string(client, old, SEND_UMODES, buf);
 
@@ -739,192 +737,24 @@ int hide_idle_time(Client *client, Client *target)
 	}
 }
 
-/** Check if the name of the security-group contains only valid characters.
- * @param name	The name of the group
- * @returns 1 if name is valid, 0 if not (eg: illegal characters)
- */
-int security_group_valid_name(const char *name)
-{
-	const char *p;
-
-	if (strlen(name) > SECURITYGROUPLEN)
-		return 0; /* Too long */
-
-	for (p = name; *p; p++)
-	{
-		if (!isalnum(*p) && !strchr("_-", *p))
-			return 0; /* Character not allowed */
-	}
-	return 1;
-}
-
-/** Find a security-group.
- * @param name	The name of the security group
- * @returns A SecurityGroup struct, or NULL if not found.
- */
-SecurityGroup *find_security_group(const char *name)
-{
-	SecurityGroup *s;
-	for (s = securitygroups; s; s = s->next)
-		if (!strcasecmp(name, s->name))
-			return s;
-	return NULL;
-}
-
-/** Checks if a security-group exists.
- * This function takes the 'unknown-users' magic group into account as well.
- * @param name	The name of the security group
- * @returns 1 if it exists, 0 if not
- */
-int security_group_exists(const char *name)
-{
-	if (!strcmp(name, "unknown-users") || find_security_group(name))
-		return 1;
-	return 0;
-}
-
-/** Add a new security-group and add it to the list, but search for existing one first.
- * @param name	The name of the security group
- * @returns A SecurityGroup struct (already added to the 'securitygroups' linked list)
- */
-SecurityGroup *add_security_group(const char *name, int priority)
-{
-	SecurityGroup *s = find_security_group(name);
-
-	/* Existing? */
-	if (s)
-		return s;
-
-	/* Otherwise, create a new entry */
-	s = safe_alloc(sizeof(SecurityGroup));
-	strlcpy(s->name, name, sizeof(s->name));
-	s->priority = priority;
-	AddListItemPrio(s, securitygroups, priority);
-	return s;
-}
-
-/** Free a SecurityGroup struct */
-void free_security_group(SecurityGroup *s)
-{
-	unreal_delete_masks(s->include_mask);
-	safe_free(s);
-}
-
-/** Initialize the default security-group blocks */
-void set_security_group_defaults(void)
-{
-	SecurityGroup *s, *s_next;
-
-	/* First free all security groups */
-	for (s = securitygroups; s; s = s_next)
-	{
-		s_next = s->next;
-		free_security_group(s);
-	}
-	securitygroups = NULL;
-
-	/* Default group: webirc */
-	s = add_security_group("webirc-users", 50);
-	s->webirc = 1;
-
-	/* Default group: known-users */
-	s = add_security_group("known-users", 100);
-	s->identified = 1;
-	s->reputation_score = 25;
-	s->webirc = 0;
-
-	/* Default group: tls-and-known-users */
-	s = add_security_group("tls-and-known-users", 200);
-	s->identified = 1;
-	s->reputation_score = 25;
-	s->webirc = 0;
-	s->tls = 1;
-
-	/* Default group: tls-users */
-	s = add_security_group("tls-users", 300);
-	s->tls = 1;
-}
-
-/** Returns 1 if the user is OK as far as the security-group is concerned.
+/** Get how long a client is connected to IRC.
  * @param client	The client to check
- * @param s		The security-group to check against
- * @retval 1 if user is allowed by security-group, 0 if not.
+ * @returns how long the client is connected to IRC (number of seconds)
  */
-int user_allowed_by_security_group(Client *client, SecurityGroup *s)
+long get_connected_time(Client *client)
 {
-	if (s->identified && IsLoggedIn(client))
-		return 1;
-	if (s->webirc && moddata_client_get(client, "webirc"))
-		return 1;
-	if (s->reputation_score && (GetReputation(client) >= s->reputation_score))
-		return 1;
-	if (s->tls && (IsSecureConnect(client) || (MyConnect(client) && IsSecure(client))))
-		return 1;
-	if (s->include_mask && unreal_mask_match(client, s->include_mask))
-		return 1;
+	const char *str;
+	long connect_time = 0;
+
+	/* Shortcut for local clients */
+	if (client->local)
+		return TStime() - client->local->creationtime;
+
+	/* Otherwise, hopefully available through this... */
+	str = moddata_client_get(client, "creationtime");
+	if (!BadPtr(str) && (*str != '0'))
+		return TStime() - atoll(str);
 	return 0;
-}
-
-/** Returns 1 if the user is OK as far as the security-group is concerned - "by name" version.
- * @param client	The client to check
- * @param secgroupname	The name of the security-group to check against
- * @retval 1 if user is allowed by security-group, 0 if not.
- */
-int user_allowed_by_security_group_name(Client *client, const char *secgroupname)
-{
-	SecurityGroup *s;
-
-	/* Handle the magical 'unknown-users' case. */
-	if (!strcmp(secgroupname, "unknown-users"))
-	{
-		/* This is simply the inverse of 'known-users' */
-		s = find_security_group("known-users");
-		if (!s)
-			return 0; /* that's weird!? pretty impossible. */
-		return !user_allowed_by_security_group(client, s);
-	}
-
-	/* Find the group and evaluate it */
-	s = find_security_group(secgroupname);
-	if (!s)
-		return 0; /* security group not found: no match */
-	return user_allowed_by_security_group(client, s);
-}
-
-/** Get comma separated list of matching security groups for 'client'.
- * This is usually only used for displaying purposes.
- * @returns string like "unknown-users,tls-users" from a static buffer.
- */
-const char *get_security_groups(Client *client)
-{
-	SecurityGroup *s;
-	static char buf[512];
-
-	*buf = '\0';
-
-	/* We put known-users or unknown-users at the beginning.
-	 * The latter is special and doesn't actually exist
-	 * in the linked list, hence the special code here,
-	 * and again later in the for loop to skip it.
-	 */
-	if (user_allowed_by_security_group_name(client, "known-users"))
-		strlcat(buf, "known-users,", sizeof(buf));
-	else
-		strlcat(buf, "unknown-users,", sizeof(buf));
-
-	for (s = securitygroups; s; s = s->next)
-	{
-		if (strcmp(s->name, "known-users") &&
-		    user_allowed_by_security_group(client, s))
-		{
-			strlcat(buf, s->name, sizeof(buf));
-			strlcat(buf, ",", sizeof(buf));
-		}
-	}
-
-	if (*buf)
-		buf[strlen(buf)-1] = '\0';
-	return buf;
 }
 
 /** Return extended information about user for the "Client connecting" line.
@@ -966,6 +796,10 @@ const char *get_connect_extinfo(Client *client)
 	secgroups = get_security_groups(client);
 	if (secgroups)
 		add_nvplist(&list, 100, "security-groups", secgroups);
+	
+	/* tkl shunned */
+	if (IsShunned(client))
+		add_nvplist(&list, 110, "shunned", NULL);
 
 	*retbuf = '\0';
 	for (e = list; e; e = e->next)
@@ -977,8 +811,8 @@ const char *get_connect_extinfo(Client *client)
 		strlcat(retbuf, tmp, sizeof(retbuf));
 	}
 	/* Cut off last space (unless empty string) */
-	if (*buf)
-		buf[strlen(buf)-1] = '\0';
+	if (*retbuf)
+		retbuf[strlen(retbuf)-1] = '\0';
 
 	/* Free the list, as it was only used to build retbuf */
 	free_nvplist(list);

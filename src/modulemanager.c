@@ -1,6 +1,6 @@
 /* UnrealIRCd module manager.
  * (C) Copyright 2019 Bram Matthys ("Syzop") and the UnrealIRCd Team.
- * License: GPLv2
+ * License: GPLv2 or later
  * See https://www.unrealircd.org/docs/Module_manager for user documentation.
  */
 
@@ -1206,7 +1206,7 @@ int mm_compile(ManagedModule *m, char *tmpfile, int test)
 	fprintf(stderr, "ERROR: Compile errors encountered while compiling module '%s'\n"
 	                "You are suggested to contact the author (%s) of this module:\n%s\n",
 	                m->name, m->author, m->troubleshooting);
-	return 1;
+	return 0;
 }
 
 /** Actually download and install the module.
@@ -1222,7 +1222,7 @@ void mm_install_module(ManagedModule *m)
 		basename = "mod.c";
 	tmpfile = unreal_mktemp(TMPDIR, basename);
 
-	printf("ConfigResourceing %s from %s...\n", m->name, m->source);
+	printf("Downloading %s from %s...\n", m->name, m->source);
 	if (!mm_http_request(m->source, tmpfile, 1))
 	{
 		fprintf(stderr, "Repository %s seems to list a module file that cannot be retrieved (%s).\n", m->repo_url, m->source);
@@ -1655,21 +1655,23 @@ void mm_parse_c_file(int argc, char *args[])
 void mm_self_test(void)
 {
 	char name[512];
-	snprintf(name, sizeof(name), "%s/src/modules/third", BUILDDIR);
-	if (file_exists(name))
-		return;
+
 	if (!file_exists(BUILDDIR))
 	{
 		fprintf(stderr, "ERROR: Directory %s does not exist.\n"
 				"The UnrealIRCd source is required for the module manager to work!\n",
 				BUILDDIR);
+		exit(-1);
 	} else {
-		fprintf(stderr, "ERROR: Directory %s exists, but %s does not.\n"
-		                "The UnrealIRCd source is required for the module manager to work.\n"
-		                "It seems you only have a partial build directory??\n",
-		                BUILDDIR, name);
+		snprintf(name, sizeof(name), "%s/src/modules/third/Makefile", BUILDDIR);
+		if (!file_exists(name))
+		{
+			fprintf(stderr, "ERROR: Directory %s exists, but your UnrealIRCd is not compiled yet.\n"
+					"You must compile your UnrealIRCd first (run './Config', then 'make install')\n",
+					BUILDDIR);
+			exit(-1);
+		}
 	}
-	exit(-1);
 }
 
 void modulemanager(int argc, char *args[])

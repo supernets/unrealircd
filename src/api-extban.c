@@ -38,9 +38,27 @@ void set_isupport_extban(void)
 	ISupportSetFmt(NULL, "EXTBAN", "~,%s", extbanstr);
 }
 
-Extban *findmod_by_bantype(const char *str, const char **remainder)
+Extban *findmod_by_bantype_raw(const char *str, int ban_name_length)
 {
 	Extban *e;
+
+	for (e=extbans; e; e = e->next)
+	{
+		if ((ban_name_length == 1) && (e->letter == str[0]))
+			return e;
+		if (e->name)
+		{
+			int namelen = strlen(e->name);
+			if ((namelen == ban_name_length) && !strncmp(e->name, str, namelen))
+				return e;
+		}
+	}
+
+	 return NULL;
+}
+
+Extban *findmod_by_bantype(const char *str, const char **remainder)
+{
 	int ban_name_length;
 	const char *p = strchr(str, ':');
 
@@ -54,20 +72,7 @@ Extban *findmod_by_bantype(const char *str, const char **remainder)
 		*remainder = p+1;
 
 	ban_name_length = p - str - 1;
-
-	for (e=extbans; e; e = e->next)
-	{
-		if ((ban_name_length == 1) && (e->letter == str[1]))
-			return e;
-		if (e->name)
-		{
-			int namelen = strlen(e->name);
-			if ((namelen == ban_name_length) && !strncmp(e->name, str+1, namelen))
-				return e;
-		}
-	}
-
-	 return NULL;
+	return findmod_by_bantype_raw(str+1, ban_name_length);
 }
 
 /* Check if this is a valid extended ban name */
@@ -121,6 +126,7 @@ static void extban_add_sorted(Extban *n)
 Extban *ExtbanAdd(Module *module, ExtbanInfo req)
 {
 	Extban *e;
+	ModuleObject *banobj;
 	int existing = 0;
 
 	if (!req.name)
@@ -167,14 +173,35 @@ Extban *ExtbanAdd(Module *module, ExtbanInfo req)
 	{
 		if (e->letter == req.letter)
 		{
+			/* Extban already exists in our list, let's see... */
 			if (e->unloaded)
 			{
 				e->unloaded = 0;
 				existing = 1;
 				break;
-			} else {
-				if (module)
-					module->errorcode = MODERR_EXISTS;
+			} else
+			if ((module->flags == MODFLAG_TESTING) && e->preregistered)
+			{
+				/* We are in MOD_INIT (yeah confusing, isn't it?)
+				 * and the extban already exists and it was preregistered.
+				 * Then go ahead with really registering it.
+				 */
+				e->preregistered = 0;
+				existing = 1;
+			} else
+			if (module->flags == MODFLAG_NONE)
+			{
+				/* Better don't touch it, as we may still fail at this stage
+				 * and if we would set .conv_param etc to this and the new module
+				 * gets unloaded because of a config typo then we would be screwed
+				 * (now we are not).
+				 * NOTE: this does mean that if you hot-load an extban module
+				 * then it may only be available for config stuff the 2nd rehash.
+				 */
+				return e;
+			} else
+			{
+				module->errorcode = MODERR_EXISTS;
 				return NULL;
 			}
 		}
@@ -195,14 +222,16 @@ Extban *ExtbanAdd(Module *module, ExtbanInfo req)
 	e->is_banned_events = req.is_banned_events;
 	e->owner = module;
 	e->options = req.options;
-	if (module)
-	{
-		ModuleObject *banobj = safe_alloc(sizeof(ModuleObject));
-		banobj->object.extban = e;
-		banobj->type = MOBJ_EXTBAN;
-		AddListItem(banobj, module->objects);
-		module->errorcode = MODERR_NOERROR;
-	}
+
+	if (module->flags == MODFLAG_NONE)
+		e->preregistered = 1;
+
+	banobj = safe_alloc(sizeof(ModuleObject));
+	banobj->object.extban = e;
+	banobj->type = MOBJ_EXTBAN;
+	AddListItem(banobj, module->objects);
+	module->errorcode = MODERR_NOERROR;
+
 	set_isupport_extban();
 	return e;
 }
@@ -217,8 +246,25 @@ static void unload_extban_commit(Extban *e)
 
 	/* Then unload the extban */
 	DelListItem(e, extbans);
+	safe_free(e->name);
 	safe_free(e);
 	set_isupport_extban();
+}
+
+/** Unload all unused extended bans after a REHASH */
+void unload_all_unused_extbans(void)
+{
+	Extban *e, *e_next;
+
+	for (e=extbans; e; e = e_next)
+	{
+		e_next = e->next;
+		if (e->letter && e->unloaded)
+		{
+			unload_extban_commit(e);
+		}
+	}
+
 }
 
 void ExtbanDel(Extban *e)

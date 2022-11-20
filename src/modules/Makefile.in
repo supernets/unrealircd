@@ -39,7 +39,7 @@ MODULES= \
 	sethost.so chghost.so chgident.so setname.so \
 	setident.so sdesc.so svsmode.so swhois.so\
 	svsmotd.so svsnline.so who_old.so whox.so mkpasswd.so \
-	away.so svsnoop.so svsnick.so \
+	away.so svsnoop.so svsnick.so svso.so \
 	chgname.so kill.so \
 	lag.so message.so oper.so pingpong.so \
 	quit.so sendumode.so sqline.so \
@@ -71,12 +71,12 @@ MODULES= \
 	message-tags.so batch.so \
 	account-tag.so labeled-response.so link-security.so \
 	message-ids.so plaintext-policy.so server-time.so sts.so \
-	echo-message.so userip-tag.so userhost-tag.so \
+	echo-message.so userip-tag.so userhost-tag.so geoip-tag.so \
 	bot-tag.so reply-tag.so json-log-tag.so \
-	typing-indicator.so \
+	typing-indicator.so channel-context.so \
 	ident_lookup.so history.so chathistory.so \
 	targetfloodprot.so clienttagdeny.so watch-backend.so \
-	monitor.so slog.so tls_cipher.so operinfo.so \
+	monitor.so slog.so tls_cipher.so operinfo.so creationtime.so \
 	unreal_server_compat.so \
 	extended-monitor.so geoip_csv.so \
 	geoip_base.so extjwt.so \

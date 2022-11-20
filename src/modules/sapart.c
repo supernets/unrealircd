@@ -167,6 +167,7 @@ CMD_FUNC(cmd_sapart)
 
 	log_sapart(client, target, request, comment);
 
+/***
 	if (comment)
 	{
 		snprintf(commentx, sizeof(commentx), "SAPart: %s", comment);
@@ -174,6 +175,7 @@ CMD_FUNC(cmd_sapart)
 	} else {
 		sendnotice(target, "*** You were forced to part %s", request);
 	}
+***/
 
 	parv[0] = target->name; // nick
 	parv[1] = request; // chan

@@ -7,7 +7,7 @@ dnl src/windows/unrealinst.iss
 dnl doc/Config.header
 dnl src/version.c.SH
 
-AC_INIT([unrealircd], [6.0.3], [https://bugs.unrealircd.org/], [], [https://unrealircd.org/])
+AC_INIT([unrealircd], [6.0.4.2], [https://bugs.unrealircd.org/], [], [https://unrealircd.org/])
 AC_CONFIG_SRCDIR([src/ircd.c])
 AC_CONFIG_HEADER([include/setup.h])
 AC_CONFIG_AUX_DIR([autoconf])
@@ -34,13 +34,13 @@ UNREAL_VERSION_MAJOR=["0"]
 AC_DEFINE_UNQUOTED([UNREAL_VERSION_MAJOR], [$UNREAL_VERSION_MAJOR], [Major version number (e.g.: Y for X.Y.Z)])
 
 # Minor version number (e.g.: Z in X.Y.Z)
-UNREAL_VERSION_MINOR=["3"]
+UNREAL_VERSION_MINOR=["4"]
 AC_DEFINE_UNQUOTED([UNREAL_VERSION_MINOR], [$UNREAL_VERSION_MINOR], [Minor version number (e.g.: Z for X.Y.Z)])
 
 # The version suffix such as a beta marker or release candidate
 # marker. (e.g.: -rcX for unrealircd-3.2.9-rcX). This macro is a
 # string instead of an integer because it contains arbitrary data.
-UNREAL_VERSION_SUFFIX=[""]
+UNREAL_VERSION_SUFFIX=[".2"]
 AC_DEFINE_UNQUOTED([UNREAL_VERSION_SUFFIX], ["$UNREAL_VERSION_SUFFIX"], [Version suffix such as a beta marker or release candidate marker. (e.g.: -rcX for unrealircd-3.2.9-rcX)])
 
 AC_PATH_PROG(RM,rm)
@@ -236,6 +236,8 @@ check_cc_flag([-Winvalid-source-encoding], [CFLAGS="$CFLAGS -Wno-invalid-source-
 check_cc_flag([-Wformat-zero-length], [CFLAGS="$CFLAGS -Wno-format-zero-length"])
 
 check_cc_flag([-Wformat-truncation], [CFLAGS="$CFLAGS -Wno-format-truncation"])
+
+check_cc_flag([-Wformat-overflow], [CFLAGS="$CFLAGS -Wno-format-overflow"])
 
 dnl While it can be useful to occasionally to compile with warnings about
 dnl unused variables and parameters, we often 'think ahead' when coding things

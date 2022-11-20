@@ -89,7 +89,7 @@ CMD_FUNC(cmd_vhost)
 		return;
 	}
 	
-	if (!unreal_mask_match(client, vhost->mask))
+	if (!user_allowed_by_security_group(client, vhost->match))
 	{
 		unreal_log(ULOG_WARNING, "vhost", "VHOST_FAILED", client,
 		           "Failed VHOST attempt by $client.details [reason: $reason] [vhost-block: $vhost_block]",
@@ -157,7 +157,6 @@ CMD_FUNC(cmd_vhost)
 		for (s = vhost->swhois; s; s = s->next)
 			swhois_add(client, "vhost", -100, s->line, &me, NULL);
 	}
-	sendnumeric(client, RPL_HOSTHIDDEN, vhost->virthost);
 	sendnotice(client, "*** Your vhost is now %s%s%s",
 		vhost->virtuser ? vhost->virtuser : "",
 		vhost->virtuser ? "@" : "",

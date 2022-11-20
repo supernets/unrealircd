@@ -559,6 +559,7 @@ typedef enum ClientStatus {
 #define IsIPV6(x)			((x)->local->socket_type == SOCKET_TYPE_IPV6)
 #define IsUnixSocket(x)			((x)->local->socket_type == SOCKET_TYPE_UNIX)
 #define SetIPV6(x)			do { (x)->local->socket_type = SOCKET_TYPE_IPV6; } while(0)
+#define SetUnixSocket(x)			do { (x)->local->socket_type = SOCKET_TYPE_UNIX; } while(0)
 /** @} */
 
 
@@ -608,6 +609,7 @@ union ModData
 {
         int i;
         long l;
+        long long ll;
         char *str;
         void *ptr;
 };
@@ -761,6 +763,8 @@ struct NameList {
 #define add_name_list(list, str)  _add_name_list(&list, str)
 /** Delete an entry from a NameList - AND free it */
 #define del_name_list(list, str)  _del_name_list(&list, str)
+
+extern void unreal_add_names(NameList **n, ConfigEntry *ce);
 
 /** @} */
 
@@ -1102,6 +1106,7 @@ struct Spamfilter {
 struct BanException {
 	char *usermask; /**< User mask */
 	char *hostmask; /**< Host mask */
+	SecurityGroup *match; /**< Security group (for config file items only) */
 	unsigned short subtype; /**< See TKL_SUBTYPE_* */
 	char *bantypes; /**< Exception types */
 	char *reason; /**< Reason */
@@ -1557,7 +1562,7 @@ struct ConfigFlag_allow {
 struct ConfigItem_allow {
 	ConfigItem_allow *prev, *next;
 	ConfigFlag flag;
-	ConfigItem_mask *mask;
+	SecurityGroup *match;
 	char *server;
 	AuthConfig *auth;
 	int maxperip; /**< Maximum connections permitted per IP address (locally) */
@@ -1624,12 +1629,13 @@ struct ConfigItem_oper {
 	AuthConfig *auth;
 	char *operclass;
 	ConfigItem_class *class;
-	ConfigItem_mask *mask;
+	SecurityGroup *match;
 	unsigned long modes, require_modes;
 	char *vhost;
 	int maxlogins;
 	int server_notice_colors;
 	int server_notice_show_event;
+	int auto_login;
 };
 
 /** The TLS options that are used in set::tls and otherblocks::tls-options.
@@ -1679,7 +1685,7 @@ struct ConfigItem_ulines {
 struct ConfigItem_tld {
 	ConfigItem_tld 	*prev, *next;
 	ConfigFlag_tld 	flag;
-	ConfigItem_mask *mask;
+	SecurityGroup	*match;
 	char 		*channel;
 	char 		*motd_file, *rules_file, *smotd_file;
 	char 		*botmotd_file, *opermotd_file;
@@ -1713,7 +1719,7 @@ struct ConfigItem_sni {
 struct ConfigItem_vhost {
 	ConfigItem_vhost 	*prev, *next;
 	ConfigFlag 	flag;
-	ConfigItem_mask *mask;
+	SecurityGroup	*match;
 	char		*login, *virthost, *virtuser;
 	SWhois *swhois;
 	AuthConfig	*auth;
@@ -1725,9 +1731,10 @@ struct ConfigItem_link {
 	/* config options: */
 	char *servername; /**< Name of the server ('link <servername> { }') */
 	struct {
-		ConfigItem_mask *mask; /**< incoming mask(s) to accept */
+		SecurityGroup *match; /**< incoming mask(s) to accept */
 	} incoming;
 	struct {
+		char *file; /**< UNIX domain socket to connect to */
 		char *bind_ip; /**< Our IP to bind to when doing the connect */
 		char *hostname; /**< Hostname or IP to connect to */
 		int port; /**< Port to connect to */
@@ -1779,14 +1786,14 @@ struct ConfigItem_deny_channel {
 	ConfigFlag		flag;
 	char			*channel, *reason, *redirect, *class;
 	unsigned char	warn;
-	ConfigItem_mask *mask;
+	SecurityGroup		*match;
 };
 
 struct ConfigItem_allow_channel {
 	ConfigItem_allow_channel		*prev, *next;
 	ConfigFlag		flag;
 	char			*channel, *class;
-	ConfigItem_mask *mask;
+	SecurityGroup		*match;
 };
 
 struct ConfigItem_allow_dcc {
@@ -1859,11 +1866,28 @@ struct SecurityGroup {
 	SecurityGroup *prev, *next;
 	int priority;
 	char name[SECURITYGROUPLEN+1];
+	NameValuePrioList *printable_list;
+	int printable_list_counter;
+	/* Include */
 	int identified;
 	int reputation_score;
+	long connect_time;
 	int webirc;
 	int tls;
-	ConfigItem_mask *include_mask;
+	NameList *ip;
+	ConfigItem_mask *mask;
+	NameList *security_group;
+	NameValuePrioList *extended;
+	/* Exclude */
+	int exclude_identified;
+	int exclude_reputation_score;
+	long exclude_connect_time;
+	int exclude_webirc;
+	int exclude_tls;
+	NameList *exclude_ip;
+	ConfigItem_mask *exclude_mask;
+	NameList *exclude_security_group;
+	NameValuePrioList *exclude_extended;
 };
 
 #define HM_HOST 1
@@ -2241,6 +2265,10 @@ typedef enum WhoisConfigDetails {
 	WHOIS_CONFIG_DETAILS_LIMITED	= 2,
 	WHOIS_CONFIG_DETAILS_FULL	= 3,
 } WhoisConfigDetails;
+
+/* Options for StripControlCodesEx() */
+#define UNRL_STRIP_LOW_ASCII    0x1     /**< Strip all ASCII < 32 (control codes) */
+#define UNRL_STRIP_KEEP_LF      0x2     /**< Do not strip LF (line feed, \n) */
 
 #endif /* __struct_include__ */
 

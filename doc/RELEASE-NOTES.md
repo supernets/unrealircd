@@ -1,14 +1,182 @@
-UnrealIRCd 6.0.3
-=================
+UnrealIRCd 6.0.4.2
+===================
+Another small update to 6.0.4.x:
 
-A number of serious issues were discovered in UnrealIRCd 6. Among these is
-an issue which will likely crash the IRCd sooner or later if you /REHASH
-with any active clients connected.
-We suggest everyone who is running UnrealIRCd 6 to upgrade to 6.0.3.
+* Fix crash when linking. This requires a certain sequence of events: first
+  a server is linked in successfully, then we need to REHASH, and then a new
+  link attempt has to come in with the same server name (for example because
+  there is a network issue and the old link has not timed out yet).
+  If all that happens, then an UnreaIRCd 6 server may crash, but not always.
+* Two IRCv3 specifications were ratified which we already supported as drafts:
+  * Change CAP `draft/extended-monitor` to `extended-monitor`
+  * Add message-tag `bot` next to existing (for now) `draft/bot`
+* Update Turkish translations
+
+UnrealIRCd 6.0.4.1
+===================
+This is a small update to 6.0.4. It fixes the following issues that were
+present in all 6.0.x versions:
+
+* Fix sporadic crash when linking a server (after successful authentication).
+  This feels like a compiler bug. It affected only some people with GCC and
+  only in some situations. When compiled with clang there was no problem.
+  Hopefully we can work around it this way.
+* Make /INVITE bypass (nearly) all channel mode restrictions, as it used to
+  be in UnrealIRCd 5.x. Both for invites by channel ops and for OperOverride.
+  This also fixes a bug where an IRCOp with OperOverride could not bypass +l
+  (limit) and other restrictions and would have to resort back to using
+  MODE or SAMODE. Only +b and +i could be bypassed via INVITE OperOverride.
+
+UnrealIRCd 6.0.4
+-----------------
+This release comes with lots of features and enhancements. In particular,
+security groups and mask items now allow you to write cleaner and more
+flexible configuration files. There are also JSON logging enhancements and
+several bug fixes. Thanks a lot to everyone who tested the release candidates!
 
 If you are already running UnrealIRCd 6 then read below. Otherwise, jump
 straight to the [summary about UnrealIRCd 6](#Summary) to learn more
 about UnrealIRCd 6.
+
+### Enhancements:
+* Show security groups in `WHOIS`
+* The [security-group block](https://www.unrealircd.org/docs/Security-group_block)
+  has been expanded and the same functionality is now available in
+  [mask items](https://www.unrealircd.org/docs/Mask_item) too:
+  * This means the existing options like `identified`, `webirc`, `tls` and
+    `reputation-score` can be used in `allow::mask` etc.
+  * New options (in both security-group and mask) are:
+    * `connect-time`: time a user is connected to IRC
+    * `security-group`: to check another security group
+    * `account`: services account name
+    * `country`: country code, as found by GeoIP
+    * `realname`: realname (gecos) of the user
+    * `certfp`: certificate fingerprint
+  * Every option also has an exclude- variant, eg. `exclude-country`.
+    If a user matches any `exclude-` option then it is considered not a match.
+  * The modules [connthrottle](https://www.unrealircd.org/docs/Connthrottle),
+    [restrict-commands](https://www.unrealircd.org/docs/Set_block#set::restrict-commands)
+    and [antirandom](https://www.unrealircd.org/docs/Set_block#set::antirandom)
+    now use the new `except` sub-block which is a mask item. The old syntax
+    (eg <code>set::antirandom::except-webirc</code>) is still accepted by UnrealIRCd
+    and converted to the appropriate new setting behind the scenes
+    (<code>set::antirandom::except::webirc</code>).
+  * The modules [blacklist](https://www.unrealircd.org/docs/Blacklist_block)
+    and [antimixedutf8](https://www.unrealircd.org/docs/Set_block#set::antimixedutf8)
+    now also support the `except` block (a mask item).
+  * Other than that the extended functionality is available in these blocks:
+    `allow`, `oper`, `tld`, `vhost`, `deny channel`, `allow channel`.
+  * Example of direct use in a ::mask item:
+    ```
+    /* Spanish MOTD for Spanish speaking countries */
+    tld {
+        mask { country { ES; AR; BO; CL; CO; CR; DO; EC; SV; GT; HN; MX; NI; PA; PY; PE; PR; UY; VE; } }
+        motd "motd.es.txt";
+        rules "rules.es.txt";
+    }
+    ```
+  * Example of defining a security group and using it in a mask item later:
+    ```
+    security-group irccloud {
+        mask { ip1; ip2; ip3; ip4; }
+    }
+    allow {
+        mask { security-group irccloud; }
+        class clients;
+        maxperip 128;
+    }
+    except ban {
+        mask { security-group irccloud; }
+        type { blacklist; connect-flood; handshake-data-flood; }
+    }
+    ```
+* Because the mask item is so powerful now, the `password` in the
+  [oper block](https://www.unrealircd.org/docs/Oper_block) is optional now.
+* We now support oper::auto-login, which means the user will become IRCOp
+  automatically if they match the conditions on-connect. This can be used
+  in combination with
+  [certificate fingerprint](https://www.unrealircd.org/docs/Certificate_fingerprint)
+  authentication for example:
+  ```
+  security-group Syzop { certfp "1234etc."; }
+  oper Syzop {
+      auto-login yes;
+      mask { security-group Syzop; }
+      operclass netadmin-with-override;
+      class opers;
+  }
+  except ban {
+      mask { security-group Syzop; }
+      type all;
+  }
+  ```
+* For [JSON logging](https://www.unrealircd.org/docs/JSON_logging) a number
+  of fields were added when a client is expanded:
+  * `geoip`: with subitem `country_code` (eg. `NL`)
+  * `tls`: with subitems `cipher` and `certfp`
+  * Under subitem `users`:
+    * `vhost`: if the visible host differs from the realhost then this is
+      set (thus for both vhost and cloaked host)
+    * `cloakedhost`: this is always set (except for eg. services users), even
+      if the user is not cloaked so you can easily search on a cloaked host.
+    * `idle_since`: last time the user has spoken (local clients only)
+    * `channels`: list of channels (array), with a maximum of 384 chars.
+* The JSON logging now also strips ASCII below 32, so color- and
+  control codes.
+* Support IRCv3 `+draft/channel-context`
+* Add `example.es.conf` (Spanish example configuration file)
+* The country of users is now communicated in the
+  [message-tag](https://www.unrealircd.org/docs/Message_tags)
+  `unrealircd.org/geoip` (only to IRCOps).
+* Add support for linking servers via UNIX domain sockets
+  (`link::outgoing::file`).
+
+### Fixes:
+* Crash in `except ban` with `~security-group:xyz`
+* Crash if hideserver module was loaded but `LINKS` was not blocked.
+* Crash on Windows when using the "Rehash" GUI option.
+* Infinite loop if one security-group referred to another.
+* Duplicate entries in the `+beI` lists of `+P` channels.
+* Regular users were able to -o a service bot (that has umode +S)
+* Module manager did not stop on compile error
+* [`set::modes-on-join`](https://www.unrealircd.org/docs/Set_block#set::modes-on-join)
+  did not work with `+f` + timed bans properly, eg `[3t#b1]:10`
+* Several log messages were missing some information.
+* Reputation syncing across servers had a small glitch. Fix is mostly
+  useful for servers that were not linked to the network for days or weeks.
+
+### Changes:
+* Clarified that UnrealIRCd is licensed as "GPLv2 or later"
+* Fix use of variables in
+  [`set::reject-message](https://www.unrealircd.org/docs/Set_block#set::reject-message)
+  and in [`blacklist::reason](https://www.unrealircd.org/docs/Blacklist_block):
+  previously short forms of variables were (unintentionally) expanded
+  as well, such as `$serv` for `$server`. This is no longer supported, you need
+  to use the correct full variable names.
+
+### Developers and protocol:
+* The `creationtime` is now communicated of users. Until now this
+  information was only known locally (the thing that was communicated
+  that came close was "last nick change" but that is not the same).
+  This is synced via (early) moddata across servers.
+  Module coders can use `get_connected_time()`.
+* The `RPL_HOSTHIDDEN` is now sent from `userhost_changed()` so you
+  don't explicitly send it yourself anymore.
+* The `SVSO` command is back, so services can make people IRCOp again.
+  See `HELPOP SVSO` or [the commit](https://github.com/unrealircd/unrealircd/commit/50e5d91c798e7d07ca0c68d9fca302a6b6610786)
+  for more information.
+* Due to last change the `HOOKTYPE_LOCAL_OPER` parameters were changed.
+* Module coders can enhance the
+  [JSON logging](https://www.unrealircd.org/docs/JSON_logging)
+  expansion items for clients and channels via new hooks like
+  `HOOKTYPE_JSON_EXPAND_CLIENT`. This is used by the geoip and tls modules.
+
+UnrealIRCd 6.0.3
+-----------------
+A number of serious issues were discovered in UnrealIRCd 6. Among these is
+an issue which will likely crash the IRCd sooner or later if you /REHASH
+with any active clients connected.
+We suggest everyone who is running UnrealIRCd 6 to upgrade to 6.0.3.
 
 Fixes:
 * Crash in `WATCH` if the IRCd has been rehashed at least once. After doing

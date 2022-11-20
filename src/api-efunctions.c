@@ -57,8 +57,9 @@ TKL *(*tkl_add_spamfilter)(int type, unsigned short target, unsigned short actio
                                time_t expire_at, time_t set_at,
                                time_t spamf_tkl_duration, const char *spamf_tkl_reason,
                                int flags);
-TKL *(*tkl_add_banexception)(int type, const char *usermask, const char *hostmask, const char *reason, const char *set_by,
-                                time_t expire_at, time_t set_at, int soft, const char *bantypes, int flags);
+TKL *(*tkl_add_banexception)(int type, const char *usermask, const char *hostmask, SecurityGroup *match,
+                             const char *reason, const char *set_by,
+                             time_t expire_at, time_t set_at, int soft, const char *bantypes, int flags);
 TKL *(*tkl_del_line)(TKL *tkl);
 void (*tkl_check_local_remove_shun)(TKL *tmp);
 int (*find_tkline_match)(Client *client, int skip_soft);
@@ -74,10 +75,9 @@ int (*match_spamfilter)(Client *client, const char *str_in, int type, const char
 int (*match_spamfilter_mtags)(Client *client, MessageTag *mtags, const char *cmd);
 int (*join_viruschan)(Client *client, TKL *tk, int type);
 const char *(*StripColors)(const char *text);
-const char *(*StripControlCodes)(const char *text);
 void (*spamfilter_build_user_string)(char *buf, const char *nick, Client *client);
 void (*send_protoctl_servers)(Client *client, int response);
-int (*verify_link)(Client *client, ConfigItem_link **link_out);
+ConfigItem_link *(*verify_link)(Client *client);
 void (*introduce_user)(Client *to, Client *client);
 void (*send_server_message)(Client *client);
 void (*broadcast_md_client)(ModDataInfo *mdi, Client *client, ModData *md);
@@ -135,6 +135,8 @@ int (*watch_check)(Client *client, int reply, int (*watch_notify)(Client *client
 void (*do_unreal_log_remote_deliver)(LogLevel loglevel, const char *subsystem, const char *event_id, MultiLine *msg, const char *json_serialized);
 char *(*get_chmodes_for_user)(Client *client, const char *flags);
 WhoisConfigDetails (*whois_get_policy)(Client *client, Client *target, const char *name);
+int (*make_oper)(Client *client, const char *operblock_name, const char *operclass, ConfigItem_class *clientclass, long modes, const char *snomask, const char *vhost);
+int (*unreal_match_iplist)(Client *client, NameList *l);
 
 Efunction *EfunctionAddMain(Module *module, EfunctionType eftype, int (*func)(), void (*vfunc)(), void *(*pvfunc)(), char *(*stringfunc)(), const char *(*conststringfunc)())
 {
@@ -339,7 +341,6 @@ void efunctions_init(void)
 	efunc_init_function(EFUNC_MATCH_SPAMFILTER_MTAGS, match_spamfilter_mtags, NULL);
 	efunc_init_function(EFUNC_JOIN_VIRUSCHAN, join_viruschan, NULL);
 	efunc_init_function(EFUNC_STRIPCOLORS, StripColors, NULL);
-	efunc_init_function(EFUNC_STRIPCONTROLCODES, StripControlCodes, NULL);
 	efunc_init_function(EFUNC_SPAMFILTER_BUILD_USER_STRING, spamfilter_build_user_string, NULL);
 	efunc_init_function(EFUNC_SEND_PROTOCTL_SERVERS, send_protoctl_servers, NULL);
 	efunc_init_function(EFUNC_VERIFY_LINK, verify_link, NULL);
@@ -406,4 +407,6 @@ void efunctions_init(void)
 	efunc_init_function(EFUNC_DO_UNREAL_LOG_REMOTE_DELIVER, do_unreal_log_remote_deliver, do_unreal_log_remote_deliver_default_handler);
 	efunc_init_function(EFUNC_GET_CHMODES_FOR_USER, get_chmodes_for_user, NULL);
 	efunc_init_function(EFUNC_WHOIS_GET_POLICY, whois_get_policy, NULL);
+	efunc_init_function(EFUNC_MAKE_OPER, make_oper, make_oper_default_handler);
+	efunc_init_function(EFUNC_UNREAL_MATCH_IPLIST, unreal_match_iplist, NULL);
 }

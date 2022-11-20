@@ -178,7 +178,7 @@ EXP_OBJ_FILES=src/ircd_vars.obj src/channel.obj src/send.obj src/socket.obj \
  src/fdlist.obj src/dbuf.obj  \
  src/hash.obj src/parse.obj \
  src/whowas.obj \
- src/misc.obj src/match.obj src/crule.obj \
+ src/securitygroup.obj src/misc.obj src/match.obj src/crule.obj \
  src/debug.obj  src/support.obj src/list.obj \
  src/serv.obj src/user.obj \
  src/version.obj src/ircsprintf.obj \
@@ -254,6 +254,7 @@ DLL_FILES=\
  src/modules/close.dll \
  src/modules/connect.dll \
  src/modules/connthrottle.dll \
+ src/modules/creationtime.dll \
  src/modules/cycle.dll \
  src/modules/dccallow.dll \
  src/modules/dccdeny.dll \
@@ -278,6 +279,7 @@ DLL_FILES=\
  src/modules/geoip_base.dll \
  src/modules/geoip_classic.dll \
  src/modules/geoip_csv.dll \
+ src/modules/geoip-tag.dll \
  src/modules/globops.dll \
  src/modules/help.dll \
  src/modules/hideserver.dll \
@@ -364,6 +366,7 @@ DLL_FILES=\
  src/modules/svsnline.dll \
  src/modules/svsnolag.dll \
  src/modules/svsnoop.dll \
+ src/modules/svso.dll \
  src/modules/svspart.dll \
  src/modules/svssilence.dll \
  src/modules/svssno.dll \
@@ -379,6 +382,7 @@ DLL_FILES=\
  src/modules/trace.dll \
  src/modules/tsctl.dll \
  src/modules/typing-indicator.dll \
+ src/modules/channel-context.dll \
  src/modules/umode2.dll \
  src/modules/unreal_server_compat.dll \
  src/modules/unsqline.dll \
@@ -501,6 +505,9 @@ src/conf_preprocessor.obj: src/conf_preprocessor.c $(INCLUDES)
 
 src/debug.obj: src/debug.c $(INCLUDES)
         $(CC) $(CFLAGS) src/debug.c
+
+src/securitygroup.obj: src/securitygroup.c $(INCLUDES)
+        $(CC) $(CFLAGS) src/securitygroup.c
 
 src/misc.obj: src/misc.c $(INCLUDES) ./include/dbuf.h
         $(CC) $(CFLAGS) src/misc.c
@@ -828,6 +835,9 @@ src/modules/connect.dll: src/modules/connect.c $(INCLUDES)
 src/modules/connthrottle.dll: src/modules/connthrottle.c $(INCLUDES)
 	$(CC) $(MODCFLAGS) src/modules/connthrottle.c /Fesrc/modules/ /Fosrc/modules/ /Fdsrc/modules/connthrottle.pdb $(MODLFLAGS)
 
+src/modules/creationtime.dll: src/modules/creationtime.c $(INCLUDES)
+	$(CC) $(MODCFLAGS) src/modules/creationtime.c /Fesrc/modules/ /Fosrc/modules/ /Fdsrc/modules/creationtime.pdb $(MODLFLAGS)
+
 src/modules/cycle.dll: src/modules/cycle.c $(INCLUDES)
 	$(CC) $(MODCFLAGS) src/modules/cycle.c /Fesrc/modules/ /Fosrc/modules/ /Fdsrc/modules/cycle.pdb $(MODLFLAGS)
 
@@ -899,6 +909,9 @@ src/modules/geoip_classic.dll: src/modules/geoip_classic.c $(INCLUDES)
 
 src/modules/geoip_csv.dll: src/modules/geoip_csv.c $(INCLUDES)
 	$(CC) $(MODCFLAGS) src/modules/geoip_csv.c /Fesrc/modules/ /Fosrc/modules/ /Fdsrc/modules/geoip_csv.pdb $(MODLFLAGS)
+
+src/modules/geoip-tag.dll: src/modules/geoip-tag.c $(INCLUDES)
+	$(CC) $(MODCFLAGS) src/modules/geoip-tag.c /Fesrc/modules/ /Fosrc/modules/ /Fdsrc/modules/geoip-tag.pdb $(MODLFLAGS)
 
 src/modules/geoip_maxmind.dll: src/modules/geoip_maxmind.c $(INCLUDES)
 	$(CC) $(MODCFLAGS) src/modules/geoip_maxmind.c /Fesrc/modules/ /Fosrc/modules/ /Fdsrc/modules/geoip_maxmind.pdb $(MODLFLAGS)
@@ -1161,6 +1174,9 @@ src/modules/svsnolag.dll: src/modules/svsnolag.c $(INCLUDES)
 src/modules/svsnoop.dll: src/modules/svsnoop.c $(INCLUDES)
 	$(CC) $(MODCFLAGS) src/modules/svsnoop.c /Fesrc/modules/ /Fosrc/modules/ /Fdsrc/modules/svsnoop.pdb $(MODLFLAGS)
 
+src/modules/svso.dll: src/modules/svso.c $(INCLUDES)
+	$(CC) $(MODCFLAGS) src/modules/svso.c /Fesrc/modules/ /Fosrc/modules/ /Fdsrc/modules/svso.pdb $(MODLFLAGS)
+
 src/modules/svspart.dll: src/modules/svspart.c $(INCLUDES)
 	$(CC) $(MODCFLAGS) src/modules/svspart.c /Fesrc/modules/ /Fosrc/modules/ /Fdsrc/modules/svspart.pdb $(MODLFLAGS)
 
@@ -1205,6 +1221,9 @@ src/modules/tsctl.dll: src/modules/tsctl.c $(INCLUDES)
 
 src/modules/typing-indicator.dll: src/modules/typing-indicator.c $(INCLUDES)
 	$(CC) $(MODCFLAGS) src/modules/typing-indicator.c /Fesrc/modules/ /Fosrc/modules/ /Fdsrc/modules/typing-indicator.pdb $(MODLFLAGS)
+
+src/modules/channel-context.dll: src/modules/channel-context.c $(INCLUDES)
+	$(CC) $(MODCFLAGS) src/modules/channel-context.c /Fesrc/modules/ /Fosrc/modules/ /Fdsrc/modules/channel-context.pdb $(MODLFLAGS)
 
 src/modules/umode2.dll: src/modules/umode2.c $(INCLUDES)
 	$(CC) $(MODCFLAGS) src/modules/umode2.c /Fesrc/modules/ /Fosrc/modules/ /Fdsrc/modules/umode2.pdb $(MODLFLAGS)

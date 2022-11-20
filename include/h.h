@@ -111,7 +111,6 @@ extern MODVAR ConfigItem_deny_version	*conf_deny_version;
 extern MODVAR ConfigItem_alias		*conf_alias;
 extern MODVAR ConfigItem_help		*conf_help;
 extern MODVAR ConfigItem_offchans	*conf_offchans;
-extern MODVAR SecurityGroup		*securitygroups;
 extern void		completed_connection(int, int, void *);
 extern void clear_unknown();
 extern EVENT(e_unload_module_delayed);
@@ -677,6 +676,7 @@ extern void unreal_setfilemodtime(const char *filename, time_t mtime);
 extern void DeleteTempModules(void);
 extern MODVAR Extban *extbaninfo;
 extern Extban *findmod_by_bantype(const char *str, const char **remainder);
+extern Extban *findmod_by_bantype_raw(const char *str, int ban_name_length);
 extern Extban *ExtbanAdd(Module *reserved, ExtbanInfo req);
 extern void ExtbanDel(Extban *);
 extern void extban_init(void);
@@ -749,8 +749,9 @@ extern MODVAR const char *(*tkl_type_string)(TKL *tk);
 extern MODVAR const char *(*tkl_type_config_string)(TKL *tk);
 extern MODVAR TKL *(*tkl_add_serverban)(int type, const char *usermask, const char *hostmask, const char *reason, const char *setby,
                                             time_t expire_at, time_t set_at, int soft, int flags);
-extern MODVAR TKL *(*tkl_add_banexception)(int type, const char *usermask, const char *hostmask, const char *reason, const char *set_by,
-                                               time_t expire_at, time_t set_at, int soft, const char *bantypes, int flags);
+extern MODVAR TKL *(*tkl_add_banexception)(int type, const char *usermask, const char *hostmask, SecurityGroup *match,
+                                           const char *reason, const char *set_by,
+                                           time_t expire_at, time_t set_at, int soft, const char *bantypes, int flags);
 extern MODVAR TKL *(*tkl_add_nameban)(int type, const char *name, int hold, const char *reason, const char *setby,
                                           time_t expire_at, time_t set_at, int flags);
 extern MODVAR TKL *(*tkl_add_spamfilter)(int type, unsigned short target, unsigned short action, Match *match, const char *setby,
@@ -779,10 +780,9 @@ extern MODVAR int (*match_spamfilter)(Client *client, const char *str_in, int ty
 extern MODVAR int (*match_spamfilter_mtags)(Client *client, MessageTag *mtags, const char *cmd);
 extern MODVAR int (*join_viruschan)(Client *client, TKL *tk, int type);
 extern MODVAR const char *(*StripColors)(const char *text);
-extern MODVAR const char *(*StripControlCodes)(const char *text);
 extern MODVAR void (*spamfilter_build_user_string)(char *buf, const char *nick, Client *acptr);
 extern MODVAR void (*send_protoctl_servers)(Client *client, int response);
-extern MODVAR int (*verify_link)(Client *client, ConfigItem_link **link_out);
+extern MODVAR ConfigItem_link *(*verify_link)(Client *client);
 extern MODVAR void (*send_server_message)(Client *client);
 extern MODVAR void (*broadcast_md_client)(ModDataInfo *mdi, Client *acptr, ModData *md);
 extern MODVAR void (*broadcast_md_channel)(ModDataInfo *mdi, Channel *channel, ModData *md);
@@ -834,6 +834,8 @@ extern MODVAR char *(*tkl_uhost)(TKL *tkl, char *buf, size_t buflen, int options
 extern MODVAR void (*do_unreal_log_remote_deliver)(LogLevel loglevel, const char *subsystem, const char *event_id, MultiLine *msg, const char *json_serialized);
 extern MODVAR char *(*get_chmodes_for_user)(Client *client, const char *flags);
 extern MODVAR WhoisConfigDetails (*whois_get_policy)(Client *client, Client *target, const char *name);
+extern MODVAR int (*make_oper)(Client *client, const char *operblock_name, const char *operclass, ConfigItem_class *clientclass, long modes, const char *snomask, const char *vhost);
+extern MODVAR int (*unreal_match_iplist)(Client *client, NameList *l);
 /* /Efuncs */
 
 /* TLS functions */
@@ -859,6 +861,7 @@ extern MODVAR EVP_MD *sha1_function;
 extern MODVAR EVP_MD *md5_function;
 /* End of TLS functions */
 
+/* Default handlers for efunctions */
 extern void parse_message_tags_default_handler(Client *client, char **str, MessageTag **mtag_list);
 extern const char *mtags_to_string_default_handler(MessageTag *m, Client *client);
 extern void *labeled_response_save_context_default_handler(void);
@@ -868,6 +871,8 @@ extern int add_silence_default_handler(Client *client, const char *mask, int sen
 extern int del_silence_default_handler(Client *client, const char *mask);
 extern int is_silenced_default_handler(Client *client, Client *acptr);
 extern void do_unreal_log_remote_deliver_default_handler(LogLevel loglevel, const char *subsystem, const char *event_id, MultiLine *msg, const char *json_serialized);
+extern int make_oper_default_handler(Client *client, const char *operblock_name, const char *operclass, ConfigItem_class *clientclass, long modes, const char *snomask, const char *vhost);
+/* End of default handlers for efunctions */
 
 extern MODVAR MOTDFile opermotd, svsmotd, motd, botmotd, smotd, rules;
 extern MODVAR int max_connection_count;
@@ -925,10 +930,6 @@ extern void unreal_delete_match(Match *m);
 extern int unreal_match(Match *m, const char *str);
 extern int unreal_match_method_strtoval(const char *str);
 extern char *unreal_match_method_valtostr(int val);
-extern void unreal_delete_masks(ConfigItem_mask *m);
-extern void unreal_add_masks(ConfigItem_mask **head, ConfigEntry *ce);
-extern int unreal_mask_match(Client *acptr, ConfigItem_mask *m);
-extern int unreal_mask_match_string(const char *name, ConfigItem_mask *m);
 #ifdef _WIN32
 extern MODVAR BOOL IsService;
 #endif
@@ -946,7 +947,7 @@ extern void modulemanager(int argc, char *argv[]);
 extern int inet_pton4(const char *src, unsigned char *dst);
 extern int inet_pton6(const char *src, unsigned char *dst);
 extern int unreal_bind(int fd, const char *ip, int port, SocketType socket_type);
-extern int unreal_connect(int fd, const char *ip, int port, int ipv6);
+extern int unreal_connect(int fd, const char *ip, int port, SocketType socket_type);
 extern int is_valid_ip(const char *str);
 extern int ipv6_capable(void);
 extern int unix_sockets_capable(void);
@@ -1092,14 +1093,6 @@ extern int hide_idle_time(Client *client, Client *target);
 extern void lost_server_link(Client *serv, const char *tls_error_string);
 extern const char *sendtype_to_cmd(SendType sendtype);
 extern MODVAR MessageTagHandler *mtaghandlers;
-extern int security_group_valid_name(const char *name);
-extern int security_group_exists(const char *name);
-extern SecurityGroup *add_security_group(const char *name, int order);
-extern SecurityGroup *find_security_group(const char *name);
-extern void free_security_group(SecurityGroup *s);
-extern void set_security_group_defaults(void);
-extern int user_allowed_by_security_group(Client *client, SecurityGroup *s);
-extern int user_allowed_by_security_group_name(Client *client, const char *secgroupname);
 #define nv_find_by_name(stru, name)       do_nv_find_by_name(stru, name, ARRAY_SIZEOF((stru)))
 extern long do_nv_find_by_name(NameValue *table, const char *cmd, int numelements);
 #define nv_find_by_value(stru, value)       do_nv_find_by_value(stru, value, ARRAY_SIZEOF((stru)))
@@ -1119,6 +1112,9 @@ extern void add_fmt_nvplist(NameValuePrioList **lst, int priority, const char *n
 extern void add_nvplist_numeric_fmt(NameValuePrioList **lst, int priority, const char *name, Client *to, int numeric, FORMAT_STRING(const char *pattern), ...) __attribute__((format(printf,6,7)));
 extern NameValuePrioList *find_nvplist(NameValuePrioList *list, const char *name);
 extern void free_nvplist(NameValuePrioList *lst);
+extern void unreal_add_name_values(NameValuePrioList **n, const char *name, ConfigEntry *ce);
+extern const char *namevalue(NameValuePrioList *n);
+extern const char *namevalue_nospaces(NameValuePrioList *n);
 extern const char *get_connect_extinfo(Client *client);
 extern char *unreal_strftime(const char *str);
 extern void strtolower(char *str);
@@ -1132,6 +1128,30 @@ extern void read_until(char **p, char *stopchars);
 extern int is_ip_valid(const char *ip);
 extern int is_file_readable(const char *file, const char *dir);
 json_t *json_string_unreal(const char *s);
+/* securitygroup.c start */
+extern MODVAR SecurityGroup *securitygroups;
+extern void unreal_delete_masks(ConfigItem_mask *m);
+extern void unreal_add_masks(ConfigItem_mask **head, ConfigEntry *ce);
+extern int unreal_mask_match(Client *acptr, ConfigItem_mask *m);
+extern int unreal_mask_match_string(const char *name, ConfigItem_mask *m);
+extern int test_match_item(ConfigFile *conf, ConfigEntry *cep, int *errors);
+extern int test_match_block(ConfigFile *conf, ConfigEntry *ce, int *errors_out);
+extern int test_match_block_too_broad(ConfigFile *conf, ConfigEntry *ce);
+extern int security_group_valid_name(const char *name);
+extern int security_group_exists(const char *name);
+extern SecurityGroup *add_security_group(const char *name, int order);
+extern SecurityGroup *find_security_group(const char *name);
+extern void free_security_group(SecurityGroup *s);
+extern void set_security_group_defaults(void);
+extern int user_allowed_by_security_group(Client *client, SecurityGroup *s);
+extern int user_allowed_by_security_group_name(Client *client, const char *secgroupname);
+extern const char *get_security_groups(Client *client);
+extern int test_match_item(ConfigFile *conf, ConfigEntry *cep, int *errors);
+extern int conf_match_item(ConfigFile *conf, ConfigEntry *cep, SecurityGroup **block);
+extern int test_match_block(ConfigFile *conf, ConfigEntry *ce, int *errors_out);
+extern int conf_match_block(ConfigFile *conf, ConfigEntry *ce, SecurityGroup **block);
+extern int test_extended_list(Extban *extban, ConfigEntry *cep, int *errors);
+/* securitygroup.c end */
 /* src/unrealdb.c start */
 extern UnrealDB *unrealdb_open(const char *filename, UnrealDBMode mode, char *secret_block);
 extern int unrealdb_close(UnrealDB *c);
@@ -1249,3 +1269,6 @@ extern void add_proc_io_server(void);
 extern void procio_post_rehash(int failure);
 /* end of proc i/o */
 extern int minimum_msec_since_last_run(struct timeval *tv_old, long minimum);
+extern long get_connected_time(Client *client);
+extern const char *StripControlCodes(const char *text);
+extern const char *StripControlCodesEx(const char *text, char *output, size_t outputlen, int strip_flags);

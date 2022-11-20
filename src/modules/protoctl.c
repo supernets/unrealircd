@@ -206,7 +206,7 @@ CMD_FUNC(cmd_protoctl)
 			if ((aclient = hash_find_id(sid, NULL)) != NULL)
 			{
 				unreal_log(ULOG_ERROR, "link", "LINK_DENIED_SID_COLLISION", client,
-					   "Server link $client rejected. Server with SID $sid already exist via uplink $exiting_client.server.uplink.",
+					   "Server link $client rejected. Server with SID $sid already exist via uplink $existing_client.server.uplink.",
 					   log_data_string("sid", sid),
 					   log_data_client("existing_client", aclient));
 				exit_client(client, NULL, "SID collision");
@@ -266,7 +266,7 @@ CMD_FUNC(cmd_protoctl)
 			 */
 			strlcpy(client->name, servername, sizeof(client->name));
 
-			if (!verify_link(client, &aconf))
+			if (!(aconf = verify_link(client)))
 				return;
 
 			/* note: software, protocol and flags may be NULL */

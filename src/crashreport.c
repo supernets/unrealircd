@@ -1,6 +1,6 @@
 /* UnrealIRCd crash reporter code.
  * (C) Copyright 2015-2019 Bram Matthys ("Syzop") and the UnrealIRCd Team.
- * License: GPLv2
+ * License: GPLv2 or later
  */
 
 #include "unrealircd.h"
@@ -306,7 +306,7 @@ int crash_report_asan_log(FILE *reportfd, char *coredump)
 		stripcrlf(buf);
 		fprintf(reportfd, " %s\n", buf);
 	}
-	n = pclose(fd);
+	n = fclose(fd);
 	fprintf(reportfd, "END OF ASAN LOG\n");
 
 	if (WEXITSTATUS(n) == 127)

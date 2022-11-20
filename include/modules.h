@@ -450,8 +450,11 @@ struct Extban {
 	/** extbans module */
 	Module *owner;
 
-	/* Set to 1 during rehash when module is unloading (which may be re-used, and then set to 0) */
+	/** Set to 1 during rehash when module is unloading (which may be re-used, and then set to 0) */
 	char unloaded;
+
+	/** Set to 1 when it is preregistered in MOD_TEST already */
+	char preregistered;
 };
 
 typedef struct {
@@ -1097,8 +1100,8 @@ extern void SavePersistentLongX(ModuleInfo *modinfo, const char *varshortname, l
 #define HOOKTYPE_SEE_CHANNEL_IN_WHOIS	77
 /** See hooktype_join_data() */
 #define HOOKTYPE_JOIN_DATA	78
-/** See hooktype_oper_invite_ban() */
-#define HOOKTYPE_OPER_INVITE_BAN	79
+/** See hooktype_invite_bypass() */
+#define HOOKTYPE_INVITE_BYPASS	79
 /** See hooktype_view_topic_outside_channel() */
 #define HOOKTYPE_VIEW_TOPIC_OUTSIDE_CHANNEL	80
 /** See hooktype_chan_permit_nick_change() */
@@ -1159,6 +1162,15 @@ extern void SavePersistentLongX(ModuleInfo *modinfo, const char *varshortname, l
 #define HOOKTYPE_CAN_SET_TOPIC	110
 /** See hooktype_ip_change() */
 #define HOOKTYPE_IP_CHANGE	111
+/** See hooktype_json_expand_client() */
+#define HOOKTYPE_JSON_EXPAND_CLIENT	112
+/** See hooktype_json_expand_client() */
+#define HOOKTYPE_JSON_EXPAND_CLIENT_USER	113
+/** See hooktype_json_expand_client() */
+#define HOOKTYPE_JSON_EXPAND_CLIENT_SERVER	114
+/** See hooktype_json_expand_channel() */
+#define HOOKTYPE_JSON_EXPAND_CHANNEL	115
+
 /* Adding a new hook here?
  * 1) Add the #define HOOKTYPE_.... with a new number
  * 2) Add a hook prototype (see below)
@@ -1683,9 +1695,10 @@ int hooktype_stats(Client *client, const char *str);
  * @param client		The client
  * @param add			1 if the user becomes IRCOp, 0 if the user is no longer IRCOp
  * @param oper_block		The name of the oper block used to oper up
+ * @param operclass		The name of the operclass
  * @return The return value is ignored (use return 0)
  */
-int hooktype_local_oper(Client *client, int add, ConfigItem_oper *oper_block);
+int hooktype_local_oper(Client *client, int add, const char *oper_block, const char *operclass);
 
 /** Called when a client sends a PASS command (function prototype for HOOKTYPE_LOCAL_PASS).
  * @param client		The client
@@ -1858,14 +1871,16 @@ int hooktype_see_channel_in_whois(Client *client, Client *target, Channel *chann
  */
 int hooktype_join_data(Client *who, Channel *channel);
 
-/** Should the user be able to bypass bans? (function prototype for HOOKTYPE_OPER_INVITE_BAN).
+/** Should the user be able to bypass channel restrictions because they are invited? (function prototype for HOOKTYPE_INVITE_BYPASS).
  * @param client		The client
  * @param channel		The channel
- * @note The actual meaning of this hook is more complex, you are unlikely to use it, anyway.
- * @retval HOOK_DENY		Deny the join if the user is also banned
+ * @retval HOOK_DENY		Don't allow the user to bypass channel restrictions when they are invited
  * @retval HOOK_CONTINUE	Obey the normal rules
+ * @note Usually you want a user to be able to bypass channel restrictions such as +l or +b when they are /INVITEd by another user
+ *       or have invited themselves (OperOverride). But, there may be special cases where you don't want this.
+ *       For example, this hook is used by +O to still not allow ircops to join +O channels even if they have OperOverride capability.
  */
-int hooktype_oper_invite_ban(Client *client, Channel *channel);
+int hooktype_invite_bypass(Client *client, Channel *channel);
 
 /** Should a user be able to view the topic when not in the channel? (function prototype for HOOKTYPE_VIEW_TOPIC_OUTSIDE_CHANNEL).
  * @param client		The client requesting the topic
@@ -2145,6 +2160,46 @@ int hooktype_realname_change(Client *client, const char *oldinfo);
  */
 int hooktype_ip_change(Client *client, const char *oldip);
 
+/** Called when json_expand_client() is called.
+ * Used for expanding information about 'client' in logging routines.
+ * @param client		The client that should be expanded
+ * @param detail		The amount of detail to provide (always 0 at the moment)
+ * @param j			The JSON object
+ * @return The return value is ignored (use return 0)
+ */
+int hooktype_json_expand_client(Client *client, int detail, json_t *j);
+
+/** Called when json_expand_client_user() is called.
+ * Used for expanding information about 'client' in logging routines
+ * when the client is a USER.
+ * @param client		The client that should be expanded
+ * @param detail		The amount of detail to provide (always 0 at the moment)
+ * @param j			The JSON object - root
+ * @param child			The JSON object - "user" child item
+ * @return The return value is ignored (use return 0)
+ */
+int hooktype_json_expand_client_user(Client *client, int detail, json_t *j, json_t *child);
+
+/** Called when json_expand_client_server() is called.
+ * Used for expanding information about 'client' in logging routines
+ * when the client is a SERVER.
+ * @param client		The client that should be expanded
+ * @param detail		The amount of detail to provide (always 0 at the moment)
+ * @param j			The JSON object - root
+ * @param child			The JSON object - "server" child item
+ * @return The return value is ignored (use return 0)
+ */
+int hooktype_json_expand_client_server(Client *client, int detail, json_t *j, json_t *child);
+
+/** Called when json_expand_channel() is called.
+ * Used for expanding information about 'channel' in logging routines.
+ * @param channel		The channel that should be expanded
+ * @param detail		The amount of detail to provide (always 0 at the moment)
+ * @param j			The JSON object
+ * @return The return value is ignored (use return 0)
+ */
+int hooktype_json_expand_channel(Channel *channel, int detail, json_t *j);
+
 /** @} */
 
 #ifdef GCC_TYPECHECKING
@@ -2223,7 +2278,7 @@ _UNREAL_ERROR(_hook_error_incompatible, "Incompatible hook function. Check argum
         ((hooktype == HOOKTYPE_JOIN_DATA) && !ValidateHook(hooktype_join_data, func)) || \
         ((hooktype == HOOKTYPE_PRE_KNOCK) && !ValidateHook(hooktype_pre_knock, func)) || \
         ((hooktype == HOOKTYPE_PRE_INVITE) && !ValidateHook(hooktype_pre_invite, func)) || \
-        ((hooktype == HOOKTYPE_OPER_INVITE_BAN) && !ValidateHook(hooktype_oper_invite_ban, func)) || \
+        ((hooktype == HOOKTYPE_INVITE_BYPASS) && !ValidateHook(hooktype_invite_bypass, func)) || \
         ((hooktype == HOOKTYPE_VIEW_TOPIC_OUTSIDE_CHANNEL) && !ValidateHook(hooktype_view_topic_outside_channel, func)) || \
         ((hooktype == HOOKTYPE_CHAN_PERMIT_NICK_CHANGE) && !ValidateHook(hooktype_chan_permit_nick_change, func)) || \
         ((hooktype == HOOKTYPE_IS_CHANNEL_SECURE) && !ValidateHook(hooktype_is_channel_secure, func)) || \
@@ -2259,7 +2314,11 @@ _UNREAL_ERROR(_hook_error_incompatible, "Incompatible hook function. Check argum
         ((hooktype == HOOKTYPE_POST_REMOTE_NICKCHANGE) && !ValidateHook(hooktype_post_remote_nickchange, func)) || \
         ((hooktype == HOOKTYPE_USERHOST_CHANGE) && !ValidateHook(hooktype_userhost_change, func)) || \
         ((hooktype == HOOKTYPE_REALNAME_CHANGE) && !ValidateHook(hooktype_realname_change, func)) || \
-        ((hooktype == HOOKTYPE_IP_CHANGE) && !ValidateHook(hooktype_ip_change, func)) ) \
+        ((hooktype == HOOKTYPE_IP_CHANGE) && !ValidateHook(hooktype_ip_change, func)) || \
+        ((hooktype == HOOKTYPE_JSON_EXPAND_CLIENT) && !ValidateHook(hooktype_json_expand_client, func)) || \
+        ((hooktype == HOOKTYPE_JSON_EXPAND_CLIENT_USER) && !ValidateHook(hooktype_json_expand_client_user, func)) || \
+        ((hooktype == HOOKTYPE_JSON_EXPAND_CLIENT_SERVER) && !ValidateHook(hooktype_json_expand_client_server, func)) || \
+        ((hooktype == HOOKTYPE_JSON_EXPAND_CHANNEL) && !ValidateHook(hooktype_json_expand_channel, func)) ) \
         _hook_error_incompatible();
 #endif /* GCC_TYPECHECKING */
 
@@ -2315,7 +2374,6 @@ enum EfunctionType {
 	EFUNC_FIND_TKLINE_MATCH_ZAP_EX,
 	EFUNC_SEND_LIST,
 	EFUNC_STRIPCOLORS,
-	EFUNC_STRIPCONTROLCODES,
 	EFUNC_SPAMFILTER_BUILD_USER_STRING,
 	EFUNC_SEND_PROTOCTL_SERVERS,
 	EFUNC_VERIFY_LINK,
@@ -2384,6 +2442,8 @@ enum EfunctionType {
 	EFUNC_DO_UNREAL_LOG_REMOTE_DELIVER,
 	EFUNC_GET_CHMODES_FOR_USER,
 	EFUNC_WHOIS_GET_POLICY,
+	EFUNC_MAKE_OPER,
+	EFUNC_UNREAL_MATCH_IPLIST,
 };
 
 /* Module flags */
