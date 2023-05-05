@@ -80,8 +80,10 @@ int is_valid_extban_name(const char *p)
 {
 	if (!*p)
 		return 0; /* empty name */
+	if (strlen(p) > 32)
+		return 0; /* too long */
 	for (; *p; p++)
-		if (!isalnum(*p) && !strchr("_-", *p))
+		if (!islower(*p) && !isdigit(*p) && !strchr("_-", *p))
 			return 0;
 	return 1;
 }
@@ -169,6 +171,15 @@ Extban *ExtbanAdd(Module *module, ExtbanInfo req)
 		return NULL;
 	}
 
+	if (!req.conv_param)
+	{
+		module->errorcode = MODERR_INVALID;
+		unreal_log(ULOG_ERROR, "module", "EXTBANADD_API_ERROR", NULL,
+			   "ExtbanAdd(): conv_param event missing. Module: $module_name",
+			   log_data_string("module_name", module->header->name));
+		return NULL;
+	}
+
 	for (e=extbans; e; e = e->next)
 	{
 		if (e->letter == req.letter)
@@ -188,6 +199,7 @@ Extban *ExtbanAdd(Module *module, ExtbanInfo req)
 				 */
 				e->preregistered = 0;
 				existing = 1;
+				break;
 			} else
 			if (module->flags == MODFLAG_NONE)
 			{
@@ -360,33 +372,12 @@ int extban_is_ok_nuh_extban(BanContext *b)
  */
 const char *extban_conv_param_nuh(BanContext *b, Extban *extban)
 {
-	char *cp, *user, *host, *mask, *ret = NULL;
-	static char retbuf[USERLEN + NICKLEN + HOSTLEN + 32];
 	char tmpbuf[USERLEN + NICKLEN + HOSTLEN + 32];
+	static char retbuf[USERLEN + NICKLEN + HOSTLEN + 32];
 
 	/* Work on a copy */
 	strlcpy(tmpbuf, b->banstr, sizeof(retbuf));
-	mask = tmpbuf;
-
-	if (!*mask)
-		return NULL; /* empty extban */
-	if ((*mask == '~') && !strchr(mask, '@'))
-		return NULL; /* not a user@host ban, too confusing. */
-	if ((user = strchr((cp = mask), '!')))
-		*user++ = '\0';
-	if ((host = strrchr(user ? user : cp, '@')))
-	{
-		*host++ = '\0';
-		if (!user)
-			ret = make_nick_user_host(NULL, trim_str(cp,USERLEN), trim_str(host,HOSTLEN));
-	}
-	else if (!user && strchr(cp, '.'))
-		ret = make_nick_user_host(NULL, NULL, trim_str(cp,HOSTLEN));
-	if (!ret)
-		ret = make_nick_user_host(trim_str(cp,NICKLEN), trim_str(user,USERLEN), trim_str(host,HOSTLEN));
-
-	strlcpy(retbuf, ret, sizeof(retbuf));
-	return retbuf;
+	return convert_regular_ban(tmpbuf, retbuf, sizeof(retbuf));
 }
 
 /** conv_param to deal with stacked extbans.
@@ -440,25 +431,11 @@ const char *extban_conv_param_nuh_or_extban(BanContext *b, Extban *self_extban)
 		return NULL;
 	}
 
-	if (extban->conv_param)
-	{
-		//BanContext *b = safe_alloc(sizeof(BanContext));
-		//b->banstr = mask; <-- this is redundant right? we can use existing 'b' context??
-		extban_recursion++;
-		ret = extban->conv_param(b, extban);
-		extban_recursion--;
-		ret = prefix_with_extban(ret, b, extban, retbuf, sizeof(retbuf));
-		//safe_free(b);
-		return ret;
-	}
-	/* I honestly don't know what the deal is with the 80 char cap in clean_ban_mask is about. So I'm leaving it out here. -- aquanight */
-	/* I don't know why it's 80, but I like a limit anyway. A ban of 500 characters can never be good... -- Syzop */
-	if (strlen(b->banstr) > 80)
-	{
-		strlcpy(retbuf, b->banstr, 128);
-		return retbuf;
-	}
-	return b->banstr;
+	extban_recursion++;
+	ret = extban->conv_param(b, extban);
+	extban_recursion--;
+	ret = prefix_with_extban(ret, b, extban, retbuf, sizeof(retbuf));
+	return ret;
 }
 
 char *prefix_with_extban(const char *remainder, BanContext *b, Extban *extban, char *buf, size_t buflen)

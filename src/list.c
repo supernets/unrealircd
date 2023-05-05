@@ -51,6 +51,7 @@ MODVAR struct list_head server_list;		/**< Locally connected servers */
 MODVAR struct list_head oper_list;		/**< Locally connected IRC Operators */
 MODVAR struct list_head global_server_list;	/**< All servers (local and remote) */
 MODVAR struct list_head dead_list;		/**< All dead clients (local and remote) that will soon be freed in the main loop */
+MODVAR struct list_head rpc_remote_list;	/**< All remote RPC clients (very specific use-case) */
 
 static mp_pool_t *client_pool = NULL;
 static mp_pool_t *local_client_pool = NULL;
@@ -75,6 +76,7 @@ void initlists(void)
 	INIT_LIST_HEAD(&control_list);
 	INIT_LIST_HEAD(&global_server_list);
 	INIT_LIST_HEAD(&dead_list);
+	INIT_LIST_HEAD(&rpc_remote_list);
 
 	client_pool = mp_pool_new(sizeof(Client), 512 * 1024);
 	local_client_pool = mp_pool_new(sizeof(LocalClient), 512 * 1024);
@@ -145,6 +147,19 @@ Client *make_client(Client *from, Client *servr)
 	return client;
 }
 
+/** Free the client->rpc struct.
+ * NOTE: if you want to fully free the entire client, call free_client()
+ */
+void free_client_rpc(Client *client)
+{
+	safe_free(client->rpc->rpc_user);
+	safe_free(client->rpc->issuer);
+	if (client->rpc->rehash_request)
+		json_decref(client->rpc->rehash_request);
+	free_log_sources(client->rpc->log_sources);
+	safe_free(client->rpc);
+}
+
 void free_client(Client *client)
 {
 	if (!list_empty(&client->client_node))
@@ -160,6 +175,19 @@ void free_client(Client *client)
 		RunHook(HOOKTYPE_FREE_CLIENT, client);
 		if (client->local)
 		{
+			if (client->local->listener)
+			{
+				if (client->local->listener && !IsOutgoing(client))
+				{
+					ConfigItem_listen *listener = client->local->listener;
+					listener->clients--;
+					if (listener->flag.temporary && (listener->clients == 0))
+					{
+						/* Call listen cleanup */
+						listen_cleanup();
+					}
+				}
+			}
 			safe_free(client->local->passwd);
 			safe_free(client->local->error_str);
 			if (client->local->hostp)
@@ -176,7 +204,10 @@ void free_client(Client *client)
 			del_from_id_hash_table(client->id, client);
 		}
 	}
-	
+
+	if (client->rpc)
+		free_client_rpc(client);
+
 	safe_free(client->ip);
 
 	mp_pool_release(client);
@@ -207,8 +238,12 @@ User *make_user(Client *client)
 		} else {
 			*user->realhost = '\0';
 		}
-		user->virthost = NULL;
-		client->user = user;		
+		client->user = user;
+		/* These may change later (eg when using hostname instead of IP),
+		 * but we now set it early.
+		 */
+		make_cloakedhost(client, client->user->realhost, client->user->cloakedhost, sizeof(client->user->cloakedhost));
+		safe_strdup(client->user->virthost, client->user->cloakedhost);
 	}
 	return user;
 }
@@ -309,7 +344,7 @@ void remove_client_from_list(Client *client)
 
 	if (IsUser(client))	/* Only persons can have been added before */
 	{
-		add_history(client, 0);
+		add_history(client, 0, WHOWAS_EVENT_QUIT);
 		off_history(client);	/* Remove all pointers to client */
 	}
 	
@@ -588,6 +623,12 @@ NameValuePrioList *find_nvplist(NameValuePrioList *list, const char *name)
 		}
 	}
 	return NULL;
+}
+
+const char *get_nvplist(NameValuePrioList *list, const char *name)
+{
+	NameValuePrioList *e = find_nvplist(list, name);
+	return e ? e->value : NULL;
 }
 
 void add_fmt_nvplist(NameValuePrioList **lst, int priority, const char *name, FORMAT_STRING(const char *format), ...)

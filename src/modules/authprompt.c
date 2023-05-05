@@ -40,6 +40,7 @@ struct {
 typedef struct APUser APUser;
 struct APUser {
 	char *authmsg;
+	char *reason;
 };
 
 /* Global variables */
@@ -55,6 +56,7 @@ int authprompt_sasl_continuation(Client *client, const char *buf);
 int authprompt_sasl_result(Client *client, int success);
 int authprompt_place_host_ban(Client *client, int action, const char *reason, long duration);
 int authprompt_find_tkline_match(Client *client, TKL *tk);
+int authprompt_pre_local_handshake_timeout(Client *client, const char **comment);
 int authprompt_pre_connect(Client *client);
 CMD_FUNC(cmd_auth);
 void authprompt_md_free(ModData *md);
@@ -93,6 +95,7 @@ MOD_INIT()
 	HookAdd(modinfo->handle, HOOKTYPE_SASL_RESULT, 0, authprompt_sasl_result);
 	HookAdd(modinfo->handle, HOOKTYPE_PLACE_HOST_BAN, 0, authprompt_place_host_ban);
 	HookAdd(modinfo->handle, HOOKTYPE_FIND_TKLINE_MATCH, 0, authprompt_find_tkline_match);
+	HookAdd(modinfo->handle, HOOKTYPE_PRE_LOCAL_HANDSHAKE_TIMEOUT, 0, authprompt_pre_local_handshake_timeout);
 	/* For HOOKTYPE_PRE_LOCAL_CONNECT we want a low priority, so we are called last.
 	 * This gives hooks like the one from the blacklist module (pending softban)
 	 * a chance to be handled first.
@@ -118,7 +121,7 @@ static void init_config(void)
 {
 	/* This sets some default values */
 	memset(&cfg, 0, sizeof(cfg));
-	cfg.enabled = 0;
+	cfg.enabled = 1;
 }
 
 static void config_postdefaults(void)
@@ -229,6 +232,7 @@ void authprompt_md_free(ModData *md)
 	if (se)
 	{
 		safe_free(se->authmsg);
+		safe_free(se->reason);
 		safe_free(se);
 		md->ptr = se = NULL;
 	}
@@ -294,12 +298,17 @@ void send_first_auth(Client *client)
 	Client *sasl_server;
 	char *addr = BadPtr(client->ip) ? "0" : client->ip;
 	const char *certfp = moddata_client_get(client, "certfp");
+
 	sasl_server = find_client(SASL_SERVER, NULL);
 	if (!sasl_server)
 	{
 		/* Services down. */
 		return;
 	}
+
+	/* Make them a user, needed for CHGHOST etc that we may receive */
+	if (!client->user)
+		make_user(client);
 
 	sendto_one(sasl_server, NULL, ":%s SASL %s %s H %s %s",
 	    me.id, SASL_SERVER, client->id, addr, addr);
@@ -364,15 +373,26 @@ CMD_FUNC(cmd_auth)
 	send_first_auth(client);
 }
 
-void authprompt_tag_as_auth_required(Client *client)
+void authprompt_tag_as_auth_required(Client *client, const char *reason)
 {
 	/* Allocate, and therefore indicate, that we are going to handle SASL for this user */
 	if (!SEUSER(client))
 		SetAPUser(client, safe_alloc(sizeof(APUser)));
+	safe_strdup(SEUSER(client)->reason, reason);
 }
 
 void authprompt_send_auth_required_message(Client *client)
 {
+	/* Send the standard-reply ACCOUNT_REQUIRED_TO_CONNECT if the client supports receiving it */
+	if (HasCapability(client, "standard-replies"))
+	{
+		const char *reason = SEUSER(client) && SEUSER(client)->reason ? SEUSER(client)->reason : NULL;
+		if (reason)
+			sendto_one(client, NULL, "FAIL * ACCOUNT_REQUIRED_TO_CONNECT :An account is required to connect: %s", reason);
+		else
+			sendto_one(client, NULL, "FAIL * ACCOUNT_REQUIRED_TO_CONNECT :An account is required to connect");
+	}
+
 	/* Display set::authentication-prompt::message */
 	sendnotice_multiline(client, cfg.message);
 }
@@ -383,14 +403,10 @@ int authprompt_place_host_ban(Client *client, int action, const char *reason, lo
 	/* If it's a soft-xx action and the user is not logged in
 	 * and the user is not yet online, then we will handle this user.
 	 */
-	if (IsSoftBanAction(action) && !IsLoggedIn(client) && !IsUser(client))
+	if (IsSoftBanAction(action) && !IsLoggedIn(client) && !IsUser(client) && cfg.enabled)
 	{
-		/* Send ban reason */
-		if (reason)
-			sendnotice(client, "%s", reason);
-
 		/* And tag the user */
-		authprompt_tag_as_auth_required(client);
+		authprompt_tag_as_auth_required(client, reason);
 		authprompt_send_auth_required_message(client);
 		return 1; /* pretend user is killed */
 	}
@@ -403,17 +419,14 @@ int authprompt_find_tkline_match(Client *client, TKL *tkl)
 	/* If it's a soft-xx action and the user is not logged in
 	 * and the user is not yet online, then we will handle this user.
 	 */
-	if (TKLIsServerBan(tkl) &&
+	if (cfg.enabled &&
+		TKLIsServerBan(tkl) &&
 	   (tkl->ptr.serverban->subtype & TKL_SUBTYPE_SOFT) &&
 	   !IsLoggedIn(client) &&
 	   !IsUser(client))
 	{
-		/* Send ban reason */
-		if (tkl->ptr.serverban->reason)
-			sendnotice(client, "%s", tkl->ptr.serverban->reason);
-
 		/* And tag the user */
-		authprompt_tag_as_auth_required(client);
+		authprompt_tag_as_auth_required(client, tkl->ptr.serverban->reason);
 		authprompt_send_auth_required_message(client);
 		return 1; /* pretend user is killed */
 	}
@@ -423,7 +436,7 @@ int authprompt_find_tkline_match(Client *client, TKL *tkl)
 int authprompt_pre_connect(Client *client)
 {
 	/* If the user is tagged as auth required and not logged in, then.. */
-	if (SEUSER(client) && !IsLoggedIn(client))
+	if (SEUSER(client) && !IsLoggedIn(client) && cfg.enabled)
 	{
 		authprompt_send_auth_required_message(client);
 		return HOOK_DENY; /* do not process register_user() */
@@ -477,4 +490,18 @@ int authprompt_sasl_result(Client *client, int success)
 	}
 
 	return 1; /* inhibit success/failure message */
+}
+
+/** Override the default "Registration timeout" quit reason */
+int authprompt_pre_local_handshake_timeout(Client *client, const char **comment)
+{
+	if (SEUSER(client))
+	{
+		if (SEUSER(client)->reason)
+			*comment = SEUSER(client)->reason;
+		else
+			*comment = "Account required to connect";
+	}
+
+	return HOOK_CONTINUE;
 }

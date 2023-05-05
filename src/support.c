@@ -82,6 +82,54 @@ char *strtoken(char **save, char *str, char *fs)
 	return (tmp);
 }
 
+/** Walk through a string of tokens, using a set of separators.
+ * This is the special version that won't skip/merge tokens,
+ * eg "a,,c" would return "a", then "" (empty), then "c".
+ * This in contrast to strtoken() which would return "a" and then "c".
+ * This strtoken_noskip() will also not skip tokens at the
+ * beginning, eg ",,c" would return "" (empty), "" (empty), "c".
+ *
+ * @param save	Pointer used for saving between calls
+ * @param str	String to parse (will be altered!)
+ * @param fs	Separator character(s)
+ * @returns substring (token)
+ * @note This function works similar to (but not identical?) to strtok_r().
+ */
+char *strtoken_noskip(char **save, char *str, char *fs)
+{
+	char *pos, *tmp;
+
+	if (str)
+	{
+		pos = str;	/* new string scan */
+	} else {
+		if (*save == NULL)
+		{
+			/* We reached the end of the string */
+			return NULL;
+		}
+		pos = *save; /* keep last position across calls */
+	}
+
+	tmp = pos; /* start position, used for returning later */
+
+	/* Hunt for next separator (fs in pos) */
+	while (*pos && !strchr(fs, *pos))
+		pos++;
+
+	if (!*pos)
+	{
+		/* Next call is end of string */
+		*save = NULL;
+		*pos++ = '\0';
+	} else {
+		*pos++ = '\0';
+		*save = pos;
+	}
+
+	return tmp;
+}
+
 /** Convert binary address to an IP string - like inet_ntop but will always return the uncompressed IPv6 form.
  * @param af	Address family (AF_INET, AF_INET6)
  * @param in	Address (binary)
@@ -155,6 +203,14 @@ void stripcrlf(char *c)
 	}
 }
 
+#ifndef HAVE_STRNLEN
+size_t strnlen(const char *s, size_t maxlen)
+{
+	const char *end = memchr (s, 0, maxlen);
+	return end ? (size_t)(end - s) : maxlen;
+}
+#endif
+
 #ifndef HAVE_STRLCPY
 /** BSD'ish strlcpy().
  * The strlcpy() function copies up to size-1 characters from the
@@ -182,13 +238,11 @@ size_t strlcpy(char *dst, const char *src, size_t size)
  */
 size_t strlncpy(char *dst, const char *src, size_t size, size_t n)
 {
-	size_t len = strlen(src);
+	size_t len = strnlen(src, n);
 	size_t ret = len;
 
 	if (size <= 0)
 		return 0;
-	if (len > n)
-		len = n;
 	if (len >= size)
 		len = size - 1;
 	memcpy(dst, src, len);
@@ -230,15 +284,12 @@ size_t strlcat(char *dst, const char *src, size_t size)
 size_t strlncat(char *dst, const char *src, size_t size, size_t n)
 {
 	size_t len1 = strlen(dst);
-	size_t len2 = strlen(src);
+	size_t len2 = strnlen(src, n);
 	size_t ret = len1 + len2;
 
 	if (size <= len1)
 		return size;
 		
-	if (len2 > n)
-		len2 = n;
-
 	if (len1 + len2 >= size)
 		len2 = size - (len1 + 1);
 
@@ -854,6 +905,63 @@ const char *unreal_getfilename(const char *path)
 	}
 
 	return end;
+}
+
+/** Wrapper for mkdir() so you don't need ifdefs everywhere for Windows.
+ * @returns 0 on failure!! (like mkdir)
+ */
+int unreal_mkdir(const char *pathname, mode_t mode)
+{
+#ifdef _WIN32
+	return mkdir(pathname);
+#else
+	return mkdir(pathname, mode);
+#endif
+}
+
+/** Create the entire directory structure.
+ * @param dname	The directory name, eg /home/irc/unrealircd/logs/2022/08/05
+ * @param mode	The mode to create with, eg 0777. Ignored on Windows.
+ * @returns 1 on success, 0 on failure.
+ */
+int unreal_create_directory_structure(const char *dname, mode_t mode)
+{
+	if (unreal_mkdir(dname, mode) == 0)
+	{
+		/* Ok, that failed as well, we have some work to do:
+		 * for every path element run mkdir().
+		 */
+		int lastresult;
+		char buf[512], *p;
+		strlcpy(buf, dname, sizeof(buf)); /* work on a copy */
+		for (p=strchr(buf+1, '/'); p; p=strchr(p+1, '/'))
+		{
+			*p = '\0';
+			unreal_mkdir(buf,mode);
+			*p = '/';
+		}
+		/* Finally, try the complete path */
+		if (unreal_mkdir(dname, mode))
+			return 0; /* failed */
+		/* fallthrough.... */
+	}
+	return 1; /* success */
+}
+
+/** Create entire directory structure for a path with a filename.
+ * @param fname	The full path name, eg /home/irc/unrealircd/logs/2022/08/05/ircd.log
+ * @param mode	The mode to create with, eg 0777. Ignored on Windows.
+ * @notes This is used as an easier way to call unreal_create_directory_structure()
+ *        if you have a filename instead of the directory part.
+ * @returns 1 on success, 0 on failure.
+ */
+int unreal_create_directory_structure_for_file(const char *fname, mode_t mode)
+{
+	char buf[PATH_MAX+1];
+	const char *path = unreal_getpathname(fname, buf);
+	if (!path)
+		return 0;
+	return unreal_create_directory_structure(path, mode);
 }
 
 /** Returns the special module tmp name for a given path.

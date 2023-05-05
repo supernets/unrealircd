@@ -227,6 +227,9 @@ CMD_FUNC(cmd_version)
 #endif
 			sendnotice(client, "c-ares %s", ares_version(NULL));
 			sendnotice(client, "%s", pcre2_version());
+#if JANSSON_VERSION_HEX >= 0x020D00
+			sendnotice(client, "jansson %s\n", jansson_version_str());
+#endif
 		}
 		if (MyUser(client))
 			send_version(client,0);
@@ -276,8 +279,8 @@ int remotecmdfilter(Client *client, int parc, const char *parv[])
 	/* no remote requests permitted from non-ircops */
 	if (MyUser(client) && !ValidatePermissionsForPath("server:remote",client,NULL,NULL,NULL) && !BadPtr(parv[1]))
 	{
-		parv[1] = NULL;
-		parc = 1;
+		sendnumeric(client, ERR_NOPRIVILEGES);
+		return 1; /* STOP */
 	}
 
 	/* same as above, but in case an old server forwards a request to us: we ignore it */
@@ -553,22 +556,6 @@ CMD_FUNC(cmd_rehash)
 	if (x != HUNTED_ISME)
 		return; /* Now forwarded or server didnt exist */
 
-	if (MyUser(client) && IsWebsocket(client))
-	{
-		sendnotice(client, "Sorry, for technical reasons it is not possible to REHASH "
-		                 "the local server from a WebSocket connection.");
-		/* Issue details:
-		 * websocket_handle_packet -> process_packet -> parse_client_queued ->
-		 * dopacket -> parse -> cmd_rehash... and then 'websocket' is unloaded so
-		 * we "cannot get back" as that websocket_handle_packet function is gone.
-		 *
-		 * Solution would be either to delay the rehash or to make websocket perm.
-		 * The latter removes all our ability to upgrade the module on the fly
-		 * and the former is rather ugly.. not going to do that hassle now anyway.
-		 */
-		return;
-	}
-
 	if (!MyConnect(client))
 	{
 #ifndef REMOTE_REHASH
@@ -582,7 +569,6 @@ CMD_FUNC(cmd_rehash)
 				sendnotice(client, "A rehash is already in progress");
 				return;
 			}
-			unreal_log(ULOG_INFO, "config", "CONFIG_RELOAD", client, "Rehashing server configuration file [by: $client.details]");
 			remote_rehash_client = client;
 			/* fallthrough... so we deal with this the same way as local rehashes */
 		}

@@ -184,13 +184,13 @@ EXP_OBJ_FILES=src/ircd_vars.obj src/channel.obj src/send.obj src/socket.obj \
  src/version.obj src/ircsprintf.obj \
  src/scache.obj src/dns.obj src/modules.obj \
  src/aliases.obj src/api-event.obj src/api-usermode.obj src/auth.obj src/tls.obj \
- src/random.obj src/api-channelmode.obj src/api-moddata.obj src/mempool.obj \
+ src/random.obj src/api-channelmode.obj src/api-moddata.obj src/api-rpc.obj src/mempool.obj \
  src/dispatch.obj src/api-isupport.obj src/api-command.obj \
  src/api-clicap.obj src/api-messagetag.obj src/api-history-backend.obj \
  src/api-extban.obj src/api-efunctions.obj src/crypt_blowfish.obj \
  src/operclass.obj src/crashreport.obj src/unrealdb.obj \
  src/openssl_hostname_validation.obj \
- src/utf8.obj src/log.obj $(CURLOBJ)
+ src/utf8.obj src/json.obj src/log.obj $(CURLOBJ)
 
 OBJ_FILES=$(EXP_OBJ_FILES) src/gui.obj src/service.obj src/windebug.obj src/rtf.obj \
  src/editor.obj src/win.obj src/ircd.obj src/proc_io_client.obj
@@ -253,6 +253,7 @@ DLL_FILES=\
  src/modules/clienttagdeny.dll \
  src/modules/close.dll \
  src/modules/connect.dll \
+ src/modules/connect-flood.dll \
  src/modules/connthrottle.dll \
  src/modules/creationtime.dll \
  src/modules/cycle.dll \
@@ -265,6 +266,7 @@ DLL_FILES=\
  src/modules/extbans/country.dll \
  src/modules/extbans/inchannel.dll \
  src/modules/extbans/join.dll \
+ src/modules/extbans/flood.dll \
  src/modules/extbans/msgbypass.dll \
  src/modules/extbans/nickchange.dll \
  src/modules/extbans/operclass.dll \
@@ -305,6 +307,7 @@ DLL_FILES=\
  src/modules/locops.dll \
  src/modules/lusers.dll \
  src/modules/map.dll \
+ src/modules/max-unknown-connections-per-ip.dll \
  src/modules/md.dll \
  src/modules/message.dll \
  src/modules/message-ids.dll \
@@ -329,11 +332,23 @@ DLL_FILES=\
  src/modules/plaintext-policy.dll \
  src/modules/protoctl.dll \
  src/modules/quit.dll \
+ src/modules/real-quit-reason.dll \
  src/modules/reply-tag.dll \
  src/modules/reputation.dll \
  src/modules/require-module.dll \
  src/modules/restrict-commands.dll \
  src/modules/rmtkl.dll \
+ src/modules/rpc/channel.dll \
+ src/modules/rpc/log.dll \
+ src/modules/rpc/name_ban.dll \
+ src/modules/rpc/rpc.dll \
+ src/modules/rpc/stats.dll \
+ src/modules/rpc/server.dll \
+ src/modules/rpc/server_ban.dll \
+ src/modules/rpc/server_ban_exception.dll \
+ src/modules/rpc/spamfilter.dll \
+ src/modules/rpc/whowas.dll \
+ src/modules/rpc/user.dll \
  src/modules/rules.dll \
  src/modules/sajoin.dll \
  src/modules/samode.dll \
@@ -353,12 +368,15 @@ DLL_FILES=\
  src/modules/slog.dll \
  src/modules/sqline.dll \
  src/modules/squit.dll \
+ src/modules/sreply.dll \
  src/modules/staff.dll \
+ src/modules/standard-replies.dll \
  src/modules/starttls.dll \
  src/modules/stats.dll \
  src/modules/sts.dll \
  src/modules/svsjoin.dll \
  src/modules/svskill.dll \
+ src/modules/svslogin.dll \
  src/modules/svslusers.dll \
  src/modules/svsmode.dll \
  src/modules/svsmotd.dll \
@@ -376,6 +394,7 @@ DLL_FILES=\
  src/modules/time.dll \
  src/modules/tkl.dll \
  src/modules/tkldb.dll \
+ src/modules/tline.dll \
  src/modules/tls_antidos.dll \
  src/modules/tls_cipher.dll \
  src/modules/topic.dll \
@@ -407,10 +426,13 @@ DLL_FILES=\
  src/modules/watch.dll \
  src/modules/webirc.dll \
  src/modules/webredir.dll \
+ src/modules/webserver.dll \
  src/modules/websocket.dll \
+ src/modules/websocket_common.dll \
  src/modules/whois.dll \
  src/modules/who_old.dll \
  src/modules/whowas.dll \
+ src/modules/whowasdb.dll \
  src/modules/whox.dll
 
 
@@ -582,6 +604,9 @@ src/api-channelmode.obj: src/api-channelmode.c $(INCLUDES)
 src/api-moddata.obj: src/api-moddata.c $(INCLUDES)
 	$(CC) $(CFLAGS) src/api-moddata.c
 
+src/api-rpc.obj: src/api-rpc.c $(INCLUDES)
+	$(CC) $(CFLAGS) src/api-rpc.c
+
 src/mempool.obj: src/mempool.c $(INCLUDES)
 	$(CC) $(CFLAGS) src/mempool.c
 
@@ -632,6 +657,9 @@ src/utf8.obj: src/utf8.c $(INCLUDES) ./include/dbuf.h
 
 src/openssl_hostname_validation.obj: src/openssl_hostname_validation.c $(INCLUDES) ./include/dbuf.h
         $(CC) $(CFLAGS) src/openssl_hostname_validation.c
+
+src/json.obj: src/json.c $(INCLUDES) ./include/dbuf.h
+        $(CC) $(CFLAGS) src/json.c
 
 src/log.obj: src/log.c $(INCLUDES) ./include/dbuf.h
         $(CC) $(CFLAGS) src/log.c
@@ -832,6 +860,9 @@ src/modules/close.dll: src/modules/close.c $(INCLUDES)
 src/modules/connect.dll: src/modules/connect.c $(INCLUDES)
 	$(CC) $(MODCFLAGS) src/modules/connect.c /Fesrc/modules/ /Fosrc/modules/ /Fdsrc/modules/connect.pdb $(MODLFLAGS)
 
+src/modules/connect-flood.dll: src/modules/connect-flood.c $(INCLUDES)
+	$(CC) $(MODCFLAGS) src/modules/connect-flood.c /Fesrc/modules/ /Fosrc/modules/ /Fdsrc/modules/connect-flood.pdb $(MODLFLAGS)
+
 src/modules/connthrottle.dll: src/modules/connthrottle.c $(INCLUDES)
 	$(CC) $(MODCFLAGS) src/modules/connthrottle.c /Fesrc/modules/ /Fosrc/modules/ /Fdsrc/modules/connthrottle.pdb $(MODLFLAGS)
 
@@ -867,6 +898,9 @@ src/modules/extbans/inchannel.dll: src/modules/extbans/inchannel.c $(INCLUDES)
 
 src/modules/extbans/join.dll: src/modules/extbans/join.c $(INCLUDES)
 	$(CC) $(MODCFLAGS) src/modules/extbans/join.c /Fesrc/modules/extbans/ /Fosrc/modules/extbans/ /Fdsrc/modules/extbans/join.pdb $(MODLFLAGS)
+
+src/modules/extbans/flood.dll: src/modules/extbans/flood.c $(INCLUDES)
+	$(CC) $(MODCFLAGS) src/modules/extbans/flood.c /Fesrc/modules/extbans/ /Fosrc/modules/extbans/ /Fdsrc/modules/extbans/flood.pdb $(MODLFLAGS)
 
 src/modules/extbans/msgbypass.dll: src/modules/extbans/msgbypass.c $(INCLUDES)
 	$(CC) $(MODCFLAGS) src/modules/extbans/msgbypass.c /Fesrc/modules/extbans/ /Fosrc/modules/extbans/ /Fdsrc/modules/extbans/msgbypass.pdb $(MODLFLAGS)
@@ -991,6 +1025,9 @@ src/modules/lusers.dll: src/modules/lusers.c $(INCLUDES)
 src/modules/map.dll: src/modules/map.c $(INCLUDES)
 	$(CC) $(MODCFLAGS) src/modules/map.c /Fesrc/modules/ /Fosrc/modules/ /Fdsrc/modules/map.pdb $(MODLFLAGS)
 
+src/modules/max-unknown-connections-per-ip.dll: src/modules/max-unknown-connections-per-ip.c $(INCLUDES)
+	$(CC) $(MODCFLAGS) src/modules/max-unknown-connections-per-ip.c /Fesrc/modules/ /Fosrc/modules/ /Fdsrc/modules/max-unknown-connections-per-ip.pdb $(MODLFLAGS)
+
 src/modules/md.dll: src/modules/md.c $(INCLUDES)
 	$(CC) $(MODCFLAGS) src/modules/md.c /Fesrc/modules/ /Fosrc/modules/ /Fdsrc/modules/md.pdb $(MODLFLAGS)
 
@@ -1063,6 +1100,9 @@ src/modules/protoctl.dll: src/modules/protoctl.c $(INCLUDES)
 src/modules/quit.dll: src/modules/quit.c $(INCLUDES)
 	$(CC) $(MODCFLAGS) src/modules/quit.c /Fesrc/modules/ /Fosrc/modules/ /Fdsrc/modules/quit.pdb $(MODLFLAGS)
 
+src/modules/real-quit-reason.dll: src/modules/real-quit-reason.c $(INCLUDES)
+	$(CC) $(MODCFLAGS) src/modules/real-quit-reason.c /Fesrc/modules/ /Fosrc/modules/ /Fdsrc/modules/real-quit-reason.pdb $(MODLFLAGS)
+
 src/modules/reply-tag.dll: src/modules/reply-tag.c $(INCLUDES)
 	$(CC) $(MODCFLAGS) src/modules/reply-tag.c /Fesrc/modules/ /Fosrc/modules/ /Fdsrc/modules/reply-tag.pdb $(MODLFLAGS)
 
@@ -1077,6 +1117,39 @@ src/modules/restrict-commands.dll: src/modules/restrict-commands.c $(INCLUDES)
 
 src/modules/rmtkl.dll: src/modules/rmtkl.c $(INCLUDES)
 	$(CC) $(MODCFLAGS) src/modules/rmtkl.c /Fesrc/modules/ /Fosrc/modules/ /Fdsrc/modules/rmtkl.pdb $(MODLFLAGS)
+
+src/modules/rpc/channel.dll: src/modules/rpc/channel.c $(INCLUDES)
+	$(CC) $(MODCFLAGS) src/modules/rpc/channel.c /Fesrc/modules/rpc/ /Fosrc/modules/rpc/ /Fdsrc/modules/rpc/channel.pdb $(MODLFLAGS)
+
+src/modules/rpc/log.dll: src/modules/rpc/log.c $(INCLUDES)
+	$(CC) $(MODCFLAGS) src/modules/rpc/log.c /Fesrc/modules/rpc/ /Fosrc/modules/rpc/ /Fdsrc/modules/rpc/log.pdb $(MODLFLAGS)
+
+src/modules/rpc/name_ban.dll: src/modules/rpc/name_ban.c $(INCLUDES)
+	$(CC) $(MODCFLAGS) src/modules/rpc/name_ban.c /Fesrc/modules/rpc/ /Fosrc/modules/rpc/ /Fdsrc/modules/rpc/name_ban.pdb $(MODLFLAGS)
+
+src/modules/rpc/rpc.dll: src/modules/rpc/rpc.c $(INCLUDES)
+	$(CC) $(MODCFLAGS) src/modules/rpc/rpc.c /Fesrc/modules/rpc/ /Fosrc/modules/rpc/ /Fdsrc/modules/rpc/rpc.pdb $(MODLFLAGS)
+
+src/modules/rpc/stats.dll: src/modules/rpc/stats.c $(INCLUDES)
+	$(CC) $(MODCFLAGS) src/modules/rpc/stats.c /Fesrc/modules/rpc/ /Fosrc/modules/rpc/ /Fdsrc/modules/rpc/stats.pdb $(MODLFLAGS)
+
+src/modules/rpc/server.dll: src/modules/rpc/server.c $(INCLUDES)
+	$(CC) $(MODCFLAGS) src/modules/rpc/server.c /Fesrc/modules/rpc/ /Fosrc/modules/rpc/ /Fdsrc/modules/rpc/server.pdb $(MODLFLAGS)
+
+src/modules/rpc/server_ban.dll: src/modules/rpc/server_ban.c $(INCLUDES)
+	$(CC) $(MODCFLAGS) src/modules/rpc/server_ban.c /Fesrc/modules/rpc/ /Fosrc/modules/rpc/ /Fdsrc/modules/rpc/server_ban.pdb $(MODLFLAGS)
+
+src/modules/rpc/server_ban_exception.dll: src/modules/rpc/server_ban_exception.c $(INCLUDES)
+	$(CC) $(MODCFLAGS) src/modules/rpc/server_ban_exception.c /Fesrc/modules/rpc/ /Fosrc/modules/rpc/ /Fdsrc/modules/rpc/server_ban_exception.pdb $(MODLFLAGS)
+
+src/modules/rpc/spamfilter.dll: src/modules/rpc/spamfilter.c $(INCLUDES)
+	$(CC) $(MODCFLAGS) src/modules/rpc/spamfilter.c /Fesrc/modules/rpc/ /Fosrc/modules/rpc/ /Fdsrc/modules/rpc/spamfilter.pdb $(MODLFLAGS)
+
+src/modules/rpc/user.dll: src/modules/rpc/user.c $(INCLUDES)
+	$(CC) $(MODCFLAGS) src/modules/rpc/user.c /Fesrc/modules/rpc/ /Fosrc/modules/rpc/ /Fdsrc/modules/rpc/user.pdb $(MODLFLAGS)
+
+src/modules/rpc/whowas.dll: src/modules/rpc/whowas.c $(INCLUDES)
+	$(CC) $(MODCFLAGS) src/modules/rpc/whowas.c /Fesrc/modules/rpc/ /Fosrc/modules/rpc/ /Fdsrc/modules/rpc/whowas.pdb $(MODLFLAGS)
 
 src/modules/rules.dll: src/modules/rules.c $(INCLUDES)
 	$(CC) $(MODCFLAGS) src/modules/rules.c /Fesrc/modules/ /Fosrc/modules/ /Fdsrc/modules/rules.pdb $(MODLFLAGS)
@@ -1135,8 +1208,14 @@ src/modules/sqline.dll: src/modules/sqline.c $(INCLUDES)
 src/modules/squit.dll: src/modules/squit.c $(INCLUDES)
 	$(CC) $(MODCFLAGS) src/modules/squit.c /Fesrc/modules/ /Fosrc/modules/ /Fdsrc/modules/squit.pdb $(MODLFLAGS)
 
+src/modules/sreply.dll: src/modules/sreply.c $(INCLUDES)
+	$(CC) $(MODCFLAGS) src/modules/sreply.c /Fesrc/modules/ /Fosrc/modules/ /Fdsrc/modules/sreply.pdb $(MODLFLAGS)
+
 src/modules/staff.dll: src/modules/staff.c $(INCLUDES)
 	$(CC) $(MODCFLAGS) src/modules/staff.c /Fesrc/modules/ /Fosrc/modules/ /Fdsrc/modules/staff.pdb $(MODLFLAGS)
+
+src/modules/standard-replies.dll: src/modules/standard-replies.c $(INCLUDES)
+	$(CC) $(MODCFLAGS) src/modules/standard-replies.c /Fesrc/modules/ /Fosrc/modules/ /Fdsrc/modules/standard-replies.pdb $(MODLFLAGS)
 
 src/modules/starttls.dll: src/modules/starttls.c $(INCLUDES)
 	$(CC) $(MODCFLAGS) src/modules/starttls.c /Fesrc/modules/ /Fosrc/modules/ /Fdsrc/modules/starttls.pdb $(MODLFLAGS)
@@ -1152,6 +1231,9 @@ src/modules/svsjoin.dll: src/modules/svsjoin.c $(INCLUDES)
 
 src/modules/svskill.dll: src/modules/svskill.c $(INCLUDES)
 	$(CC) $(MODCFLAGS) src/modules/svskill.c /Fesrc/modules/ /Fosrc/modules/ /Fdsrc/modules/svskill.pdb $(MODLFLAGS)
+
+src/modules/svslogin.dll: src/modules/svslogin.c $(INCLUDES)
+	$(CC) $(MODCFLAGS) src/modules/svslogin.c /Fesrc/modules/ /Fosrc/modules/ /Fdsrc/modules/svslogin.pdb $(MODLFLAGS)
 
 src/modules/svslusers.dll: src/modules/svslusers.c $(INCLUDES)
 	$(CC) $(MODCFLAGS) src/modules/svslusers.c /Fesrc/modules/ /Fosrc/modules/ /Fdsrc/modules/svslusers.pdb $(MODLFLAGS)
@@ -1203,6 +1285,9 @@ src/modules/tkl.dll: src/modules/tkl.c $(INCLUDES)
 
 src/modules/tkldb.dll: src/modules/tkldb.c $(INCLUDES)
 	$(CC) $(MODCFLAGS) src/modules/tkldb.c /Fesrc/modules/ /Fosrc/modules/ /Fdsrc/modules/tkldb.pdb $(MODLFLAGS)
+
+src/modules/tline.dll: src/modules/tline.c $(INCLUDES)
+	$(CC) $(MODCFLAGS) src/modules/tline.c /Fesrc/modules/ /Fosrc/modules/ /Fdsrc/modules/tline.pdb $(MODLFLAGS)
 
 src/modules/tls_antidos.dll: src/modules/tls_antidos.c $(INCLUDES)
 	$(CC) $(MODCFLAGS) src/modules/tls_antidos.c /Fesrc/modules/ /Fosrc/modules/ /Fdsrc/modules/tls_antidos.pdb $(MODLFLAGS)
@@ -1297,8 +1382,14 @@ src/modules/webirc.dll: src/modules/webirc.c $(INCLUDES)
 src/modules/webredir.dll: src/modules/webredir.c $(INCLUDES)
 	$(CC) $(MODCFLAGS) src/modules/webredir.c /Fesrc/modules/ /Fosrc/modules/ /Fdsrc/modules/webredir.pdb $(MODLFLAGS)
 
+src/modules/webserver.dll: src/modules/webserver.c $(INCLUDES)
+	$(CC) $(MODCFLAGS) src/modules/webserver.c /Fesrc/modules/ /Fosrc/modules/ /Fdsrc/modules/webserver.pdb $(MODLFLAGS)
+
 src/modules/websocket.dll: src/modules/websocket.c $(INCLUDES)
 	$(CC) $(MODCFLAGS) src/modules/websocket.c /Fesrc/modules/ /Fosrc/modules/ /Fdsrc/modules/websocket.pdb $(MODLFLAGS)
+
+src/modules/websocket_common.dll: src/modules/websocket_common.c $(INCLUDES)
+	$(CC) $(MODCFLAGS) src/modules/websocket_common.c /Fesrc/modules/ /Fosrc/modules/ /Fdsrc/modules/websocket_common.pdb $(MODLFLAGS)
 
 src/modules/whois.dll: src/modules/whois.c $(INCLUDES)
 	$(CC) $(MODCFLAGS) src/modules/whois.c /Fesrc/modules/ /Fosrc/modules/ /Fdsrc/modules/whois.pdb $(MODLFLAGS)
@@ -1308,6 +1399,9 @@ src/modules/who_old.dll: src/modules/who_old.c $(INCLUDES)
 
 src/modules/whowas.dll: src/modules/whowas.c $(INCLUDES)
 	$(CC) $(MODCFLAGS) src/modules/whowas.c /Fesrc/modules/ /Fosrc/modules/ /Fdsrc/modules/whowas.pdb $(MODLFLAGS)
+
+src/modules/whowasdb.dll: src/modules/whowasdb.c $(INCLUDES)
+	$(CC) $(MODCFLAGS) src/modules/whowasdb.c /Fesrc/modules/ /Fosrc/modules/ /Fdsrc/modules/whowasdb.pdb $(MODLFLAGS)
 
 src/modules/whox.dll: src/modules/whox.c $(INCLUDES)
 	$(CC) $(MODCFLAGS) src/modules/whox.c /Fesrc/modules/ /Fosrc/modules/ /Fdsrc/modules/whox.pdb $(MODLFLAGS)

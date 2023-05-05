@@ -215,7 +215,7 @@ void disable_ssl_protocols(SSL_CTX *ctx, TLSOptions *tlsoptions)
 	if ((tlsoptions->protocols & TLS_PROTOCOL_TLSV1) ||
 	    (tlsoptions->protocols & TLS_PROTOCOL_TLSV1_1))
 	{
-		SSL_CTX_set_security_level(ctx, 1);
+		SSL_CTX_set_security_level(ctx, 0);
 	}
 #endif
 
@@ -692,7 +692,14 @@ void unreal_tls_client_handshake(int fd, int revents, void *data)
 	switch (unreal_tls_connect(client, fd))
 	{
 		case -1:
+			SSL_set_shutdown(client->local->ssl, SSL_RECEIVED_SHUTDOWN);
+			SSL_smart_shutdown(client->local->ssl);
+			SSL_free(client->local->ssl);
+			client->local->ssl = NULL;
+			ClearTLS(client);
+			SetDeadSocket(client);
 			fd_close(fd);
+			fd_unnotify(fd);
 			client->local->fd = -1;
 			--OpenFiles;
 			return;
@@ -780,7 +787,7 @@ int unreal_tls_accept(Client *client, int fd)
 		return -1;
 	}
 
-	start_of_normal_client_handshake(client);
+	client->local->listener->start_handshake(client);
 
 	return 1;
 }
@@ -1063,19 +1070,24 @@ int verify_certificate(SSL *ssl, const char *hostname, char **errstr)
 		return 0;
 	}
 
-#if 1
+#ifdef HAS_X509_check_host
+	n = X509_check_host(cert, hostname, strlen(hostname), 0, NULL);
+	X509_free(cert);
+	if (n == 1)
+		return 1; /* Hostname matched. All tests passed. */
+#else
+	/* Fallback code for OpenSSL <1.0.2.
+	 * Wait... 1.0.1 is out of support since January 2017,
+	 * so why do we even support that in 2023 ?
+	 * An well, TODO: ditch this old TLS support in next major UnrealIRCd
+	 * along with all the other old OpenSSL checks in this tls.c :D
+	 * XXX: Actually our HAS_X509_check_host includes openssl/x509v3.h
+	 * which does not exist in 1.0.2 yet either (it is openssl/x509.h there).
+	 * And 1.0.2 is out of support since January 1st, 2020... just saying.
+	 */
 	n = validate_hostname(hostname, cert);
 	X509_free(cert);
 	if (n == MatchFound)
-		return 1; /* Hostname matched. All tests passed. */
-#else
-	/* TODO: make autoconf test for X509_check_host() and verify that this code works:
-	 * (When doing that, also disable the openssl_hostname_validation.c/.h code since
-	 *  it would be unused)
-	 */
-	n = X509_check_host(cert, hostname, strlen(hostname), X509_CHECK_FLAG_NO_PARTIAL_WILDCARDS, NULL);
-	X509_free(cert);
-	if (n == 1)
 		return 1; /* Hostname matched. All tests passed. */
 #endif
 

@@ -288,7 +288,21 @@ CMD_FUNC(cmd_chghost)
 		return;
 	}
 
-	if (!(target = find_user(parv[1], NULL)))
+	target = find_client(parv[1], NULL);
+	if (!MyUser(client) && !target && (target = find_server_by_uid(parv[1])))
+	{
+		/* CHGHOST for a UID that is not online.
+		 * Let's assume it may not YET be online and forward the message to
+		 * the remote server and stop processing ourselves.
+		 * That server will then handle pre-registered processing of the
+		 * CHGHOST and later communicate the host when the user actually
+		 * comes online in the UID message.
+		 */
+		sendto_one(target, recv_mtags, ":%s CHGHOST %s %s", client->id, parv[1], parv[2]);
+		return;
+	}
+
+	if (!target || !target->user)
 	{
 		sendnumeric(client, ERR_NOSUCHNICK, parv[1]);
 		return;
@@ -328,17 +342,31 @@ CMD_FUNC(cmd_chghost)
 
 	if (!IsULine(client))
 	{
-		unreal_log(ULOG_INFO, "chgcmds", "CHGHOST_COMMAND", client,
-		           "CHGHOST: $client changed the virtual hostname of $target.details to be $new_hostname",
-		           log_data_string("change_type", "hostname"),
-			   log_data_client("target", target),
-		           log_data_string("new_hostname", parv[2]));
+		const char *issuer = command_issued_by_rpc(recv_mtags);
+		if (issuer)
+		{
+			unreal_log(ULOG_INFO, "chgcmds", "CHGHOST_COMMAND", client,
+				   "CHGHOST: $issuer changed the virtual hostname of $target.details to be $new_hostname",
+				   log_data_string("issuer", issuer),
+				   log_data_string("change_type", "hostname"),
+				   log_data_client("target", target),
+				   log_data_string("new_hostname", parv[2]));
+		} else {
+			unreal_log(ULOG_INFO, "chgcmds", "CHGHOST_COMMAND", client,
+				   "CHGHOST: $client changed the virtual hostname of $target.details to be $new_hostname",
+				   log_data_string("change_type", "hostname"),
+				   log_data_client("target", target),
+				   log_data_string("new_hostname", parv[2]));
+		}
 	}
 
 	target->umodes |= UMODE_HIDE;
 	target->umodes |= UMODE_SETHOST;
-	sendto_server(client, 0, 0, NULL, ":%s CHGHOST %s %s", client->id, target->id, parv[2]);
+
+	/* Send to other servers too, unless the client is still in the registration phase (SASL) */
+	if (IsUser(target))
+		sendto_server(client, 0, 0, recv_mtags, ":%s CHGHOST %s %s", client->id, target->id, parv[2]);
+
 	safe_strdup(target->user->virthost, parv[2]);
-	
 	userhost_changed(target);
 }

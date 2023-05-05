@@ -430,18 +430,19 @@ const char *Module_Create(const char *path_)
 		if (Mod_Handle)
 			*Mod_Handle = mod;
 		irc_dlsym(Mod, "Mod_Test", Mod_Test);
+		/* add module here, so ModuleSetOptions() w/MOD_OPT_PRIORITY is available in Mod_Test() */
+		AddListItemPrio(mod, Modules, 0);
 		if (Mod_Test)
 		{
-			if ((ret = (*Mod_Test)(&mod->modinfo)) < MOD_SUCCESS) {
-				ircsnprintf(errorbuf, sizeof(errorbuf), "Mod_Test returned %i",
-					   ret);
+			if ((ret = (*Mod_Test)(&mod->modinfo)) < MOD_SUCCESS)
+			{
+				ircsnprintf(errorbuf, sizeof(errorbuf), "Mod_Test returned %i", ret);
 				/* We EXPECT the module to have cleaned up its mess */
 				Module_free(mod);
 				return (errorbuf);
 			}
 		}
 		mod->flags = MODFLAG_TESTING;		
-		AddListItemPrio(mod, Modules, 0);
 		return NULL;
 	}
 	else
@@ -559,6 +560,9 @@ void FreeModObj(ModuleObject *obj, Module *m)
 	}
 	else if (obj->type == MOBJ_HISTORY_BACKEND) {
 		HistoryBackendDel(obj->object.history_backend);
+	}
+	else if (obj->type == MOBJ_RPC) {
+		RPCHandlerDel(obj->object.rpc);
 	}
 	else
 	{
@@ -731,6 +735,8 @@ void module_loadall(void)
 	iFP	fp;
 	Module *mi, *next;
 	
+	loop.config_status = CONFIG_STATUS_LOAD;
+
 	/* Run through all modules and check for module load */
 	for (mi = Modules; mi; mi = next)
 	{
@@ -1216,7 +1222,7 @@ void ModuleSetOptions(Module *module, unsigned int options, int action)
 {
 	unsigned int oldopts = module->options;
 
-	if (options == MOD_OPT_UNLOAD_PRIORITY)
+	if (options == MOD_OPT_PRIORITY)
 	{
 		DelListItem(module, Modules);
 		AddListItemPrio(module, Modules, action);
@@ -1335,6 +1341,16 @@ int is_module_loaded(const char *name)
 		if (mi->flags & MODFLAG_DELAYED)
 			continue; /* unloading (delayed) */
 
+		/* During config_posttest ignore modules that are loaded,
+		 * since we only care about the 'future' state.
+		 */
+		if ((loop.config_status < CONFIG_STATUS_LOAD) &&
+		    (loop.config_status >= CONFIG_STATUS_POSTTEST) &&
+		    (mi->flags == MODFLAG_LOADED))
+		{
+			continue;
+		}
+
 		if (!strcasecmp(mi->relpath, name))
 			return 1;
 	}
@@ -1442,6 +1458,38 @@ void SavePersistentLongX(ModuleInfo *modinfo, const char *varshortname, long var
 
 	m = findmoddata_byname(fullname, MODDATATYPE_LOCAL_VARIABLE);
 	moddata_local_variable(m).l = var;
+}
+
+int LoadPersistentLongLongX(ModuleInfo *modinfo, const char *varshortname, long long *var)
+{
+	ModDataInfo *m;
+	const char *fullname = mod_var_name(modinfo, varshortname);
+
+	m = findmoddata_byname(fullname, MODDATATYPE_LOCAL_VARIABLE);
+	if (m)
+	{
+		*var = moddata_local_variable(m).ll;
+		return 1;
+	} else {
+		ModDataInfo mreq;
+		memset(&mreq, 0, sizeof(mreq));
+		mreq.type = MODDATATYPE_LOCAL_VARIABLE;
+		mreq.name = strdup(fullname);
+		mreq.free = NULL;
+		m = ModDataAdd(modinfo->handle, mreq);
+		moddata_local_variable(m).ll = 0;
+		safe_free(mreq.name);
+		return 0;
+	}
+}
+
+void SavePersistentLongLongX(ModuleInfo *modinfo, const char *varshortname, long long var)
+{
+	ModDataInfo *m;
+	const char *fullname = mod_var_name(modinfo, varshortname);
+
+	m = findmoddata_byname(fullname, MODDATATYPE_LOCAL_VARIABLE);
+	moddata_local_variable(m).ll = var;
 }
 
 extern int module_has_moddata(Module *mod);

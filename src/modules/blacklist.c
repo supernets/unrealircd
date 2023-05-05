@@ -765,8 +765,8 @@ int blacklist_action(Client *client, char *opernotice, BanAction ban_action, cha
 
 void blacklist_hit(Client *client, Blacklist *bl, int reply)
 {
-	char opernotice[512], banbuf[512];
-	const char *name[4], *value[4];
+	char opernotice[512], banbuf[512], reply_num[5];
+	const char *name[6], *value[6];
 	BLUser *blu = BLUSER(client);
 
 	if (find_tkline_match(client, 1))
@@ -779,12 +779,21 @@ void blacklist_hit(Client *client, Blacklist *bl, int reply)
 		snprintf(opernotice, sizeof(opernotice), "[Blacklist] IP %s matches blacklist %s (%s/reply=%d)",
 			GetIP(client), bl->name, bl->backend->dns->name, reply);
 
+	snprintf(reply_num, sizeof(reply_num), "%d", reply);
+
 	name[0] = "ip";
 	value[0] = GetIP(client);
 	name[1] = "server";
 	value[1] = me.name;
-	name[2] = NULL;
-	value[2] = NULL;
+	name[2] = "blacklist";
+	value[2] = bl->name;
+	name[3] = "dnsname";
+	value[3] = bl->backend->dns->name;
+	name[4] = "dnsreply";
+	value[4] = reply_num;
+	name[5] = NULL;
+	value[5] = NULL;
+	/* when adding more, be sure to update the array elements number in the definition of const char *name[] and value[] */
 
 	buildvarstring(bl->reason, banbuf, sizeof(banbuf), name, value);
 

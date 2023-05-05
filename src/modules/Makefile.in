@@ -39,10 +39,10 @@ MODULES= \
 	sethost.so chghost.so chgident.so setname.so \
 	setident.so sdesc.so svsmode.so swhois.so\
 	svsmotd.so svsnline.so who_old.so whox.so mkpasswd.so \
-	away.so svsnoop.so svsnick.so svso.so \
+	away.so svsnoop.so svsnick.so svso.so svslogin.so \
 	chgname.so kill.so \
 	lag.so message.so oper.so pingpong.so \
-	quit.so sendumode.so sqline.so \
+	quit.so sendumode.so sqline.so sreply.so \
 	tsctl.so unsqline.so whois.so \
 	tkl.so vhost.so cycle.so svsjoin.so svspart.so \
 	svswatch.so svssilence.so sendsno.so svssno.so \
@@ -59,13 +59,14 @@ MODULES= \
 	botmotd.so lusers.so names.so svsnolag.so addmotd.so \
 	svslusers.so starttls.so webredir.so cap.so \
 	sasl.so md.so certfp.so \
-	tls_antidos.so webirc.so websocket.so \
+	tls_antidos.so connect-flood.so max-unknown-connections-per-ip.so \
+	webirc.so webserver.so websocket_common.so websocket.so \
 	blacklist.so jointhrottle.so \
 	antirandom.so hideserver.so jumpserver.so \
 	ircops.so staff.so nocodes.so \
 	charsys.so antimixedutf8.so authprompt.so sinfo.so \
 	reputation.so connthrottle.so history_backend_mem.so \
-	history_backend_null.so tkldb.so channeldb.so \
+	history_backend_null.so tkldb.so channeldb.so whowasdb.so \
 	restrict-commands.so rmtkl.so require-module.so \
 	account-notify.so \
 	message-tags.so batch.so \
@@ -79,7 +80,9 @@ MODULES= \
 	monitor.so slog.so tls_cipher.so operinfo.so creationtime.so \
 	unreal_server_compat.so \
 	extended-monitor.so geoip_csv.so \
-	geoip_base.so extjwt.so \
+	geoip_base.so extjwt.so tline.so \
+	standard-replies.so issued-by-tag.so \
+	real-quit-reason.so \
 	$(GEOIP_CLASSIC_OBJECTS) $(GEOIP_MAXMIND_OBJECTS)
 
 MODULEFLAGS=@MODULEFLAGS@
@@ -94,6 +97,7 @@ build: $(MODULES)
 	cd chanmodes; $(MAKE) all
 	cd usermodes; $(MAKE) all
 	cd extbans; $(MAKE) all
+	cd rpc; $(MAKE) all
 	cd third; $(MAKE) all
 
 clean:
@@ -101,6 +105,7 @@ clean:
 	cd chanmodes; $(MAKE) clean
 	cd usermodes; $(MAKE) clean
 	cd extbans; $(MAKE) clean
+	cd rpc; $(MAKE) clean
 	cd third; $(MAKE) clean
 
 # Generic *.so rule:

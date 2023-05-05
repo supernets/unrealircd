@@ -7,7 +7,7 @@ dnl src/windows/unrealinst.iss
 dnl doc/Config.header
 dnl src/version.c.SH
 
-AC_INIT([unrealircd], [6.0.4.2], [https://bugs.unrealircd.org/], [], [https://unrealircd.org/])
+AC_INIT([unrealircd], [6.1.0], [https://bugs.unrealircd.org/], [], [https://unrealircd.org/])
 AC_CONFIG_SRCDIR([src/ircd.c])
 AC_CONFIG_HEADER([include/setup.h])
 AC_CONFIG_AUX_DIR([autoconf])
@@ -30,17 +30,17 @@ UNREAL_VERSION_GENERATION=["6"]
 AC_DEFINE_UNQUOTED([UNREAL_VERSION_GENERATION], [$UNREAL_VERSION_GENERATION], [Generation version number (e.g.: X for X.Y.Z)])
 
 # Major version number (e.g.: Y in X.Y.Z)
-UNREAL_VERSION_MAJOR=["0"]
+UNREAL_VERSION_MAJOR=["1"]
 AC_DEFINE_UNQUOTED([UNREAL_VERSION_MAJOR], [$UNREAL_VERSION_MAJOR], [Major version number (e.g.: Y for X.Y.Z)])
 
 # Minor version number (e.g.: Z in X.Y.Z)
-UNREAL_VERSION_MINOR=["4"]
+UNREAL_VERSION_MINOR=["0"]
 AC_DEFINE_UNQUOTED([UNREAL_VERSION_MINOR], [$UNREAL_VERSION_MINOR], [Minor version number (e.g.: Z for X.Y.Z)])
 
 # The version suffix such as a beta marker or release candidate
 # marker. (e.g.: -rcX for unrealircd-3.2.9-rcX). This macro is a
 # string instead of an integer because it contains arbitrary data.
-UNREAL_VERSION_SUFFIX=[".2"]
+UNREAL_VERSION_SUFFIX=[""]
 AC_DEFINE_UNQUOTED([UNREAL_VERSION_SUFFIX], ["$UNREAL_VERSION_SUFFIX"], [Version suffix such as a beta marker or release candidate marker. (e.g.: -rcX for unrealircd-3.2.9-rcX)])
 
 AC_PATH_PROG(RM,rm)
@@ -257,6 +257,9 @@ check_cc_flag([-Wsign-compare], [CFLAGS="$CFLAGS -Wno-sign-compare"])
 dnl Don't warn about empty body, we use this, eg via Debug(()) or in if's.
 check_cc_flag([-Wempty-body], [CFLAGS="$CFLAGS -Wno-empty-body"])
 
+dnl This warns about all our hook calls - RunHook() and others
+check_cc_flag([-Wdeprecated-non-prototype], [CFLAGS="$CFLAGS -Wno-deprecated-non-prototype"])
+
 dnl Yeah this old clang version is a bit problematic
 dnl (ships in Ubuntu 16.04 for example)
 dnl -Wtautological-compare has false positives
@@ -326,7 +329,7 @@ fi
 ])
 AC_CACHE_CHECK(if your system prepends an underscore on symbols,ac_cv_underscore,[
 cat >uscore.c << __EOF__
-int main() {
+int main(void) {
 	return 0;
 }
 __EOF__
@@ -354,7 +357,8 @@ AC_CACHE_CHECK([if your system has IPv6 support], [ac_cv_ip6], [
 AC_TRY_RUN([
 #include <sys/types.h>
 #include <sys/socket.h>
-int main() {
+#include <stdlib.h>
+int main(void) {
 int s = socket(AF_INET6, SOCK_STREAM, 0);
 exit(0); /* We only check if the code compiles, that's enough. We can deal with missing runtime IPv6 */
 }
@@ -405,6 +409,7 @@ AC_CHECK_FUNCS([setproctitle],
 
 AC_CHECK_FUNCS(explicit_bzero,AC_DEFINE([HAVE_EXPLICIT_BZERO], [], [Define if you have explicit_bzero]))
 AC_CHECK_FUNCS(syslog,AC_DEFINE([HAVE_SYSLOG], [], [Define if you have syslog]))
+AC_CHECK_FUNCS(strnlen,AC_DEFINE([HAVE_STRNLEN], [], [Define if you have strnlen]))
 AC_SUBST(CRYPTOLIB)
 AC_SUBST(MODULEFLAGS)
 AC_SUBST(DYNAMIC_LDFLAGS)
@@ -547,6 +552,7 @@ CHECK_SSL_CTX_SET_MIN_PROTO_VERSION
 CHECK_SSL_CTX_SET_SECURITY_LEVEL
 CHECK_ASN1_TIME_diff
 CHECK_X509_get0_notAfter
+CHECK_X509_check_host
 AC_ARG_ENABLE(dynamic-linking, [AS_HELP_STRING([--disable-dynamic-linking], [Make the IRCd statically link with shared objects rather than dynamically (noone knows if disabling dynamic linking actually does anything or not)])],
 	[enable_dynamic_linking=$enableval], [enable_dynamic_linking="yes"])
 AS_IF([test $enable_dynamic_linking = "yes"],
@@ -580,12 +586,12 @@ export PATH_SEPARATOR
 dnl Use system pcre2 when available, unless --without-system-pcre2.
 has_system_pcre2="no"
 AS_IF([test "x$with_system_pcre2" = "xyes"],[
-PKG_CHECK_MODULES([PCRE2], libpcre2-8 >= 10.00,[has_system_pcre2=yes
+PKG_CHECK_MODULES([PCRE2], libpcre2-8 >= 10.36,[has_system_pcre2=yes
 AS_IF([test "x$PRIVATELIBDIR" != "x"], [rm -f "$PRIVATELIBDIR/"libpcre2*])],[has_system_pcre2=no])])
 
 AS_IF([test "$has_system_pcre2" = "no"], [
 dnl REMEMBER TO CHANGE WITH A NEW PCRE2 RELEASE!
-pcre2_version="10.39"
+pcre2_version="10.42"
 AC_MSG_RESULT(extracting PCRE2 regex library)
 cur_dir=`pwd`
 cd extras
@@ -606,6 +612,7 @@ cd pcre2-$pcre2_version
 AC_MSG_RESULT(compiling PCRE2 regex library)
 $ac_cv_prog_MAKER || exit 1
 AC_MSG_RESULT(installing PCRE2 regex library)
+rm -f "$PRIVATELIBDIR/"libpcre2*
 $ac_cv_prog_MAKER install || exit 1
 PCRE2_CFLAGS="-I$cur_dir/extras/pcre2/include"
 AC_SUBST(PCRE2_CFLAGS)
@@ -631,7 +638,7 @@ AS_IF([test "x$PRIVATELIBDIR" != "x"], [rm -f "$PRIVATELIBDIR/"libargon2*])],[ha
 
 AS_IF([test "$has_system_argon2" = "no"],[
 dnl REMEMBER TO CHANGE WITH A NEW ARGON2 RELEASE!
-argon2_version="20181209"
+argon2_version="20190702"
 AC_MSG_RESULT(extracting Argon2 library)
 cur_dir=`pwd`
 cd extras
@@ -639,12 +646,12 @@ dnl remove old argon2 directory to force a recompile...
 dnl and remove its installation prefix just to clean things up.
 rm -rf argon2-$argon2_version argon2
 if test "x$ac_cv_path_GUNZIP" = "x" ; then
-	tar xfz argon2-$argon2_version.tar.gz
+	tar xfz argon2.tar.gz
 else
-	cp argon2-$argon2_version.tar.gz argon2-$argon2_version.tar.gz.bak
-	gunzip -f argon2-$argon2_version.tar.gz
-	cp argon2-$argon2_version.tar.gz.bak argon2-$argon2_version.tar.gz
-	tar xf argon2-$argon2_version.tar
+	cp argon2.tar.gz argon2.tar.gz.bak
+	gunzip -f argon2.tar.gz
+	cp argon2.tar.gz.bak argon2.tar.gz
+	tar xf argon2.tar
 fi
 AC_MSG_RESULT(compiling Argon2 library)
 cd argon2-$argon2_version
@@ -699,6 +706,7 @@ CFLAGS="$save_cflags"
 AC_MSG_RESULT(compiling sodium resolver library)
 $ac_cv_prog_MAKER || exit 1
 AC_MSG_RESULT(installing sodium resolver library)
+rm -f "$PRIVATELIBDIR/"libsodium*
 $ac_cv_prog_MAKER install || exit 1
 SODIUM_CFLAGS="-I$cur_dir/extras/sodium/include"
 AC_SUBST(SODIUM_CFLAGS)
@@ -725,7 +733,7 @@ AS_IF([test "$has_system_cares" = "no"], [
 dnl REMEMBER TO CHANGE WITH A NEW C-ARES RELEASE!
 dnl NOTE: when changing this here, ALSO change it in extras/curlinstall
 dnl       and in the comment in this file around line 400!
-cares_version="1.18.1"
+cares_version="1.19.0"
 AC_MSG_RESULT(extracting c-ares resolver library)
 cur_dir=`pwd`
 cd extras
@@ -749,6 +757,7 @@ CFLAGS="$save_cflags"
 AC_MSG_RESULT(compiling c-ares resolver library)
 $ac_cv_prog_MAKER || exit 1
 AC_MSG_RESULT(installing c-ares resolver library)
+rm -f "$PRIVATELIBDIR/"libcares*
 $ac_cv_prog_MAKER install || exit 1
 CARES_CFLAGS="-I$cur_dir/extras/c-ares/include"
 AC_SUBST(CARES_CFLAGS)
@@ -799,7 +808,7 @@ AS_IF([test "x$PRIVATELIBDIR" != "x"], [rm -f "$PRIVATELIBDIR/"libjansson*])],[h
 
 AS_IF([test "$has_system_jansson" = "no"],[
 dnl REMEMBER TO CHANGE WITH A NEW JANSSON RELEASE!
-jansson_version="2.13.1"
+jansson_version="2.14"
 AC_MSG_RESULT(extracting jansson library)
 cur_dir=`pwd`
 cd extras
@@ -819,11 +828,12 @@ cd jansson-$jansson_version
 save_cflags="$CFLAGS"
 CFLAGS="$orig_cflags"
 export CFLAGS
-./configure --prefix=$cur_dir/extras/jansson --libdir=$PRIVATELIBDIR --enable-shared --disable-static --enable-opt || exit 1
+./configure --prefix=$cur_dir/extras/jansson --libdir=$PRIVATELIBDIR --enable-shared --disable-static || exit 1
 CFLAGS="$save_cflags"
 AC_MSG_RESULT(compiling jansson resolver library)
 $ac_cv_prog_MAKER || exit 1
 AC_MSG_RESULT(installing jansson resolver library)
+rm -f "$PRIVATELIBDIR/"libjansson*
 $ac_cv_prog_MAKER install || exit 1
 JANSSON_CFLAGS="-I$cur_dir/extras/jansson/include"
 AC_SUBST(JANSSON_CFLAGS)
@@ -873,6 +883,7 @@ AC_CONFIG_FILES([Makefile
 	src/modules/chanmodes/Makefile
 	src/modules/usermodes/Makefile
 	src/modules/extbans/Makefile
+	src/modules/rpc/Makefile
 	src/modules/third/Makefile
 	extras/unrealircd-upgrade-script
 	unrealircd])

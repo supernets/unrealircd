@@ -39,6 +39,9 @@
 #include <openssl/rand.h>
 #include <openssl/md5.h>
 #include <openssl/ripemd.h>
+#ifdef HAS_X509_check_host
+#include <openssl/x509v3.h>
+#endif
 #include <jansson.h>
 #include "common.h"
 #include "sys.h"
@@ -104,7 +107,6 @@ typedef struct ConfigItem_vhost ConfigItem_vhost;
 typedef struct ConfigItem_link	ConfigItem_link;
 typedef struct ConfigItem_ban ConfigItem_ban;
 typedef struct ConfigItem_deny_dcc ConfigItem_deny_dcc;
-typedef struct ConfigItem_deny_link ConfigItem_deny_link;
 typedef struct ConfigItem_deny_channel ConfigItem_deny_channel;
 typedef struct ConfigItem_deny_version ConfigItem_deny_version;
 typedef struct ConfigItem_alias ConfigItem_alias;
@@ -128,6 +130,7 @@ typedef struct LocalClient LocalClient;
 typedef struct Channel Channel;
 typedef struct User User;
 typedef struct Server Server;
+typedef struct RPCClient RPCClient;
 typedef struct Link Link;
 typedef struct Ban Ban;
 typedef struct Mode Mode;
@@ -179,7 +182,9 @@ typedef OperPermission (*OperClassEntryEvalCallback)(OperClassACLEntryVar* varia
 #define	KEYLEN		23
 #define LINKLEN		32
 #define	BUFSIZE		512	/* WARNING: *DONT* CHANGE THIS!!!! */
-#define READBUFSIZE	8192	/* for the read buffer */
+#define MAXTAGSIZE	8192	/**< Maximum length of message tags (4K user + 4K server) */
+#define MAXLINELENGTH	(MAXTAGSIZE+BUFSIZE)	/**< Maximum length of a line on IRC: 4k client tags + 4k server tags + 512 bytes (IRCv3) */
+#define READBUFSIZE	MAXLINELENGTH	/* for the read buffer */
 #define	MAXRECIPIENTS 	20
 #define	MAXSILELENGTH	NICKLEN+USERLEN+HOSTLEN+10
 #define IDLEN		12
@@ -323,9 +328,10 @@ typedef enum LogDestination { LOG_DEST_SNOMASK=0, LOG_DEST_OPER=1, LOG_DEST_REMO
  * @{
  */
 typedef enum ClientStatus {
-	CLIENT_STATUS_CONTROL			= -8,	/**< Client is on the control channel */
-	CLIENT_STATUS_LOG			= -7,	/**< Client is a log file */
-	CLIENT_STATUS_TLS_STARTTLS_HANDSHAKE	= -8,	/**< Client is doing a STARTTLS handshake */
+	CLIENT_STATUS_RPC			= -10,	/**< RPC Client (either local or remote) */
+	CLIENT_STATUS_CONTROL			= -9,	/**< Client is on the control channel */
+	CLIENT_STATUS_LOG			= -8,	/**< Client is a log file */
+	CLIENT_STATUS_TLS_STARTTLS_HANDSHAKE	= -7,	/**< Client is doing a STARTTLS handshake */
 	CLIENT_STATUS_CONNECTING		= -6,	/**< Client is an outgoing connect */
 	CLIENT_STATUS_TLS_CONNECT_HANDSHAKE	= -5,	/**< Client is doing an TLS handshake - outgoing connection */
 	CLIENT_STATUS_TLS_ACCEPT_HANDSHAKE	= -4,	/**< Client is doing an TLS handshake - incoming connection */
@@ -346,7 +352,8 @@ typedef enum ClientStatus {
 /** Client is not fully registered yet. May become a user or a server, we don't know yet. */
 #define	IsUnknown(x)		(((x)->status == CLIENT_STATUS_UNKNOWN) || ((x)->status == CLIENT_STATUS_TLS_STARTTLS_HANDSHAKE))	
 #define	IsServer(x)		((x)->status == CLIENT_STATUS_SERVER)	/**< Is a server that has completed the connection handshake */
-#define	IsControl(x)		((x)->status == CLIENT_STATUS_CONTROL)	/**< Is on the control channel (not on IRC) */
+#define	IsControl(x)		((x)->status == CLIENT_STATUS_CONTROL)	/**< Is on the control channel (not an IRC client) */
+#define	IsRPC(x)		((x)->status == CLIENT_STATUS_RPC)	/**< Is doing RPC (not an IRC client) */
 #define	IsLog(x)		((x)->status == CLIENT_STATUS_LOG)	/**< Is a log file, not a user or server */
 #define IsStartTLSHandshake(x)	((x)->status == CLIENT_STATUS_TLS_STARTTLS_HANDSHAKE)	/**< Currently doing a STARTTLS handshake */
 #define IsTLSAcceptHandshake(x)	((x)->status == CLIENT_STATUS_TLS_ACCEPT_HANDSHAKE)	/**< Currently doing a TLS handshake - incoming */
@@ -364,6 +371,7 @@ typedef enum ClientStatus {
 #define	SetUser(x)		((x)->status = CLIENT_STATUS_USER)
 #define	SetLog(x)		((x)->status = CLIENT_STATUS_LOG)
 #define	SetControl(x)		((x)->status = CLIENT_STATUS_CONTROL)
+#define	SetRPC(x)		((x)->status = CLIENT_STATUS_RPC)
 #define	SetUser(x)		((x)->status = CLIENT_STATUS_USER)
 
 /** @} */
@@ -403,6 +411,7 @@ typedef enum ClientStatus {
 #define CLIENT_FLAG_PINGWARN		0x10000000	/**< Server ping warning (remote server slow with responding to PINGs) */
 #define CLIENT_FLAG_NOHANDSHAKEDELAY	0x20000000	/**< No handshake delay */
 #define CLIENT_FLAG_SERVER_DISCONNECT_LOGGED	0x40000000	/**< Server disconnect message is (already) logged */
+#define CLIENT_FLAG_ASYNC_RPC			0x80000000	/**< Asynchronous remote RPC request - special case for rehash etc. */
 
 /** @} */
 
@@ -493,8 +502,10 @@ typedef enum ClientStatus {
 #define IsTLS(x)			((x)->flags & CLIENT_FLAG_TLS)
 #define IsSecure(x)			((x)->flags & CLIENT_FLAG_TLS)
 #define IsULine(x)			((x)->flags & CLIENT_FLAG_ULINE)
+#define IsSvsCmdOk(x)			(((x)->flags & CLIENT_FLAG_ULINE) || ((iConf.limit_svscmds == LIMIT_SVSCMDS_SERVERS) && (IsServer((x)) || IsMe((x)))))
 #define IsVirus(x)			((x)->flags & CLIENT_FLAG_VIRUS)
 #define IsIdentLookupSent(x)		((x)->flags & CLIENT_FLAG_IDENTLOOKUPSENT)
+#define IsAsyncRPC(x)			((x)->flags & CLIENT_FLAG_ASYNC_RPC)
 #define SetIdentLookup(x)		do { (x)->flags |= CLIENT_FLAG_IDENTLOOKUP; } while(0)
 #define SetClosing(x)			do { (x)->flags |= CLIENT_FLAG_CLOSING; } while(0)
 #define SetDCCBlock(x)			do { (x)->flags |= CLIENT_FLAG_DCCBLOCK; } while(0)
@@ -526,6 +537,7 @@ typedef enum ClientStatus {
 #define SetULine(x)			do { (x)->flags |= CLIENT_FLAG_ULINE; } while(0)
 #define SetVirus(x)			do { (x)->flags |= CLIENT_FLAG_VIRUS; } while(0)
 #define SetIdentLookupSent(x)		do { (x)->flags |= CLIENT_FLAG_IDENTLOOKUPSENT; } while(0)
+#define SetAsyncRPC(x)			do { (x)->flags |= CLIENT_FLAG_ASYNC_RPC; } while(0)
 #define ClearIdentLookup(x)		do { (x)->flags &= ~CLIENT_FLAG_IDENTLOOKUP; } while(0)
 #define ClearClosing(x)			do { (x)->flags &= ~CLIENT_FLAG_CLOSING; } while(0)
 #define ClearDCCBlock(x)		do { (x)->flags &= ~CLIENT_FLAG_DCCBLOCK; } while(0)
@@ -556,12 +568,13 @@ typedef enum ClientStatus {
 #define ClearULine(x)			do { (x)->flags &= ~CLIENT_FLAG_ULINE; } while(0)
 #define ClearVirus(x)			do { (x)->flags &= ~CLIENT_FLAG_VIRUS; } while(0)
 #define ClearIdentLookupSent(x)		do { (x)->flags &= ~CLIENT_FLAG_IDENTLOOKUPSENT; } while(0)
+#define ClearAsyncRPC(x)		do { (x)->flags &= ~CLIENT_FLAG_ASYNC_RPC; } while(0)
+/** @} */
+
 #define IsIPV6(x)			((x)->local->socket_type == SOCKET_TYPE_IPV6)
 #define IsUnixSocket(x)			((x)->local->socket_type == SOCKET_TYPE_UNIX)
 #define SetIPV6(x)			do { (x)->local->socket_type = SOCKET_TYPE_IPV6; } while(0)
 #define SetUnixSocket(x)			do { (x)->local->socket_type = SOCKET_TYPE_UNIX; } while(0)
-/** @} */
-
 
 /* Others that access client structs: */
 #define	IsNotSpoof(x)	((x)->local->nospoof == 0)
@@ -788,6 +801,20 @@ struct MOTDLine {
 	struct MOTDLine *next;
 };
 
+/** Current status of configuration in memory (what stage are we in..) */
+typedef enum ConfigStatus {
+	CONFIG_STATUS_NONE = 0,		/**< Config files have not been parsed yet */
+	CONFIG_STATUS_TEST = 1,		/**< Currently running MOD_TEST() */
+	CONFIG_STATUS_POSTTEST = 2,	/**< Currently running post_config_test hooks */
+	CONFIG_STATUS_PRE_INIT = 3,	/**< In-between */
+	CONFIG_STATUS_INIT = 4,		/**< Currently running MOD_INIT() */
+	CONFIG_STATUS_RUN_CONFIG = 5,	/**< Currently running CONFIG_RUN hooks */
+	CONFIG_STATUS_LOAD = 6,		/**< Currently running MOD_LOAD() */
+	CONFIG_STATUS_POSTLOAD = 7,	/**< Doing post-load stuff like activating listeners */
+	CONFIG_STATUS_COMPLETE = 8,	/**< Load or rehash complete */
+	CONFIG_STATUS_ROLLBACK = 99,	/**< Configuration failed, rolling back changes */
+} ConfigStatus;
+
 struct LoopStruct {
 	unsigned do_garbage_collect : 1;
 	unsigned config_test : 1;
@@ -801,6 +828,7 @@ struct LoopStruct {
 	unsigned rehash_download_busy : 1; /* don't return "all downloads complete", needed for race condition */
 	unsigned tainted : 1;
 	int rehashing;
+	ConfigStatus config_status;
 	Client *rehash_save_client;
 	void (*boot_function)();
 };
@@ -826,10 +854,15 @@ typedef struct Whowas {
 	char *username;
 	char *hostname;
 	char *virthost;
+	char *ip;
 	char *servername;
 	char *realname;
+	char *account;
 	long umodes;
-	time_t   logoff;
+	time_t logon;
+	time_t logoff;
+	time_t connected_since;
+	WhoWasEvent event;
 	struct Client *online;	/* Pointer to new nickname for chasing or NULL */
 	struct Whowas *next;	/* for hash table... */
 	struct Whowas *prev;	/* for hash table... */
@@ -873,8 +906,9 @@ struct SWhois {
 
 /** Command function - used by all command handlers.
  * This is used in the code like <pre>CMD_FUNC(cmd_yourcmd)</pre> as a function definition.
- * @param cptr        The client direction pointer.
- * @param client        The source client pointer (you usually need this one).
+ * It allows UnrealIRCd devs to change the parameters in the function without
+ * (necessarily) breaking your code.
+ * @param client      The client
  * @param recv_mtags  Received message tags for this command.
  * @param parc        Parameter count *plus* 1.
  * @param parv        Parameter values.
@@ -885,6 +919,15 @@ struct SWhois {
  *        E.g. parv[3] in the above example is out of bounds.
  */
 #define CMD_FUNC(x) void (x) (Client *client, MessageTag *recv_mtags, int parc, const char *parv[])
+
+/** Call a command function - can be useful if you are calling another command function in your own module.
+ * For example in cmd_nick() we call cmd_nick_local() for local functions,
+ * and then we can just use CALL_CMD_FUNC(cmd_nick_local); and don't have
+ * to bother with passing the right command arguments. Which is nice because
+ * command arguments may change in future UnrealIRCd versions.
+ */
+#define CALL_CMD_FUNC(x)	(x)(client, recv_mtags, parc, parv)
+
 /** @} */
 
 /** Command override function - used by all command override handlers.
@@ -1226,13 +1269,15 @@ extern ModDataInfo *ModDataAdd(Module *module, ModDataInfo req);
 extern void ModDataDel(ModDataInfo *md);
 extern void unload_all_unused_moddata(void);
 
-#define LISTENER_NORMAL		0x000001
-#define LISTENER_CLIENTSONLY	0x000002
-#define LISTENER_SERVERSONLY	0x000004
-#define LISTENER_TLS		0x000010
-#define LISTENER_BOUND		0x000020
-#define LISTENER_DEFER_ACCEPT	0x000040
-#define LISTENER_CONTROL	0x000080	/**< Control channel */
+#define LISTENER_NORMAL			0x000001
+#define LISTENER_CLIENTSONLY		0x000002
+#define LISTENER_SERVERSONLY		0x000004
+#define LISTENER_TLS			0x000010
+#define LISTENER_BOUND			0x000020
+#define LISTENER_DEFER_ACCEPT		0x000040
+#define LISTENER_CONTROL		0x000080	/**< Control channel */
+#define LISTENER_NO_CHECK_CONNECT_FLOOD	0x000100	/**< Don't check for connect-flood and max-unknown-connections-per-ip (eg for RPC) */
+#define LISTENER_NO_CHECK_ZLINED	0x000200	/**< Don't check for zlines */
 
 #define IsServersOnlyListener(x)	((x) && ((x)->options & LISTENER_SERVERSONLY))
 
@@ -1292,11 +1337,12 @@ struct Client {
 	LocalClient *local;			/**< Additional information regarding locally connected clients */
 	User *user;				/**< Additional information, if this client is a user */
 	Server *server;				/**< Additional information, if this is a server */
+	RPCClient *rpc;				/**< RPC Client, or NULL */
 	ClientStatus status;			/**< Client status, one of CLIENT_STATUS_* */
 	struct list_head client_hash;		/**< For name hash table (clientTable) */
 	char name[HOSTLEN + 1];			/**< Unique name of the client: nickname for users, hostname for servers */
 	time_t lastnick;			/**< Timestamp on nick */
-	long flags;				/**< Client flags (one or more of CLIENT_FLAG_*) */
+	uint64_t flags;				/**< Client flags (one or more of CLIENT_FLAG_*) */
 	long umodes;				/**< Client usermodes (if user) */
 	Client *direction;			/**< Direction from which this client originated.
 	                                             This always points to a directly connected server or &me.
@@ -1349,6 +1395,7 @@ struct LocalClient {
 	char sockhost[HOSTLEN + 1];	/**< Hostname from the socket */
 	u_short port;			/**< Remote TCP port of client */
 	FloodCounter flood[MAXFLOODOPTIONS];
+	RPCClient *rpc;			/**< RPC Client, or NULL */
 };
 
 /** User information (persons, not servers), you use client->user to access these (see also @link Client @endlink).
@@ -1393,6 +1440,15 @@ struct Server {
 
 /** @} */
 
+typedef struct RPCClient RPCClient;
+/** RPC Client information */
+struct RPCClient {
+	char *rpc_user; /**< Name of the rpc-user block after authentication, NULL during pre-auth */
+	char *issuer; /**< Optional name of the issuer, set by rpc.set_issuer(), eg logged in user on admin panel, can be NULL */
+	json_t *rehash_request; /**< If a REHASH (request) is currently running, otherwise NULL */
+	LogSource *log_sources; /**< Subscribed to which log sources */
+};
+
 struct MessageTag {
 	MessageTag *prev, *next;
 	char *name;
@@ -1409,7 +1465,8 @@ typedef enum PreprocessorItem {
 
 typedef enum PreprocessorPhase {
 	PREPROCESSOR_PHASE_INITIAL	= 1,
-	PREPROCESSOR_PHASE_MODULE	= 2
+	PREPROCESSOR_PHASE_SECONDARY	= 2,
+	PREPROCESSOR_PHASE_MODULE	= 3
 } PreprocessorPhase;
 
 typedef enum AuthenticationType {
@@ -1436,6 +1493,30 @@ struct AuthConfig {
 #ifndef HAVE_CRYPT
 #define crypt DES_crypt
 #endif
+
+/* CRULE stuff */
+
+#define CRULE_ALL		0
+#define CRULE_AUTO		1
+
+/* some constants and shared data types */
+#define CR_MAXARGLEN 80         /**< Maximum arg length (must be > HOSTLEN) */
+#define CR_MAXARGS 3            /**< Maximum number of args for a rule */
+
+/** Evaluation function for a connection rule. */
+typedef int (*crule_funcptr) (int, void **);
+
+/** CRULE - Node in a connection rule tree. */
+struct CRuleNode {
+  crule_funcptr funcptr; /**< Evaluation function for this node. */
+  int numargs;           /**< Number of arguments. */
+  void *arg[CR_MAXARGS]; /**< Array of arguments.  For operators, each arg
+                            is a tree element; for functions, each arg is
+                            a string. */
+};
+typedef struct CRuleNode CRuleNode;
+typedef struct CRuleNode* CRuleNodePtr;
+
 
 /*
  * conf2 stuff -stskeeps
@@ -1513,9 +1594,6 @@ struct ConfigFlag_tld
 #define CONF_BAN_TYPE_CONF	0
 #define CONF_BAN_TYPE_AKILL	1
 #define CONF_BAN_TYPE_TEMPORARY 2
-
-#define CRULE_ALL		0
-#define CRULE_AUTO		1
 
 struct ConfigItem {
 	ConfigItem *prev, *next;
@@ -1693,19 +1771,93 @@ struct ConfigItem_tld {
 	u_short		options;
 };
 
+#define WEB_OPT_ENABLE	0x1
+
+typedef enum HttpMethod {
+	HTTP_METHOD_NONE = 0,	/**< No valid HTTP request (yet) */
+	HTTP_METHOD_HEAD = 1,	/**< HEAD request */
+	HTTP_METHOD_GET = 2,	/**< GET request */
+	HTTP_METHOD_PUT = 3,	/**< PUT request */
+	HTTP_METHOD_POST = 4,	/**< POST request */
+} HttpMethod;
+
+typedef enum TransferEncoding {
+	TRANSFER_ENCODING_NONE=0,
+	TRANSFER_ENCODING_CHUNKED=1
+} TransferEncoding;
+
+typedef struct WebRequest WebRequest;
+struct WebRequest {
+	HttpMethod method; /**< GET/PUT/POST */
+	char *uri; /**< Requested resource, eg "/api" */
+	NameValuePrioList *headers; /**< HTTP request headers */
+	int num_headers; /**< Number of HTTP request headers (also used for sorting the list) */
+	char request_header_parsed; /**< Done parsing? */
+	char *lefttoparse; /**< Leftover buffer to parse */
+	int lefttoparselen; /**< Length of lefttoparse buffer */
+	int pending_close; /**< Set to 1 when connection should be closed as soon as all data is sent (sendq==0) */
+	char *request_buffer; /**< Buffer for POST data */
+	int request_buffer_size; /**< Size of buffer for POST data */
+	int request_body_complete; /**< POST data has all been read */
+	long long content_length; /**< "Content-Length" as sent by the client */
+	long long chunk_remaining;
+	TransferEncoding transfer_encoding;
+	long long config_max_request_buffer_size; /**< CONFIG: Maximum request length allowed */
+};
+
+typedef struct WebServer WebServer;
+struct WebServer {
+	int (*handle_request)(Client *client, WebRequest *web);
+	int (*handle_body)(Client *client, WebRequest *web, const char *buf, int length);
+};
+
+typedef enum WebSocketType {
+	WEBSOCKET_TYPE_BINARY = 1,
+	WEBSOCKET_TYPE_TEXT   = 2
+} WebSocketType;
+
+typedef struct WebSocketUser WebSocketUser;
+struct WebSocketUser {
+	char get; /**< GET initiated */
+	char handshake_completed; /**< Handshake completed, use websocket frames */
+	char *handshake_key; /**< Handshake key (used during handshake) */
+	char *lefttoparse; /**< Leftover buffer to parse */
+	int lefttoparselen; /**< Length of lefttoparse buffer */
+	WebSocketType type; /**< WEBSOCKET_TYPE_BINARY or WEBSOCKET_TYPE_TEXT */
+	char *sec_websocket_protocol; /**< Only valid during parsing of the request, after that it is NULL again */
+	char *forwarded; /**< Unparsed `Forwarded:` header, RFC 7239 */
+	int secure; /**< If there is a Forwarded header, this indicates if the remote connection is secure */
+};
+
+#define WEBSOCKET_MAGIC_KEY "258EAFA5-E914-47DA-95CA-C5AB0DC85B11" /* see RFC6455 */
+
+/* Websocket operations: */
+#define WSOP_CONTINUATION 0x00
+#define WSOP_TEXT         0x01
+#define WSOP_BINARY       0x02
+#define WSOP_CLOSE        0x08
+#define WSOP_PING         0x09
+#define WSOP_PONG         0x0a
+
 struct ConfigItem_listen {
 	ConfigItem_listen *prev, *next;
 	ConfigFlag flag;
-	SocketType socket_type;
-	char *file;
-	char *ip;
-	int port;
-	int options, clients;
-	int fd;
-	SSL_CTX *ssl_ctx;
-	TLSOptions *tls_options;
-	int websocket_options; /* should be in module, but lazy */
-	char *websocket_forward;
+	SocketType socket_type;		/**< Socket type, eg. SOCKET_TYPE_IPV4 or SOCKET_TYPE_UNIX */
+	char *file;			/**< If the listener is a file, the full pathname */
+	char *ip;			/**< IP bind address (if IP listener) */
+	int port;			/**< Port to listen on (if IP listener) */
+	int mode;			/**< Mode permissions (if file aka unix socket listener) */
+	int options;			/**< e.g. LISTENER_BOUND if active */
+	int clients;			/**< Clients connected to this socket / listener */
+	int fd;				/**< File descriptor (if open), or -1 (if not open yet) */
+	char *spoof_ip;			/**< listen::spoof-ip (only for listen::file, if you want to override 127.0.0.1) */
+	SSL_CTX *ssl_ctx;		/**< SSL/TLS context */
+	TLSOptions *tls_options;	/**< SSL/TLS options */
+	WebServer *webserver;		/**< For the webserver module */
+	void (*start_handshake)(Client *client); /**< Function to call on accept() */
+	int websocket_options;		/**< Websocket options (for the websocket module) */
+	int rpc_options;		/**< For the RPC module */
+	char *websocket_forward;	/**< For websocket module too */
 };
 
 struct ConfigItem_sni {
@@ -1766,13 +1918,6 @@ struct ConfigItem_deny_dcc {
 	ConfigItem_deny_dcc		*prev, *next;
 	ConfigFlag_ban		flag;
 	char			*filename, *reason;
-};
-
-struct ConfigItem_deny_link {
-	ConfigItem_deny_link *prev, *next;
-	ConfigFlag_except flag;
-	ConfigItem_mask  *mask;
-	char *rule, *prettyrule;
 };
 
 struct ConfigItem_deny_version {
@@ -1873,6 +2018,7 @@ struct SecurityGroup {
 	int reputation_score;
 	long connect_time;
 	int webirc;
+	int websocket;
 	int tls;
 	NameList *ip;
 	ConfigItem_mask *mask;
@@ -1883,6 +2029,7 @@ struct SecurityGroup {
 	int exclude_reputation_score;
 	long exclude_connect_time;
 	int exclude_webirc;
+	int exclude_websocket;
 	int exclude_tls;
 	NameList *exclude_ip;
 	ConfigItem_mask *exclude_mask;
@@ -2269,6 +2416,62 @@ typedef enum WhoisConfigDetails {
 /* Options for StripControlCodesEx() */
 #define UNRL_STRIP_LOW_ASCII    0x1     /**< Strip all ASCII < 32 (control codes) */
 #define UNRL_STRIP_KEEP_LF      0x2     /**< Do not strip LF (line feed, \n) */
+
+/** JSON-RPC API Errors, according to jsonrpc.org spec */
+typedef enum JsonRpcError {
+	// Official JSON-RPC error codes:
+	JSON_RPC_ERROR_PARSE_ERROR	= -32700, /**< JSON parse error (fatal) */
+	JSON_RPC_ERROR_INVALID_REQUEST	= -32600, /**< Invalid JSON-RPC Request */
+	JSON_RPC_ERROR_METHOD_NOT_FOUND	= -32601, /**< Method not found */
+	JSON_RPC_ERROR_INVALID_PARAMS	= -32602, /**< Method parameters invalid */
+	JSON_RPC_ERROR_INTERNAL_ERROR	= -32603, /**< Internal server error */
+	// UnrealIRCd JSON-RPC server specific error codes:
+	JSON_RPC_ERROR_API_CALL_DENIED	= -32000, /**< The api user does not have enough permissions to do this call */
+	JSON_RPC_ERROR_SERVER_GONE	= -32001, /**< The request was forwarded to a remote server, but this server went gone while processing the request */
+	JSON_RPC_ERROR_TIMEOUT		= -32002, /**< The request was forwarded to a remote server, but the request/response timed out (15 seconds) */
+	JSON_RPC_ERROR_REMOTE_SERVER_NO_RPC	= -32003, /**< The request was going to be forwarded to a remote server, but the remote server does not support JSON-RPC */
+	// UnrealIRCd specific application error codes:
+	JSON_RPC_ERROR_NOT_FOUND	=  -1000, /**< Target not found (no such nick / channel / ..) */
+	JSON_RPC_ERROR_ALREADY_EXISTS	=  -1001, /**< Resource already exists by that name (eg on nickchange request, a gline, etc) */
+	JSON_RPC_ERROR_INVALID_NAME	=  -1002, /**< Name is not permitted (eg: nick, channel, ..) */
+	JSON_RPC_ERROR_USERNOTINCHANNEL	=  -1003, /**< The user is not in the channel */
+	JSON_RPC_ERROR_TOO_MANY_ENTRIES	=  -1004, /**< Too many entries (eg: banlist, ..) */
+	JSON_RPC_ERROR_DENIED		=  -1005, /**< Permission denied for user (unrelated to api user permissions) */
+} JsonRpcError;
+
+/** Require a parameter in an RPC command */
+#define REQUIRE_PARAM_STRING(name, varname)          do { \
+                                                         varname = json_object_get_string(params, name); \
+                                                         if (!varname) \
+                                                         { \
+                                                             rpc_error_fmt(client, request, JSON_RPC_ERROR_INVALID_PARAMS, "Missing parameter: '%s'", name); \
+                                                             return; \
+                                                         } \
+                                                     } while(0)
+
+#define REQUIRE_PARAM_INTEGER(name, varname)         do { \
+                                                         json_t *t = json_object_get(params, name); \
+                                                         if (!t || !json_is_integer(t)) \
+                                                         { \
+                                                             rpc_error_fmt(client, request, JSON_RPC_ERROR_INVALID_PARAMS, "Missing parameter: '%s'", name); \
+                                                             return; \
+                                                         } \
+                                                         varname = json_integer_value(t); \
+                                                     } while(0)
+
+#define REQUIRE_PARAM_BOOLEAN(name, varname)         do { \
+                                                         json_t *vvv = json_object_get(params, name); \
+                                                         if (!v || !json_is_boolean(v)) \
+                                                         { \
+                                                             rpc_error_fmt(client, request, JSON_RPC_ERROR_INVALID_PARAMS, "Missing parameter: '%s'", name); \
+                                                             return; \
+                                                         } \
+                                                         varname = json_is_true(v) ? 1 : 0; \
+                                                     } while(0)
+
+#define OPTIONAL_PARAM_STRING(name, varname)         varname = json_object_get_string(params, name)
+#define OPTIONAL_PARAM_INTEGER(name, varname, def)   varname = json_object_get_integer(params, name, def)
+#define OPTIONAL_PARAM_BOOLEAN(name, varname, def)   varname = json_object_get_boolean(params, name, def)
 
 #endif /* __struct_include__ */
 

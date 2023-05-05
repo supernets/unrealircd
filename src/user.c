@@ -737,6 +737,25 @@ int hide_idle_time(Client *client, Client *target)
 	}
 }
 
+/** Get creation time of a client.
+ * @param client	The client to check (user, server, anything)
+ * @returns the time when the client first connected to IRC, or 0 for unknown.
+ */
+time_t get_creationtime(Client *client)
+{
+	const char *str;
+
+	/* Shortcut for local clients */
+	if (client->local)
+		return client->local->creationtime;
+
+	/* Otherwise, hopefully available through this... */
+	str = moddata_client_get(client, "creationtime");
+	if (!BadPtr(str) && (*str != '0'))
+		return atoll(str);
+	return 0;
+}
+
 /** Get how long a client is connected to IRC.
  * @param client	The client to check
  * @returns how long the client is connected to IRC (number of seconds)
@@ -829,6 +848,9 @@ void flood_limit_exceeded_log(Client *client, const char *floodname)
 {
 	char buf[1024];
 
+	// NOTE: If you ever change this format, there are a few more
+	// direct unreal_log() calls with "FLOOD_BLOCKED" in the file
+	// src/modules/targetfloodprot.c, so update those as well.
 	unreal_log(ULOG_INFO, "flood", "FLOOD_BLOCKED", client,
 	           "Flood blocked ($flood_type) from $client.details [$client.ip]",
 	           log_data_string("flood_type", floodname));

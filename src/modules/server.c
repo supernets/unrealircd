@@ -36,8 +36,19 @@ struct cfgstruct {
 	long handshake_timeout;
 };
 
+typedef struct ConfigItem_deny_link ConfigItem_deny_link;
+struct ConfigItem_deny_link {
+	ConfigItem_deny_link *prev, *next;
+	ConfigFlag_except flag;
+	ConfigItem_mask  *mask;
+	CRuleNode *rule; /**< parsed crule */
+	char *prettyrule; /**< human printable version */
+	char *reason; /**< Reason for the deny link */
+};
+
 /* Forward declarations */
 void server_config_setdefaults(cfgstruct *cfg);
+void server_config_free();
 int server_config_test(ConfigFile *cf, ConfigEntry *ce, int type, int *errs);
 int server_config_run(ConfigFile *cf, ConfigEntry *ce, int type);
 EVENT(server_autoconnect);
@@ -57,10 +68,15 @@ void server_generic_free(ModData *m);
 int server_post_connect(Client *client);
 void _connect_server(ConfigItem_link *aconf, Client *by, struct hostent *hp);
 static int connect_server_helper(ConfigItem_link *, Client *);
+int _is_services_but_not_ulined(Client *client);
+const char *_check_deny_link(ConfigItem_link *link, int auto_connect);
+int server_stats_denylink_all(Client *client, const char *para);
+int server_stats_denylink_auto(Client *client, const char *para);
 
 /* Global variables */
 static cfgstruct cfg;
 static char *last_autoconnect_server = NULL;
+static ConfigItem_deny_link *conf_deny_link = NULL;
 
 ModuleHeader MOD_HEADER
   = {
@@ -81,6 +97,8 @@ MOD_TEST()
 	EfunctionAdd(modinfo->handle, EFUNC_CHECK_DENY_VERSION, _check_deny_version);
 	EfunctionAddVoid(modinfo->handle, EFUNC_BROADCAST_SINFO, _broadcast_sinfo);
 	EfunctionAddVoid(modinfo->handle, EFUNC_CONNECT_SERVER, _connect_server);
+	EfunctionAdd(modinfo->handle, EFUNC_IS_SERVICES_BUT_NOT_ULINED, _is_services_but_not_ulined);
+	EfunctionAddConstString(modinfo->handle, EFUNC_CHECK_DENY_LINK, _check_deny_link);
 	HookAdd(modinfo->handle, HOOKTYPE_CONFIGTEST, 0, server_config_test);
 	return MOD_SUCCESS;
 }
@@ -92,6 +110,8 @@ MOD_INIT()
 	server_config_setdefaults(&cfg);
 	HookAdd(modinfo->handle, HOOKTYPE_CONFIGRUN, 0, server_config_run);
 	HookAdd(modinfo->handle, HOOKTYPE_POST_SERVER_CONNECT, 0, server_post_connect);
+	HookAdd(modinfo->handle, HOOKTYPE_STATS, 0, server_stats_denylink_all);
+	HookAdd(modinfo->handle, HOOKTYPE_STATS, 0, server_stats_denylink_auto);
 	CommandAdd(modinfo->handle, "SERVER", cmd_server, MAXPARA, CMD_UNREGISTERED|CMD_SERVER);
 	CommandAdd(modinfo->handle, "SID", cmd_sid, MAXPARA, CMD_SERVER);
 
@@ -107,6 +127,7 @@ MOD_LOAD()
 
 MOD_UNLOAD()
 {
+	server_config_free();
 	SavePersistentPointer(modinfo, last_autoconnect_server);
 	return MOD_SUCCESS;
 }
@@ -152,17 +173,27 @@ void server_config_setdefaults(cfgstruct *cfg)
 	cfg->handshake_timeout = 20;
 }
 
-int server_config_test(ConfigFile *cf, ConfigEntry *ce, int type, int *errs)
+void server_config_free(void)
+{
+	ConfigItem_deny_link *d, *d_next;
+
+	for (d = conf_deny_link; d; d = d_next)
+	{
+		d_next = d->next;
+		unreal_delete_masks(d->mask);
+		crule_free(&d->rule);
+		safe_free(d->prettyrule);
+		safe_free(d->reason);
+		DelListItem(d, conf_deny_link);
+		safe_free(d);
+	}
+	conf_deny_link = NULL;
+}
+
+int server_config_test_set_server_linking(ConfigFile *cf, ConfigEntry *ce, int type, int *errs)
 {
 	int errors = 0;
 	ConfigEntry *cep;
-
-	if (type != CONFIG_SET)
-		return 0;
-
-	/* We are only interrested in set::server-linking.. */
-	if (!ce || strcmp(ce->name, "server-linking"))
-		return 0;
 
 	for (cep = ce->items; cep; cep = cep->next)
 	{
@@ -218,16 +249,9 @@ int server_config_test(ConfigFile *cf, ConfigEntry *ce, int type, int *errs)
 	return errors ? -1 : 1;
 }
 
-int server_config_run(ConfigFile *cf, ConfigEntry *ce, int type)
+int server_config_run_set_server_linking(ConfigFile *cf, ConfigEntry *ce, int type)
 {
 	ConfigEntry *cep;
-
-	if (type != CONFIG_SET)
-		return 0;
-
-	/* We are only interrested in set::server-linking.. */
-	if (!ce || strcmp(ce->name, "server-linking"))
-		return 0;
 
 	for (cep = ce->items; cep; cep = cep->next)
 	{
@@ -244,12 +268,177 @@ int server_config_run(ConfigFile *cf, ConfigEntry *ce, int type)
 			cfg.handshake_timeout = config_checkval(cep->value, CFG_TIME);
 		}
 	}
+
 	return 1;
+}
+
+int server_config_test_deny_link(ConfigFile *cf, ConfigEntry *ce, int type, int *errs)
+{
+        int errors = 0;
+        ConfigEntry *cep;
+	char has_mask = 0, has_rule = 0, has_type = 0;
+
+	for (cep = ce->items; cep; cep = cep->next)
+	{
+		if (!cep->items)
+		{
+			if (config_is_blankorempty(cep, "deny link"))
+			{
+				errors++;
+				continue;
+			}
+			else if (!strcmp(cep->name, "mask"))
+			{
+				has_mask = 1;
+			} else if (!strcmp(cep->name, "rule"))
+			{
+				int val = 0;
+				if (has_rule)
+				{
+					config_warn_duplicate(cep->file->filename,
+						cep->line_number, "deny link::rule");
+					continue;
+				}
+				has_rule = 1;
+				if ((val = crule_test(cep->value)))
+				{
+					config_error("%s:%i: deny link::rule contains an invalid expression: %s",
+						cep->file->filename,
+						cep->line_number,
+						crule_errstring(val));
+					errors++;
+				}
+			}
+			else if (!strcmp(cep->name, "type"))
+			{
+				if (has_type)
+				{
+					config_warn_duplicate(cep->file->filename,
+						cep->line_number, "deny link::type");
+					continue;
+				}
+				has_type = 1;
+				if (!strcmp(cep->value, "auto"))
+				;
+				else if (!strcmp(cep->value, "all"))
+				;
+				else {
+					config_status("%s:%i: unknown deny link type",
+					cep->file->filename, cep->line_number);
+					errors++;
+				}
+			} else if (!strcmp(cep->name, "reason"))
+			{
+			}
+			else
+			{
+				config_error_unknown(cep->file->filename,
+					cep->line_number, "deny link", cep->name);
+				errors++;
+			}
+		}
+		else
+		{
+			// Sections
+			if (!strcmp(cep->name, "mask"))
+			{
+				if (cep->value || cep->items)
+					has_mask = 1;
+			}
+			else
+			{
+				config_error_unknown(cep->file->filename,
+					cep->line_number, "deny link", cep->name);
+				errors++;
+				continue;
+			}
+		}
+	}
+	if (!has_mask)
+	{
+		config_error_missing(ce->file->filename, ce->line_number,
+			"deny link::mask");
+		errors++;
+	}
+	if (!has_rule)
+	{
+		config_error_missing(ce->file->filename, ce->line_number,
+			"deny link::rule");
+		errors++;
+	}
+	if (!has_type)
+	{
+		config_error_missing(ce->file->filename, ce->line_number,
+			"deny link::type");
+		errors++;
+	}
+
+	*errs = errors;
+	return errors ? -1 : 1;
+}
+
+int server_config_run_deny_link(ConfigFile *cf, ConfigEntry *ce, int type)
+{
+	ConfigEntry *cep;
+	ConfigItem_deny_link *deny;
+
+	deny = safe_alloc(sizeof(ConfigItem_deny_link));
+
+	for (cep = ce->items; cep; cep = cep->next)
+	{
+		if (!strcmp(cep->name, "mask"))
+		{
+			unreal_add_masks(&deny->mask, cep);
+		}
+		else if (!strcmp(cep->name, "rule"))
+		{
+			deny->rule = crule_parse(cep->value);
+			safe_strdup(deny->prettyrule, cep->value);
+		}
+		else if (!strcmp(cep->name, "reason"))
+		{
+			safe_strdup(deny->reason, cep->value);
+		}
+		else if (!strcmp(cep->name, "type")) {
+			if (!strcmp(cep->value, "all"))
+				deny->flag.type = CRULE_ALL;
+			else if (!strcmp(cep->value, "auto"))
+				deny->flag.type = CRULE_AUTO;
+		}
+	}
+
+	/* Set a default reason, if needed */
+	if (!deny->reason)
+		safe_strdup(deny->reason, "Denied");
+
+	AddListItem(deny, conf_deny_link);
+	return 1;
+}
+
+int server_config_test(ConfigFile *cf, ConfigEntry *ce, int type, int *errs)
+{
+	if ((type == CONFIG_SET) && !strcmp(ce->name, "server-linking"))
+		return server_config_test_set_server_linking(cf, ce, type, errs);
+
+	if ((type == CONFIG_DENY) && !strcmp(ce->value, "link"))
+		return server_config_test_deny_link(cf, ce, type, errs);
+
+	return 0; /* not for us */
+}
+
+int server_config_run(ConfigFile *cf, ConfigEntry *ce, int type)
+{
+	if ((type == CONFIG_SET) && ce && !strcmp(ce->name, "server-linking"))
+		return server_config_run_set_server_linking(cf, ce, type);
+
+	if ((type == CONFIG_DENY) && !strcmp(ce->value, "link"))
+		return server_config_run_deny_link(cf, ce, type);
+
+	return 0; /* not for us */
 }
 
 int server_needs_linking(ConfigItem_link *aconf)
 {
-	ConfigItem_deny_link *deny;
 	Client *client;
 	ConfigItem_class *class;
 
@@ -278,9 +467,8 @@ int server_needs_linking(ConfigItem_link *aconf)
 		return 0; /* Class is full */
 
 	/* Check connect rules to see if we're allowed to try the link */
-	for (deny = conf_deny_link; deny; deny = deny->next)
-		if (unreal_mask_match_string(aconf->servername, deny->mask) && crule_eval(deny->rule))
-			return 0;
+	if (check_deny_link(aconf, 1))
+		return 0;
 
 	/* Yes, this server is a linking candidate */
 	return 1;
@@ -590,8 +778,8 @@ void _send_protoctl_servers(Client *client, int response)
 	Client *acptr;
 	int sendit = 1;
 
-	sendto_one(client, NULL, "PROTOCTL EAUTH=%s,%d,%s%s,%s",
-		me.name, UnrealProtocol, serveropts, extraflags ? extraflags : "", version);
+	sendto_one(client, NULL, "PROTOCTL EAUTH=%s,%d,%s%s,UnrealIRCd-%s",
+		me.name, UnrealProtocol, serveropts, extraflags ? extraflags : "", buildid);
 		
 	ircsnprintf(buf, sizeof(buf), "PROTOCTL SERVERS=%s", response ? "*" : "");
 
@@ -684,9 +872,7 @@ ConfigItem_link *_verify_link(Client *client)
 		goto skip_host_check;
 	} else {
 		/* Hunt the linkblock down ;) */
-		for(link = conf_link; link; link = link->next)
-			if (match_simple(link->servername, client->name))
-				break;
+		link = find_link(client->name);
 	}
 	
 	if (!link)
@@ -707,9 +893,7 @@ ConfigItem_link *_verify_link(Client *client)
 	}
 
 	orig_link = link;
-	link = find_link(client->name, client);
-
-	if (!link)
+	if (!user_allowed_by_security_group(client, link->incoming.match))
 	{
 		unreal_log(ULOG_ERROR, "link", "LINK_DENIED_INCOMING_MASK_MISMATCH", client,
 		           "Link with server $client.details denied: Server is in link block but link::incoming::mask didn't match",
@@ -876,9 +1060,9 @@ CMD_FUNC(cmd_server)
 	int  hop = 0;
 	char info[REALLEN + 61];
 	ConfigItem_link *aconf = NULL;
-	ConfigItem_deny_link *deny;
 	char *flags = NULL, *protocol = NULL, *inf = NULL, *num = NULL;
 	int incoming;
+	const char *err;
 
 	if (IsUser(client))
 	{
@@ -996,18 +1180,14 @@ CMD_FUNC(cmd_server)
 		strlcpy(client->info, info[0] ? info : "server", sizeof(client->info));
 	}
 
-	/* Process deny server { } restrictions */
-	for (deny = conf_deny_link; deny; deny = deny->next)
+	if ((err = check_deny_link(aconf, 0)))
 	{
-		if (deny->flag.type == CRULE_ALL && unreal_mask_match_string(servername, deny->mask)
-			&& crule_eval(deny->rule))
-		{
-			unreal_log(ULOG_ERROR, "link", "LINK_DENIED_DENY_LINK_BLOCK", client,
-			           "Server link $servername rejected by deny link { } block.",
-			           log_data_string("servername", servername));
-			exit_client(client, NULL, "Disallowed by connection rule");
-			return;
-		}
+		unreal_log(ULOG_ERROR, "link", "LINK_DENIED_DENY_LINK_BLOCK", client,
+			   "Server link $servername rejected by deny link { } block: $reason",
+			   log_data_string("servername", servername),
+			   log_data_string("reason", err));
+		exit_client_fmt(client, NULL, "Disallowed by connection rule: %s", err);
+		return;
 	}
 
 	if (aconf->options & CONNECT_QUARANTINE)
@@ -1991,3 +2171,89 @@ static int connect_server_helper(ConfigItem_link *aconf, Client *client)
 	return 1;
 }
 
+int _is_services_but_not_ulined(Client *client)
+{
+	if (!client->server || !client->server->features.software || !*client->name)
+		return 0; /* cannot detect software version or name not available yet */
+
+	if (our_strcasestr(client->server->features.software, "anope") ||
+	    our_strcasestr(client->server->features.software, "atheme"))
+	{
+		if (!find_uline(client->name))
+		{
+			unreal_log(ULOG_ERROR, "link", "LINK_NO_ULINES", client,
+			           "Server $client is a services server ($software). "
+			           "However, server $me does not have $client in the ulines { } block, "
+			           "which is required for services servers. "
+			           "See https://www.unrealircd.org/docs/Ulines_block",
+			           log_data_client("me", &me),
+			           log_data_string("software", client->server->features.software));
+			return 1; /* Is services AND no ulines { } entry */
+		}
+	}
+	return 0;
+}
+
+/** Check if this link should be denied due to deny link { } configuration
+ * @param link		The link block
+ * @param auto_connect	Set this to 1 if this is called from auto connect code
+ *			(it will then check both CRULE_AUTO + CRULE_ALL)
+ *			set it to 0 otherwise (will not check CRULE_AUTO blocks).
+ * @returns The deny block if the server should be denied, or NULL if no deny block.
+ */
+const char *_check_deny_link(ConfigItem_link *link, int auto_connect)
+{
+	ConfigItem_deny_link *d;
+
+	for (d = conf_deny_link; d; d = d->next)
+	{
+		if ((auto_connect == 0) && (d->flag.type == CRULE_AUTO))
+			continue;
+		if (unreal_mask_match_string(link->servername, d->mask) &&
+		    crule_eval(d->rule))
+		{
+			return d->reason;
+		}
+	}
+	return NULL;
+}
+
+int server_stats_denylink_all(Client *client, const char *para)
+{
+	ConfigItem_deny_link *links;
+	ConfigItem_mask *m;
+
+	if (!para || !(!strcmp(para, "D") || !strcasecmp(para, "denylinkall")))
+		return 0;
+
+	for (links = conf_deny_link; links; links = links->next)
+	{
+		if (links->flag.type == CRULE_ALL)
+		{
+			for (m = links->mask; m; m = m->next)
+				sendnumeric(client, RPL_STATSDLINE, 'D', m->mask, links->prettyrule);
+		}
+	}
+
+	return 1;
+}
+
+int server_stats_denylink_auto(Client *client, const char *para)
+{
+	ConfigItem_deny_link *links;
+	ConfigItem_mask *m;
+
+	if (!para || !(!strcmp(para, "d") || !strcasecmp(para, "denylinkauto")))
+		return 0;
+
+	for (links = conf_deny_link; links; links = links->next)
+	{
+		if (links->flag.type == CRULE_AUTO)
+		{
+			for (m = links->mask; m; m = m->next)
+				sendnumeric(client, RPL_STATSDLINE, 'd', m->mask, links->prettyrule);
+		}
+	}
+
+	return 1;
+}

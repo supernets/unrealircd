@@ -26,11 +26,14 @@
 #include "unrealircd.h"
 #include <ares.h>
 
+/* Forward declarations */
 CMD_FUNC(procio_status);
 CMD_FUNC(procio_modules);
 CMD_FUNC(procio_rehash);
 CMD_FUNC(procio_exit);
 CMD_FUNC(procio_help);
+void start_of_control_client_handshake(Client *client);
+int procio_accept(Client *client);
 
 /** Create the unrealircd.ctl socket (server-side) */
 void add_proc_io_server(void)
@@ -45,7 +48,8 @@ void add_proc_io_server(void)
 	listener = safe_alloc(sizeof(ConfigItem_listen));
 	safe_strdup(listener->file, CONTROLFILE);
 	listener->socket_type = SOCKET_TYPE_UNIX;
-	listener->options = LISTENER_CONTROL;
+	listener->options = LISTENER_CONTROL|LISTENER_NO_CHECK_CONNECT_FLOOD|LISTENER_NO_CHECK_ZLINED;
+	listener->start_handshake = start_of_control_client_handshake;
 	listener->fd = -1;
 	AddListItem(listener, conf_listen);
 	if (add_listener(listener) == -1)
@@ -55,6 +59,19 @@ void add_proc_io_server(void)
 	CommandAdd(NULL, "REHASH", procio_rehash, MAXPARA, CMD_CONTROL);
 	CommandAdd(NULL, "EXIT", procio_exit, MAXPARA, CMD_CONTROL);
 	CommandAdd(NULL, "HELP", procio_help, MAXPARA, CMD_CONTROL);
+	HookAdd(NULL, HOOKTYPE_ACCEPT, -1000000, procio_accept);
+}
+
+int procio_accept(Client *client)
+{
+	if (client->local->listener->options & LISTENER_CONTROL)
+	{
+		irccounts.unknown--;
+		client->status = CLIENT_STATUS_CONTROL;
+		list_del(&client->lclient_node);
+		list_add(&client->lclient_node, &control_list);
+	}
+	return 0;
 }
 
 /** Start of "control channel" client handshake - this is minimal
@@ -77,6 +94,9 @@ CMD_FUNC(procio_status)
 #endif
 	sendto_one(client, NULL, "REPLY libcares_version %s", ares_version(NULL));
 	sendto_one(client, NULL, "REPLY libpcre2_version %s", pcre2_version());
+#if JANSSON_VERSION_HEX >= 0x020D00
+	sendto_one(client, NULL, "REPLY libjansson %s\n", jansson_version_str());
+#endif
 	sendto_one(client, NULL, "REPLY global_clients %ld", (long)irccounts.clients);
 	sendto_one(client, NULL, "REPLY local_clients %ld", (long)irccounts.me_clients);
 	sendto_one(client, NULL, "REPLY operators %ld", (long)irccounts.operators);
@@ -132,6 +152,7 @@ CMD_FUNC(procio_rehash)
 		ClearMonitorRehash(client);
 	} else {
 		SetMonitorRehash(client);
+		unreal_log(ULOG_INFO, "config", "CONFIG_RELOAD", client, "Rehashing server configuration file [./unrealircd rehash]");
 		request_rehash(client);
 		/* completion will go via procio_post_rehash() */
 	}

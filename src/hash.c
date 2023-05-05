@@ -320,7 +320,7 @@ int add_to_client_hash_table(const char *name, Client *client)
 	/*
 	 * If you see this, you have probably found your way to why changing the 
 	 * base version made the IRCd become weird. This has been the case in all
-	 * Unreal versions since 3.0. I'm sick of people ripping the IRCd off and 
+	 * UnrealIRCd versions since 3.0. I'm sick of people ripping the IRCd off and 
 	 * just slapping on some random <theirnet> BASE_VERSION while not changing
 	 * a single bit of code. YOU DID NOT WRITE ALL OF THIS THEREFORE YOU DO NOT
 	 * DESERVE TO BE ABLE TO DO THAT. If you found this however, I'm OK with you 
@@ -719,4 +719,22 @@ int throttle_can_connect(Client *client)
 		b->count++;
 		return 2;
 	}
+}
+
+/** Find a server by the SID-part of a UID.
+ * Eg you pass "001ABCDEFG" and it would look up server "001".
+ *
+ * @param uid	The UID, eg 001ABCDEFG
+ * @returns Server where the UID would be hosted on, or NULL
+ * if no such server is linked.
+ */
+Client *find_server_by_uid(const char *uid)
+{
+	char sid[SIDLEN+1];
+
+	if (!isdigit(*uid))
+		return NULL; /* not a UID/SID */
+
+	strlcpy(sid, uid, sizeof(sid));
+	return hash_find_id(sid, NULL);
 }

@@ -43,6 +43,9 @@
 /* Define if ssl library has SSL_CTX_set_security_level */
 #undef HAS_SSL_CTX_SET_SECURITY_LEVEL
 
+/* Define if ssl library has X509_check_host */
+#undef HAS_X509_check_host
+
 /* Define if ssl library has X509_get0_notAfter */
 #undef HAS_X509_get0_notAfter
 
@@ -76,9 +79,6 @@
 /* Define to 1 if you have the `kqueue' function. */
 #undef HAVE_KQUEUE
 
-/* Define to 1 if you have the <memory.h> header file. */
-#undef HAVE_MEMORY_H
-
 /* Define to 1 if you have the `poll' function. */
 #undef HAVE_POLL
 
@@ -100,6 +100,9 @@
 /* Define to 1 if you have the <stdint.h> header file. */
 #undef HAVE_STDINT_H
 
+/* Define to 1 if you have the <stdio.h> header file. */
+#undef HAVE_STDIO_H
+
 /* Define to 1 if you have the <stdlib.h> header file. */
 #undef HAVE_STDLIB_H
 
@@ -120,6 +123,9 @@
 
 /* Define to 1 if you have the `strlncpy' function. */
 #undef HAVE_STRLNCPY
+
+/* Define to 1 if you have the `strnlen' function. */
+#undef HAVE_STRNLEN
 
 /* Define to 1 if you have the `syslog' function. */
 #undef HAVE_SYSLOG
@@ -201,7 +207,9 @@
    tofail) */
 #undef STATIC_LINKING
 
-/* Define to 1 if you have the ANSI C header files. */
+/* Define to 1 if all of the C90 standard headers exist (not just the ones
+   required in a freestanding environment). This macro is provided for
+   backward compatibility; new code need not use it. */
 #undef STDC_HEADERS
 
 /* Define if you have the <sys/syslog.h> header file. */

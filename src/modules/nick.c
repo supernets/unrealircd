@@ -122,9 +122,9 @@ CMD_FUNC(cmd_nick_remote)
 	{
 		ircstats.is_kill++;
 		unreal_log(ULOG_ERROR, "nick", "BAD_NICK_REMOTE", client,
-		           "Server link $server tried to introduce bad nick '$nick' -- rejected.",
+		           "Server link $server tried to change '$client' to bad nick '$nick' -- rejected.",
 		           log_data_string("nick", parv[1]),
-		           log_data_client("server", client->direction));
+		           log_data_client("server", client->uplink));
 		mtags = NULL;
 		new_message(client, NULL, &mtags);
 		sendto_one(client, mtags, ":%s KILL %s :Illegal nick name", me.id, client->id);
@@ -205,7 +205,7 @@ CMD_FUNC(cmd_nick_remote)
 	new_message(client, recv_mtags, &mtags);
 	RunHook(HOOKTYPE_REMOTE_NICKCHANGE, client, mtags, nick);
 	client->lastnick = lastnick ? lastnick : TStime();
-	add_history(client, 1);
+	add_history(client, 1, WHOWAS_EVENT_NICK_CHANGE);
 	sendto_server(client, 0, 0, mtags, ":%s NICK %s %lld",
 	    client->id, nick, (long long)client->lastnick);
 	sendto_local_common_channels(client, client, 0, mtags, ":%s NICK :%s", client->name, nick);
@@ -433,8 +433,8 @@ CMD_FUNC(cmd_nick_local)
 
 		new_message(client, recv_mtags, &mtags);
 		RunHook(HOOKTYPE_LOCAL_NICKCHANGE, client, mtags, nick);
-		client->lastnick = TStime();
-		add_history(client, 1);
+		add_history(client, 1, WHOWAS_EVENT_NICK_CHANGE);
+		client->lastnick = TStime(); /* needs to be done AFTER add_history() */
 		sendto_server(client, 0, 0, mtags, ":%s NICK %s %lld",
 		    client->id, nick, (long long)client->lastnick);
 		sendto_local_common_channels(client, client, 0, mtags, ":%s NICK :%s", client->name, nick);
@@ -740,7 +740,7 @@ CMD_FUNC(cmd_nick)
 
 	if (MyConnect(client) && !IsServer(client))
 	{
-		cmd_nick_local(client, recv_mtags, parc, parv);
+		CALL_CMD_FUNC(cmd_nick_local);
 	} else
 	if (!IsUser(client))
 	{
@@ -754,7 +754,7 @@ CMD_FUNC(cmd_nick)
 		return;
 	} else
 	{
-		cmd_nick_remote(client, recv_mtags, parc, parv);
+		CALL_CMD_FUNC(cmd_nick_remote);
 	}
 }
 
@@ -764,7 +764,7 @@ CMD_FUNC(cmd_nick)
 void welcome_user(Client *client, TKL *viruschan_tkl)
 {
 	int i;
-	ConfigItem_tld *tlds;
+	ConfigItem_tld *tld;
 	char buf[BUFSIZE];
 
 	/* Make creation time the real 'online since' time, excluding registration time.
@@ -871,11 +871,11 @@ void welcome_user(Client *client, TKL *viruschan_tkl)
 	}
 
 	/* Force the user to join the given chans -- codemastr */
-	tlds = find_tld(client);
+	tld = find_tld(client);
 
-	if (tlds && !BadPtr(tlds->channel))
+	if (tld && !BadPtr(tld->channel))
 	{
-		char *chans = strdup(tlds->channel);
+		char *chans = strdup(tld->channel);
 		const char *args[3] = {
 			NULL,
 			chans,
@@ -901,14 +901,15 @@ void welcome_user(Client *client, TKL *viruschan_tkl)
 	}
 }
 
-/** Validate client->user->username.
+/** Make a valid client->user->username, or try to anyway.
  * @param client	The client to check
  * @param noident	Whether we should ignore the first ~ or not
  * @returns 1 if the username is acceptable, 0 if not.
  * @note This function will modify client->user->username to make it valid.
  *       Only if there are zero valid characters it will return 0.
+ * @note There is also valid_username() in src/misc.c
  */
-int valid_username(Client *client, int noident)
+int make_valid_username(Client *client, int noident)
 {
 	static char stripuser[USERLEN + 1];
 	char *i;
@@ -1015,7 +1016,7 @@ int _register_user(Client *client)
 	/* Now validate the username. This may alter client->user->username
 	 * or reject it completely.
 	 */
-	if (!valid_username(client, noident))
+	if (!make_valid_username(client, noident))
 	{
 		exit_client(client, NULL, "Hostile username. Please use only 0-9 a-z A-Z _ - and . in your username.");
 		return 0;
@@ -1081,7 +1082,10 @@ int _register_user(Client *client)
 	SetUser(client);
 
 	make_cloakedhost(client, client->user->realhost, client->user->cloakedhost, sizeof(client->user->cloakedhost));
-	safe_strdup(client->user->virthost, client->user->cloakedhost);
+
+	/* client->user->virthost should never be empty */
+	if (!IsSetHost(client) || !client->user->virthost)
+		safe_strdup(client->user->virthost, client->user->cloakedhost);
 
 	snprintf(descbuf, sizeof descbuf, "Client: %s", client->name);
 	fd_desc(client->local->fd, descbuf);

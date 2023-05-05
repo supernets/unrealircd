@@ -22,7 +22,7 @@
 #define MODULES_H
 #include "types.h"
 #define MAXCUSTOMHOOKS  30
-#define MAXHOOKTYPES	150
+#define MAXHOOKTYPES	200
 #define MAXCALLBACKS	30
 #define MAXEFUNCTIONS	128
 #if defined(_WIN32)
@@ -107,6 +107,7 @@ typedef enum ModuleObjectType {
 	MOBJ_CLICAP = 16,
 	MOBJ_MTAG = 17,
 	MOBJ_HISTORY_BACKEND = 18,
+	MOBJ_RPC = 19,
 } ModuleObjectType;
 
 typedef struct Umode Umode;
@@ -284,10 +285,13 @@ struct Cmode {
 
 	/** Free and remove parameter from list.
 	 * This function pointer is NULL (unused) for modes without parameters.
-	 * @param parastruct		The parameter struct
+	 * @param parastruct	The parameter struct
+	 * @param soft		This is set to 1 if you may 'resist freeing'
+	 *			(used by floodprot module to have active F profile even if -F).
+	 * @returns Normally return 0, must return 1 if it 'resisted' freeing.
 	 * @note In most cases you will just call safe_free() on 'list'
 	 */
-	void (*free_param)(void *parastruct);
+	int (*free_param)(void *parastruct, int soft);
 
 	/** duplicate a struct and return a pointer to duplicate.
 	 * This function pointer is NULL (unused) for modes without parameters.
@@ -317,6 +321,11 @@ struct Cmode {
 	/** Unsetting also eats/requires a parameter. Unusual, but possible. */
 	char unset_with_param;
 
+	/** Is this mode available for chanmode +f, and if so for which flood type?
+	 * eg 'j' for join flood.
+	 */
+	char flood_type_action;
+
 	/** Is this mode being unloaded?
 	 * This is set to 1 if the chanmode module providing this mode is unloaded
 	 * and we are waiting to see if in our new round of loads a "new" chanmode
@@ -324,7 +333,7 @@ struct Cmode {
 	 * should never be 0 outside an internal rehash.
 	 */
 	char unloaded;
-	
+
 	/** Slot number - Can be used instead of GETPARAMSLOT() */
 	int param_slot;
 	
@@ -346,11 +355,12 @@ typedef struct {
 	void *		(*put_param)(void *, const char *);
 	const char *	(*get_param)(void *);
 	const char *	(*conv_param)(const char *, Client *, Channel *);
-	void		(*free_param)(void *);
+	int		(*free_param)(void *, int);
 	void *		(*dup_struct)(void *);
 	int		(*sjoin_check)(Channel *, void *, void *);
 	char		local;
 	char		unset_with_param;
+	char		flood_type_action;
 } CmodeInfo;
 
 /** Get a slot number for a param - eg GETPARAMSLOT('k') */
@@ -433,7 +443,7 @@ struct Extban {
 
 	int (*is_ok)(BanContext *b);
 
-	/** Convert input parameter to output [optional].
+	/** Convert input parameter to output.
 	 * like with normal bans '+b blah' gets '+b blah!*@*', and it allows
 	 * you to limit the length of the ban too.
 	 * return value: pointer to output string (temp. storage)
@@ -604,6 +614,49 @@ typedef struct {
 	int (*history_destroy)(const char *object);
 } HistoryBackendInfo;
 
+/** @defgroup RPCAPI RPC API
+ * @{
+ */
+
+/** No special flags set */
+#define RPC_HANDLER_FLAGS_NONE			0x0
+#define RPC_HANDLER_FLAGS_UNFILTERED		0x1	/**< Don't filter input (don't reject strings bigger than 510 in length or containing \r or \n) */
+
+/** RPC Tag Handler */
+typedef struct RPCHandler RPCHandler;
+struct RPCHandler {
+	RPCHandler *prev, *next;
+	char *method;                                             /**< Name of the method handler, eg "client.get" */
+	int flags;                                                /**< A flag of RPC_HANDLER_FLAG_* */
+	LogLevel loglevel;                                        /**< Log level to use for this call: for example ULOG_DEBUG for .list calls, leave 0 for default */
+	void (*call)(Client *, json_t *request, json_t *params);  /**< RPC call: use RPC_CALL_FUNC() ! */
+	Module *owner;                                            /**< Module introducing this. */
+	char unloaded;                                            /**< Internal flag to indicate module is being unloaded */
+};
+
+/** The struct used to register a RPC handler.
+ * For documentation, see the RPCHandler struct.
+ */
+typedef struct {
+	char *method;
+	int flags;
+	LogLevel loglevel;
+	void (*call)(Client *, json_t *request, json_t *params);
+} RPCHandlerInfo;
+
+/** RPC function - used by all RPC call functions.
+ * This is used in the code like <pre>RPC_CALL_FUNC(rpc_call_xyz)</pre> as a function definition.
+ * It allows the UnrealIRCd devs to add or change parameters to the function without
+ * (necessarily) breaking your code.
+ * @param client      The client issueing the request
+ * @param request     The full JSON-RPC request
+ * @param params      Parameters of the JSON-RPC call
+ * @note You are expected to call rpc_response() or rpc_error() on the request.
+ */
+#define RPC_CALL_FUNC(x) void (x) (Client *client, json_t *request, json_t *params)
+
+/** @} */
+
 struct Hook {
 	Hook *prev, *next;
 	int priority;
@@ -688,6 +741,7 @@ typedef struct ModuleObject {
 		ClientCapability *clicap;
 		MessageTagHandler *mtag;
 		HistoryBackend *history_backend;
+		RPCHandler *rpc;
 	} object;
 } ModuleObject;
 
@@ -735,8 +789,14 @@ struct Module
 #define MOD_OPT_OFFICIAL	0x0002 /* Official module, do not set "tainted" */
 #define MOD_OPT_PERM_RELOADABLE	0x0004 /* Module is semi-permanent: it can be re-loaded but not un-loaded */
 #define MOD_OPT_GLOBAL		0x0008 /* Module is required to be loaded globally (i.e. across the entire network) */
-#define MOD_OPT_UNLOAD_PRIORITY	0x1000 /* Module wants a higher or lower unload priority */
+#define MOD_OPT_PRIORITY	0x1000 /* Module wants a higher or lower priority for unloading, init, load, etc */
+#define MOD_OPT_UNLOAD_PRIORITY	0x1000 /* Alias for MOD_OPT_PRIORITY */
 #define MOD_Dep(name, container,module) {#name, (vFP *) &container, module}
+
+/** Websocket module should init 'first' because it handles sockets */
+#define WEBSOCKET_MODULE_PRIORITY_INIT		-1000000000
+/** Websocket module should unload 'last' because it handles sockets */
+#define WEBSOCKET_MODULE_PRIORITY_UNLOAD	1000000000
 
 /** Event structs */
 struct Event {
@@ -825,6 +885,10 @@ extern HistoryBackend *HistoryBackendFind(const char *name);
 extern HistoryBackend *HistoryBackendAdd(Module *module, HistoryBackendInfo *mreq);
 extern void HistoryBackendDel(HistoryBackend *m);
 
+extern RPCHandler *RPCHandlerFind(const char *method);
+extern RPCHandler *RPCHandlerAdd(Module *module, RPCHandlerInfo *mreq);
+extern void RPCHandlerDel(RPCHandler *m);
+
 #ifndef GCC_TYPECHECKING
 #define HookAdd(module, hooktype, priority, func) HookAddMain(module, hooktype, priority, func, NULL, NULL, NULL)
 #define HookAddVoid(module, hooktype, priority, func) HookAddMain(module, hooktype, priority, NULL, func, NULL, NULL)
@@ -909,6 +973,11 @@ extern int CommandExists(const char *name);
 extern CommandOverride *CommandOverrideAdd(Module *module, const char *name, int priority, OverrideCmdFunc func);
 extern void CommandOverrideDel(CommandOverride *ovr);
 extern void CallCommandOverride(CommandOverride *ovr, Client *client, MessageTag *mtags, int parc, const char *parv[]);
+/** Call next command override function - easy way to do it.
+ * This way you don't have to call CallCommandOverride() with the right arguments.
+ * Which is nice because command (override) arguments may change in future UnrealIRCd versions.
+ */
+#define CALL_NEXT_COMMAND_OVERRIDE()	CallCommandOverride(ovr, client, recv_mtags, parc, parv)
 
 extern void moddata_free_client(Client *acptr);
 extern void moddata_free_local_client(Client *acptr);
@@ -936,6 +1005,11 @@ extern int LoadPersistentLongX(ModuleInfo *modinfo, const char *varshortname, lo
 #define LoadPersistentLong(modinfo, var) LoadPersistentLongX(modinfo, #var, &var)
 extern void SavePersistentLongX(ModuleInfo *modinfo, const char *varshortname, long var);
 #define SavePersistentLong(modinfo, var) SavePersistentLongX(modinfo, #var, var)
+
+extern int LoadPersistentLongLongX(ModuleInfo *modinfo, const char *varshortname, long long *var);
+#define LoadPersistentLongLong(modinfo, var) LoadPersistentLongLongX(modinfo, #var, &var)
+extern void SavePersistentLongLongX(ModuleInfo *modinfo, const char *varshortname, long long var);
+#define SavePersistentLongLong(modinfo, var) SavePersistentLongLongX(modinfo, #var, var)
 
 /** Hooks trigger on "events", such as a new user connecting or joining a channel,
  * see https://www.unrealircd.org/docs/Dev:Hook_API for background info.
@@ -1170,6 +1244,12 @@ extern void SavePersistentLongX(ModuleInfo *modinfo, const char *varshortname, l
 #define HOOKTYPE_JSON_EXPAND_CLIENT_SERVER	114
 /** See hooktype_json_expand_channel() */
 #define HOOKTYPE_JSON_EXPAND_CHANNEL	115
+/** See hooktype_accept() */
+#define HOOKTYPE_ACCEPT		116
+/** See hooktype_pre_local_handshake_timeout */
+#define HOOKTYPE_PRE_LOCAL_HANDSHAKE_TIMEOUT	117
+/** See hooktype_rehash_log */
+#define HOOKTYPE_REHASH_LOG	118
 
 /* Adding a new hook here?
  * 1) Add the #define HOOKTYPE_.... with a new number
@@ -1759,11 +1839,12 @@ int hooktype_tkl_del(Client *client, TKL *tkl);
  * @param subsystem		Subsystem (eg "operoverride")
  * @param event_id		Event ID (eg "SAJOIN_COMMAND")
  * @param msg			Message(s) in text form
- * @param json_serialized	The associated JSON text
+ * @param json			The JSON log entry
+ * @param json_serialized	The serialized JSON log entry (as a string)
  * @param timebuf		The [xxxx] time buffer, for convenience
  * @return The return value is ignored (use return 0)
  */
-int hooktype_log(LogLevel loglevel, const char *subsystem, const char *event_id, MultiLine *msg, const char *json_serialized, const char *timebuf);
+int hooktype_log(LogLevel loglevel, const char *subsystem, const char *event_id, MultiLine *msg, json_t *json, const char *json_serialized, const char *timebuf);
 
 /** Called when a local user matches a spamfilter (function prototype for HOOKTYPE_LOCAL_SPAMFILTER).
  * @param client		The client
@@ -1820,6 +1901,18 @@ int hooktype_packet(Client *from, Client *to, Client *intended_to, char **msg, i
  * @return The return value is ignored (use return 0)
  */
 int hooktype_handshake(Client *client);
+
+/** Called very early when a client connects (function prototype for HOOKTYPE_ACCEPT).
+ * Module coders: have a look at hooktype_handshake() instead of this one!
+ * HOOKTYPE_ACCEPT is called even before HOOKTYPE_HANDSHAKE, as soon as the socket
+ * is connected and during the client is being set up, before the SSL/TLS handshake.
+ * It is only used for connection flood detection and checking (G)Z-lines.
+ * Note that this connection is also called for *NIX domain socket connections,
+ * HTTP(S) requests, and so on.
+ * @param client		The client
+ * @return One of HOOK_*. Use HOOK_DENY to reject the client.
+ */
+int hooktype_accept(Client *client);
 
 /** Called when a client structure is freed (function prototype for HOOKTYPE_FREE_CLIENT).
  * @param client		The client
@@ -2200,6 +2293,24 @@ int hooktype_json_expand_client_server(Client *client, int detail, json_t *j, js
  */
 int hooktype_json_expand_channel(Channel *channel, int detail, json_t *j);
 
+/** Called when a local user is about to be disconnected due to a registration timeout,
+ * allows changing the disconnect reason (function prototype for HOOKTYPE_PRE_LOCAL_HANDSHAKE_TIMEOUT).
+ * This is used by the authprompt module.
+ * @param client		The client
+ * @param comment		The quit/disconnect reason (can be changed by you)
+ * @retval HOOK_CONTINUE	Continue as normal
+ * @retval HOOK_ALLOW		Do not exit the user due to a handshake timeout
+ */
+int hooktype_pre_local_handshake_timeout(Client *client, const char **comment);
+
+/** Called when a REHASH completed (either succesfully or with a failure).
+ * This gives the full rehash log. Used by the JSON-RPC interface.
+ * @param failure		Set to 1 if the rehash failed, otherwise 0.
+ * @param t			The JSON object containing the rehash log and other information.
+ * @return The return value is ignored (use return 0)
+ */
+int hooktype_rehash_log(int failure, json_t *rehash_log);
+
 /** @} */
 
 #ifdef GCC_TYPECHECKING
@@ -2318,7 +2429,9 @@ _UNREAL_ERROR(_hook_error_incompatible, "Incompatible hook function. Check argum
         ((hooktype == HOOKTYPE_JSON_EXPAND_CLIENT) && !ValidateHook(hooktype_json_expand_client, func)) || \
         ((hooktype == HOOKTYPE_JSON_EXPAND_CLIENT_USER) && !ValidateHook(hooktype_json_expand_client_user, func)) || \
         ((hooktype == HOOKTYPE_JSON_EXPAND_CLIENT_SERVER) && !ValidateHook(hooktype_json_expand_client_server, func)) || \
-        ((hooktype == HOOKTYPE_JSON_EXPAND_CHANNEL) && !ValidateHook(hooktype_json_expand_channel, func)) ) \
+        ((hooktype == HOOKTYPE_JSON_EXPAND_CHANNEL) && !ValidateHook(hooktype_json_expand_channel, func)) || \
+        ((hooktype == HOOKTYPE_PRE_LOCAL_HANDSHAKE_TIMEOUT) && !ValidateHook(hooktype_pre_local_handshake_timeout, func)) || \
+        ((hooktype == HOOKTYPE_REHASH_LOG) && !ValidateHook(hooktype_rehash_log, func)) ) \
         _hook_error_incompatible();
 #endif /* GCC_TYPECHECKING */
 
@@ -2350,6 +2463,7 @@ enum EfunctionType {
 	EFUNC_DO_MODE,
 	EFUNC_SET_MODE,
 	EFUNC_SET_CHANNEL_MODE,
+	EFUNC_SET_CHANNEL_TOPIC,
 	EFUNC_CMD_UMODE,
 	EFUNC_REGISTER_USER,
 	EFUNC_TKL_HASH,
@@ -2382,7 +2496,6 @@ enum EfunctionType {
 	EFUNC_BROADCAST_MD_CHANNEL,
 	EFUNC_BROADCAST_MD_MEMBER,
 	EFUNC_BROADCAST_MD_MEMBERSHIP,
-	EFUNC_CHECK_BANNED,
 	EFUNC_INTRODUCE_USER,
 	EFUNC_CHECK_DENY_VERSION,
 	EFUNC_BROADCAST_MD_CLIENT_CMD,
@@ -2404,9 +2517,11 @@ enum EfunctionType {
 	EFUNC_CHARSYS_GET_CURRENT_LANGUAGES,
 	EFUNC_BROADCAST_SINFO,
 	EFUNC_CONNECT_SERVER,
+	EFUNC_IS_SERVICES_BUT_NOT_ULINED,
 	EFUNC_PARSE_MESSAGE_TAGS,
 	EFUNC_MTAGS_TO_STRING,
 	EFUNC_TKL_CHARTOTYPE,
+	EFUNC_TKL_CONFIGTYPETOCHAR,
 	EFUNC_TKL_TYPE_STRING,
 	EFUNC_TKL_TYPE_CONFIG_STRING,
 	EFUNC_CAN_SEND_TO_CHANNEL,
@@ -2426,6 +2541,9 @@ enum EfunctionType {
 	EFUNC_FIND_TKL_NAMEBAN,
 	EFUNC_FIND_TKL_SPAMFILTER,
 	EFUNC_FIND_TKL_EXCEPTION,
+	EFUNC_SERVER_BAN_PARSE_MASK,
+	EFUNC_SERVER_BAN_EXCEPTION_PARSE_MASK,
+	EFUNC_TKL_ADDED,
 	EFUNC_ADD_SILENCE,
 	EFUNC_DEL_SILENCE,
 	EFUNC_IS_SILENCED,
@@ -2444,6 +2562,22 @@ enum EfunctionType {
 	EFUNC_WHOIS_GET_POLICY,
 	EFUNC_MAKE_OPER,
 	EFUNC_UNREAL_MATCH_IPLIST,
+	EFUNC_WEBSERVER_SEND_RESPONSE,
+	EFUNC_WEBSERVER_CLOSE_CLIENT,
+	EFUNC_WEBSERVER_HANDLE_BODY,
+	EFUNC_RPC_RESPONSE,
+	EFUNC_RPC_ERROR,
+	EFUNC_RPC_ERROR_FMT,
+	EFUNC_RPC_SEND_REQUEST_TO_REMOTE,
+	EFUNC_RPC_SEND_RESPONSE_TO_REMOTE,
+	EFUNC_RRPC_SUPPORTED,
+	EFUNC_RRPC_SUPPORTED_SIMPLE,
+	EFUNC_WEBSOCKET_HANDLE_WEBSOCKET,
+	EFUNC_WEBSOCKET_CREATE_PACKET,
+	EFUNC_WEBSOCKET_CREATE_PACKET_EX,
+	EFUNC_WEBSOCKET_CREATE_PACKET_SIMPLE,
+	EFUNC_CHECK_DENY_LINK,
+	EFUNC_MTAG_GENERATE_ISSUED_BY_IRC,
 };
 
 /* Module flags */

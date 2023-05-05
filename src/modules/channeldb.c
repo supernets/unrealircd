@@ -93,7 +93,7 @@ MOD_INIT()
 {
 	MARK_AS_OFFICIAL_MODULE(modinfo);
 	/* We must unload early, when all channel modes and such are still in place: */
-	ModuleSetOptions(modinfo->handle, MOD_OPT_UNLOAD_PRIORITY, -99999999);
+	ModuleSetOptions(modinfo->handle, MOD_OPT_PRIORITY, -99999999);
 
 	LoadPersistentLong(modinfo, channeldb_next_event);
 
@@ -359,14 +359,6 @@ int write_channel_entry(UnrealDB *db, const char *tmpfname, Channel *channel)
 	return 1;
 }
 
-int ban_exists(Ban *lst, Ban *e)
-{
-	for (; lst; lst = lst->next)
-		if (!mycmp(lst->banstr, e->banstr))
-			return 1;
-	return 0;
-}
-
 #define R_SAFE(x) \
 	do { \
 		if (!(x)) { \
@@ -409,7 +401,7 @@ int read_listmode(UnrealDB *db, Ban **lst)
 		}
 		safe_strdup(e->banstr, str);
 
-		if (ban_exists(*lst, e))
+		if (ban_exists(*lst, e->banstr))
 		{
 			/* Free again - duplicate item */
 			safe_free(e->banstr);
@@ -545,7 +537,7 @@ int read_channeldb(void)
 		safe_strdup(channel->topic_nick, topic_nick);
 		channel->topic_time = topic_time;
 		safe_strdup(channel->mode_lock, mode_lock);
-		set_channel_mode(channel, modes1, modes2);
+		set_channel_mode(channel, NULL, modes1, modes2);
 		R_SAFE(read_listmode(db, &channel->banlist));
 		R_SAFE(read_listmode(db, &channel->exlist));
 		R_SAFE(read_listmode(db, &channel->invexlist));

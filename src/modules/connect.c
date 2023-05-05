@@ -62,8 +62,8 @@ CMD_FUNC(cmd_connect)
 {
 	int  retval;
 	ConfigItem_link	*aconf;
-	ConfigItem_deny_link *deny;
 	Client *server;
+	const char *str;
 
 	if (!IsServer(client) && MyConnect(client) && !ValidatePermissionsForPath("route:global",client,NULL,NULL,NULL) && parc > 3)
 	{			/* Only allow LocOps to make */
@@ -92,12 +92,7 @@ CMD_FUNC(cmd_connect)
 		return;
 	}
 
-	for (aconf = conf_link; aconf; aconf = aconf->next)
-		if (match_simple(parv[1], aconf->servername))
-			break;
-
-	/* Checked first servernames, then try hostnames. */
-
+	aconf = find_link(parv[1]);
 	if (!aconf)
 	{
 		sendnotice(client,
@@ -114,25 +109,15 @@ CMD_FUNC(cmd_connect)
 		return;
 	}
 
-	/* Evaluate deny link */
-	for (deny = conf_deny_link; deny; deny = deny->next)
+	if ((str = check_deny_link(aconf, 0)))
 	{
-		if (deny->flag.type == CRULE_ALL && unreal_mask_match_string(aconf->servername, deny->mask)
-			&& crule_eval(deny->rule))
-		{
-			sendnotice(client, "*** Connect: Disallowed by connection rule");
-			return;
-		}
+		sendnotice(client, "*** Connect: Disallowed by connection rule: %s", str);
+		return;
 	}
 
-	/* Notify all operators about remote connect requests */
-	if (!MyUser(client))
-	{
-		sendto_server(NULL, 0, 0, NULL,
-		    ":%s SENDUMODE o :Remote CONNECT %s %s from %s",
-		    me.id, parv[1], parv[2] ? parv[2] : "",
-		    get_client_name(client, FALSE));
-	}
+	unreal_log(ULOG_INFO, "link", "LINK_REQUEST", client,
+		   "CONNECT: Link to $link_block requested by $client",
+		   log_data_link_block(aconf));
 
 	connect_server(aconf, client, NULL);
 }

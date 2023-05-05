@@ -66,8 +66,9 @@ CMD_FUNC(cmd_svsnick)
 	MessageTag *mtags = NULL;
 	char nickname[NICKLEN+1];
 	char oldnickname[NICKLEN+1];
+	time_t ts;
 
-	if (!IsULine(client) || parc < 4 || (strlen(parv[2]) > NICKLEN))
+	if (!IsSvsCmdOk(client) || parc < 4 || (strlen(parv[2]) > NICKLEN))
 		return; /* This looks like an error anyway -Studded */
 
 	if (hunt_server(client, NULL, "SVSNICK", 1, parc, parv) != HUNTED_ISME)
@@ -83,7 +84,7 @@ CMD_FUNC(cmd_svsnick)
 	if ((ocptr = find_client(nickname, NULL)) && ocptr != acptr) /* Collision */
 	{
 		exit_client(acptr, NULL,
-		                   "Nickname collision due to Services enforced "
+		                   "Nickname collision due to forced "
 		                   "nickname change, your nick was overruled");
 		return;
 	}
@@ -96,20 +97,22 @@ CMD_FUNC(cmd_svsnick)
 
 	if (acptr != ocptr)
 		acptr->umodes &= ~UMODE_REGNICK;
-	acptr->lastnick = atol(parv[3]);
+	ts = atol(parv[3]);
 
 	/* no 'recv_mtags' here, we do not inherit from SVSNICK but generate a new NICK event */
 	new_message(acptr, NULL, &mtags);
+	mtag_add_issued_by(&mtags, client, recv_mtags);
 	RunHook(HOOKTYPE_LOCAL_NICKCHANGE, acptr, mtags, nickname);
 	sendto_local_common_channels(acptr, acptr, 0, mtags, ":%s NICK :%s", acptr->name, nickname);
 	sendto_one(acptr, mtags, ":%s NICK :%s", acptr->name, nickname);
-	sendto_server(NULL, 0, 0, mtags, ":%s NICK %s :%lld", acptr->id, nickname, (long long)acptr->lastnick);
+	sendto_server(NULL, 0, 0, mtags, ":%s NICK %s :%lld", acptr->id, nickname, (long long)ts);
 
-	add_history(acptr, 1);
+	add_history(acptr, 1, WHOWAS_EVENT_NICK_CHANGE);
+	acptr->lastnick = ts; /* needs to be done AFTER add_history() */
 	del_from_client_hash_table(acptr->name, acptr);
 
 	unreal_log(ULOG_INFO, "nick", "FORCED_NICK_CHANGE", acptr,
-	           "$client.details has been forced by services to change their nickname to $new_nick_name",
+	           "$client.details has been forced to change their nickname to $new_nick_name",
 	           log_data_string("new_nick_name", nickname));
 
 	strlcpy(acptr->name, nickname, sizeof acptr->name);

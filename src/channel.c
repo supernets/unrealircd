@@ -473,6 +473,46 @@ Ban *is_banned_with_nick(Client *client, Channel *channel, int type, const char 
 	return ban;
 }
 
+/** Checks if a ban already exists */
+int ban_exists(Ban *lst, const char *str)
+{
+	for (; lst; lst = lst->next)
+		if (!mycmp(lst->banstr, str))
+			return 1;
+	return 0;
+}
+
+/** Checks if a ban already exists - special version.
+ * This ignores the "~time:xx:" suffixes in the banlist.
+ * So it will return 1 if a ban is there for ~time:5:blah!*@*
+ * and you call ban_exists_ignore_time(channel->banlist, "blah!*@*")
+ */
+int ban_exists_ignore_time(Ban *lst, const char *str)
+{
+	const char *p;
+
+	for (; lst; lst = lst->next)
+	{
+		if (!strncmp(lst->banstr, "~time:", 6))
+		{
+			/* Special treatment for ~time:xx: */
+			p = strchr(lst->banstr+6, ':');
+			if (p)
+			{
+				p++;
+				if (!mycmp(p, str))
+					return 1;
+			}
+		} else
+		{
+			/* The simple version */
+			if (!mycmp(lst->banstr, str))
+				return 1;
+		}
+	}
+	return 0;
+}
+
 /** Add user to the channel.
  * This adds both the Member struct to the channel->members linked list
  * and also the Membership struct to the client->user->channel linked list.
@@ -614,34 +654,24 @@ Cmode_t get_extmode_bitbychar(char m)
  */
 void channel_modes(Client *client, char *mbuf, char *pbuf, size_t mbuf_size, size_t pbuf_size, Channel *channel, int hide_local_modes)
 {
-	int ismember = 0;
+	int show_mode_parameters = 0;
 	Cmode *cm;
 
 	if (!mbuf_size || !pbuf_size)
 		return;
 
-	if (!client || IsMember(client, channel) || IsServer(client) || IsMe(client) || IsULine(client))
-		ismember = 1;
+	if (!client || IsMember(client, channel) || IsServer(client) || IsMe(client) || IsULine(client) ||
+	    ValidatePermissionsForPath("channel:see:mode:remote",client,NULL,channel,NULL))
+	{
+		show_mode_parameters = 1;
+	}
 
 	*pbuf = '\0';
 	strlcpy(mbuf, "+", mbuf_size);
 
-	/* Paramless first */
 	for (cm=channelmodes; cm; cm = cm->next)
 	{
 		if (cm->letter &&
-		    !cm->paracount &&
-		    !(hide_local_modes && cm->local) &&
-		    (channel->mode.mode & cm->mode))
-		{
-			strlcat_letter(mbuf, cm->letter, mbuf_size);
-		}
-	}
-
-	for (cm=channelmodes; cm; cm = cm->next)
-	{
-		if (cm->letter &&
-		    cm->paracount &&
 		    !(hide_local_modes && cm->local) &&
 		    (channel->mode.mode & cm->mode))
 		{
@@ -650,7 +680,7 @@ void channel_modes(Client *client, char *mbuf, char *pbuf, size_t mbuf_size, siz
 			if (mbuf_size)
 				strlcat_letter(mbuf, flag, mbuf_size);
 
-			if (ismember)
+			if (cm->paracount && show_mode_parameters)
 			{
 				strlcat(pbuf, cm_getparameter(channel, flag), pbuf_size);
 				strlcat(pbuf, " ", pbuf_size);
@@ -704,6 +734,59 @@ char *trim_str(char *str, int len)
 	return str;
 }
 
+/* Convert regular ban (non-extban) if needed.
+ * This does things like:
+ * nick!user@host -> nick!user@host (usually no change)
+ * nickkkkkkkkkkkkkkkkkkkkkkkkkk!user@host -> nickkkkkkk*!user@host (dealing with NICKLEN restrictions and such).
+ * user@host -> *!user@host
+ * 1.2.3.4 -> *!*@1.2.3.4 (converting IP to a proper mask)
+ * @param mask		Incoming mask (this will be touched/fragged!)
+ * @param buf		Output buffer
+ * @param buflen	Length of the output buffer, eg sizeof(buf)
+ * @retval The sanitized mask, or NULL if it should be rejected fully.
+ * @note Since 'mask' will be fragged, you most likely wish to pass a copy of it rather than the original.
+ */
+const char *convert_regular_ban(char *mask, char *buf, size_t buflen)
+{
+	static char namebuf[USERLEN + HOSTLEN + 6];
+	char *user, *host;
+
+	if (!*mask)
+		return NULL; /* empty extban */
+
+	if (!buf)
+	{
+		buf = namebuf;
+		buflen = sizeof(namebuf);
+	}
+
+	if ((*mask == '~') && !strchr(mask, '@'))
+	{
+		/* has a '~', which makes it look like an extban,
+		 * but is not a user@host ban, too confusing.
+		 */
+		return NULL;
+	}
+
+	if ((user = strchr(mask, '!')))
+		*user++ = '\0';
+
+	if ((host = strrchr(user ? user : mask, '@')))
+	{
+		*host++ = '\0';
+		if (!user)
+			return make_nick_user_host_r(buf, buflen, NULL, trim_str(mask,USERLEN), trim_str(host,HOSTLEN));
+	}
+	else if (!user && (strchr(mask, '.') || strchr(mask, ':')))
+	{
+		/* 1.2.3.4 -> *!*@1.2.3.4 (and the same for IPv6) */
+		return make_nick_user_host_r(buf, buflen, NULL, NULL, trim_str(mask,HOSTLEN));
+	}
+
+	/* regular nick!user@host with the auto-trimming feature */
+	return make_nick_user_host_r(buf, buflen, trim_str(mask,NICKLEN), trim_str(user,USERLEN), trim_str(host,HOSTLEN));
+}
+
 /** Make a proper ban mask.
  * This takes user input (eg: "nick") and converts it to a mask suitable
  * in the +beI lists (eg: "nick!*@*"). It also deals with extended bans,
@@ -719,8 +802,6 @@ char *trim_str(char *str, int len)
 const char *clean_ban_mask(const char *mask_in, int what, Client *client, int conv_options)
 {
 	char *cp, *x;
-	char *user;
-	char *host;
 	static char mask[512];
 
 	/* Strip any ':' at beginning since that would cause a desync */
@@ -798,21 +879,7 @@ const char *clean_ban_mask(const char *mask_in, int what, Client *client, int co
 		return mask;
 	}
 
-	if ((*mask == '~') && !strchr(mask, '@'))
-		return NULL; /* not an extended ban and not a ~user@host ban either. */
-
-	if ((user = strchr((cp = mask), '!')))
-		*user++ = '\0';
-	if ((host = strrchr(user ? user : cp, '@')))
-	{
-		*host++ = '\0';
-
-		if (!user)
-			return make_nick_user_host(NULL, trim_str(cp,USERLEN), trim_str(host,HOSTLEN));
-	}
-	else if (!user && strchr(cp, '.'))
-		return make_nick_user_host(NULL, NULL, trim_str(cp,HOSTLEN));
-	return make_nick_user_host(trim_str(cp,NICKLEN), trim_str(user,USERLEN), trim_str(host,HOSTLEN));
+	return convert_regular_ban(mask, NULL, 0);
 }
 
 /** Check if 'client' matches an invite exception (+I) on 'channel' */

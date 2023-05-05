@@ -471,7 +471,10 @@ static void exit_one_client(Client *client, MessageTag *mtags_i, const char *com
 			RunHook(HOOKTYPE_REMOTE_QUIT, client, mtags_i, comment);
 
 		new_message_special(client, mtags_i, &mtags_o, ":%s QUIT", client->name);
-		sendto_local_common_channels(client, NULL, 0, mtags_o, ":%s QUIT :%s", client->name, comment);
+		if (find_mtag(mtags_o, "unrealircd.org/real-quit-reason"))
+			quit_sendto_local_common_channels(client, mtags_o, comment);
+		else
+			sendto_local_common_channels(client, NULL, 0, mtags_o, ":%s QUIT :%s", client->name, comment);
 		free_message_tags(mtags_o);
 
 		while ((mp = client->user->channel))
@@ -594,17 +597,6 @@ void exit_client_ex(Client *client, Client *origin, MessageTag *recv_mtags, cons
 			}
 		}
 		free_pending_net(client);
-		if (client->local->listener)
-			if (client->local->listener && !IsOutgoing(client))
-			{
-				listen_conf = client->local->listener;
-				listen_conf->clients--;
-				if (listen_conf->flag.temporary && (listen_conf->clients == 0))
-				{
-					/* Call listen cleanup */
-					listen_cleanup();
-				}
-			}
 		SetClosing(client);
 		if (IsUser(client))
 		{
@@ -623,7 +615,7 @@ void exit_client_ex(Client *client, Client *origin, MessageTag *recv_mtags, cons
 
 		if (client->local->fd >= 0 && !IsConnecting(client))
 		{
-			if (!IsControl(client))
+			if (!IsControl(client) && !IsRPC(client))
 				sendto_one(client, NULL, "ERROR :Closing Link: %s (%s)", get_client_name(client, FALSE), comment);
 		}
 		close_connection(client);
@@ -648,6 +640,7 @@ void exit_client_ex(Client *client, Client *origin, MessageTag *recv_mtags, cons
 	if (IsServer(client))
 	{
 		char splitstr[HOSTLEN + HOSTLEN + 2];
+		Client *acptr, *next;
 
 		assert(client->server != NULL && client->uplink != NULL);
 
@@ -657,6 +650,11 @@ void exit_client_ex(Client *client, Client *origin, MessageTag *recv_mtags, cons
 			ircsnprintf(splitstr, sizeof splitstr, "%s %s", client->uplink->name, client->name);
 
 		remove_dependents(client, origin, recv_mtags, comment, splitstr);
+
+		/* Special case for remote async RPC, server.rehash in particular.. */
+		list_for_each_entry_safe(acptr, next, &rpc_remote_list, client_node)
+			if (!strncmp(client->id, acptr->id, SIDLEN))
+				free_client(acptr);
 
 		RunHook(HOOKTYPE_SERVER_QUIT, client, recv_mtags);
 	}
@@ -729,6 +727,54 @@ int valid_host(const char *host, int strict)
 			if (!isalnum(*p) && !strchr("_-.:/", *p))
 				return 0;
 	}
+
+	return 1;
+}
+
+/** Check if the specified ident / user name does not contain forbidden characters.
+ * @param username	The username / ident to check
+ * @returns 1 if valid, 0 if not.
+ */
+int valid_username(const char *username)
+{
+	const char *s;
+
+	if (strlen(username) > USERLEN)
+		return 0; /* Too long */
+
+	for (s = username; *s; s++)
+	{
+		if ((*s == '~') && (s == username))
+			continue;
+		if (!isallowed(*s))
+			return 0;
+	}
+
+	return 1;
+}
+
+/** Check validity of a vhost which can be both in 'host' or 'user@host' format.
+ * This will call valid_username() and valid_host(xxx, 0) accordingly.
+ * @param userhost the "host" or "user@host"
+ * @returns 1 if valid, 0 if not.
+ */
+int valid_vhost(const char *userhost)
+{
+	char uhost[512], *p;
+	const char *host = userhost;
+
+        strlcpy(uhost, userhost, sizeof(uhost));
+
+	if ((p = strchr(uhost, '@')))
+	{
+		*p++ = '\0';
+		if (!valid_username(uhost))
+			return 0;
+		host = p;
+	}
+
+	if (!valid_host(host, 0))
+		return 0;
 
 	return 1;
 }
@@ -832,9 +878,10 @@ char *spamfilter_target_inttostring(int v)
 /** Replace underscores back to the space character.
  * This is used for the spamfilter reason.
  */
-char *unreal_decodespace(char *s)
+char *unreal_decodespace(const char *s)
 {
-	static char buf[512], *i, *o;
+	const char *i;
+	static char buf[512], *o;
 
 	for (i = s, o = buf; (*i) && (o < buf+510); i++)
 		if (*i == '_')
@@ -855,9 +902,10 @@ char *unreal_decodespace(char *s)
 /** Replace spaces to underscore characters.
  * This is used for the spamfilter reason.
  */
-char *unreal_encodespace(char *s)
+char *unreal_encodespace(const char *s)
 {
-	static char buf[512], *i, *o;
+	const char *i;
+	static char buf[512], *o;
 
 	if (!s)
 		return NULL; /* NULL in = NULL out */
@@ -1113,9 +1161,10 @@ void banned_client(Client *client, const char *bantype, const char *reason, int 
 	char buf[512];
 	char *fmt = global ? iConf.reject_message_gline : iConf.reject_message_kline;
 	const char *vars[6], *values[6];
+	MessageTag *mtags = NULL;
 
 	if (!MyConnect(client))
-		abort(); /* hmm... or be more flexible? */
+		abort();
 
 	/* This was: "You are not welcome on this %s. %s: %s. %s" but is now dynamic: */
 	vars[0] = "bantype";
@@ -1154,18 +1203,28 @@ void banned_client(Client *client, const char *bantype, const char *reason, int 
 
 	/* The final message in the ERROR is shorter. */
 	if (HIDE_BAN_REASON && IsRegistered(client))
-		snprintf(buf, sizeof(buf), "Banned (%s)", bantype);
-	else
+	{
+		/* Hide the ban reason, but put the real reason in unrealircd.org/real-quit-reason */
+		MessageTag *m = safe_alloc(sizeof(MessageTag));
+		safe_strdup(m->name, "unrealircd.org/real-quit-reason");
 		snprintf(buf, sizeof(buf), "Banned (%s): %s", bantype, reason);
+		safe_strdup(m->value, buf);
+		AddListItem(m, mtags);
+		/* And the quit reason for anyone else, goes here.. */
+		snprintf(buf, sizeof(buf), "Banned (%s)", bantype);
+	} else {
+		snprintf(buf, sizeof(buf), "Banned (%s): %s", bantype, reason);
+	}
 
 	if (noexit != NO_EXIT_CLIENT)
 	{
-		exit_client(client, NULL, buf);
+		exit_client(client, mtags, buf);
 	} else {
 		/* Special handling for direct Z-line code */
 		send_raw_direct(client, "ERROR :Closing Link: [%s] (%s)",
 		           client->ip, buf);
 	}
+	safe_free_message_tags(mtags);
 }
 
 /** Our stpcpy implementation - discouraged due to lack of bounds checking */
@@ -1393,6 +1452,77 @@ void do_unreal_log_remote_deliver_default_handler(LogLevel loglevel, const char 
 int make_oper_default_handler(Client *client, const char *operblock_name, const char *operclass, ConfigItem_class *clientclass, long modes, const char *snomask, const char *vhost)
 {
 	return 0;
+}
+
+void webserver_send_response_default_handler(Client *client, int status, char *msg)
+{
+}
+
+void webserver_close_client_default_handler(Client *client)
+{
+}
+
+int webserver_handle_body_default_handler(Client *client, WebRequest *web, const char *readbuf, int length)
+{
+	return 0;
+}
+
+void rpc_response_default_handler(Client *client, json_t *request, json_t *result)
+{
+}
+
+void rpc_error_default_handler(Client *client, json_t *request, JsonRpcError error_code, const char *error_message)
+{
+}
+
+void rpc_error_fmt_default_handler(Client *client, json_t *request, JsonRpcError error_code, const char *fmt, ...)
+{
+}
+
+void rpc_send_request_to_remote_default_handler(Client *source, Client *target, json_t *request)
+{
+}
+
+void rpc_send_response_to_remote_default_handler(Client *source, Client *target, json_t *response)
+{
+}
+
+int rrpc_supported_simple_default_handler(Client *target, char **problem_server)
+{
+	if (problem_server)
+		*problem_server = me.name;
+	return 0;
+}
+
+int rrpc_supported_default_handler(Client *target, const char *module, const char *minimum_version, char **problem_server)
+{
+	if (problem_server)
+		*problem_server = me.name;
+	return 0;
+}
+
+int websocket_handle_websocket_default_handler(Client *client, WebRequest *web, const char *readbuf2, int length2, int callback(Client *client, char *buf, int len))
+{
+	return -1;
+}
+
+int websocket_create_packet_default_handler(int opcode, char **buf, int *len)
+{
+	return -1;
+}
+
+int websocket_create_packet_ex_default_handler(int opcode, char **buf, int *len, char *sendbuf, size_t sendbufsize)
+{
+	return -1;
+}
+
+int websocket_create_packet_simple_default_handler(int opcode, const char **buf, int *len)
+{
+	return -1;
+}
+
+void mtag_add_issued_by_default_handler(MessageTag **mtags, Client *client, MessageTag *recv_mtags)
+{
 }
 
 /** my_timegm: mktime()-like function which will use GMT/UTC.
@@ -2068,7 +2198,12 @@ int terminal_supports_color(void)
 #ifndef _WIN32
 	char *s;
 
-	/* Yeah we check all of stdin, stdout, stderr, because
+	/* Support NO_COLOR as per https://no-color.org */
+	s = getenv("NO_COLOR");
+	if (s != NULL && s[0] != '\0')
+		return 0;
+
+	/* Yeah we check all of stdin, stdout, stderr, because one
 	 * or more may be redirected (bin/unrealircd >log 2>&1),
 	 * and then we want to say no to color support.
 	 */
@@ -2424,6 +2559,7 @@ void server_reboot(const char *mesg)
 		WinExec(cmdLine, SW_SHOWDEFAULT);
 	}
 #endif
+	loop.terminating = 1;
 	unload_all_modules();
 #ifdef _WIN32
 	if (IsService)
@@ -2504,11 +2640,15 @@ const char *StripControlCodesEx(const char *text, char *output, size_t outputlen
 
 	while (len > 0) 
 	{
-		if ( col && ((isdigit(*text) && nc < 2) || (*text == ',' && nc < 3)))
+		if ((col && isdigit(*text) && nc < 2) ||
+		    ((col == 1) && (*text == ',') && isdigit(text[1]) && (nc > 0) && (nc < 3)))
 		{
 			nc++;
 			if (*text == ',')
+			{
 				nc = 0;
+				col++;
+			}
 		}
 		/* Syntax for RGB is ^DHHHHHH where H is a hex digit.
 		 * If < 6 hex digits are specified, the code is displayed
@@ -2610,4 +2750,12 @@ const char *StripControlCodes(const char *text)
 	static unsigned char new_str[4096];
 
 	return StripControlCodesEx(text, new_str, sizeof(new_str), 0);
+}
+
+const char *command_issued_by_rpc(MessageTag *mtags)
+{
+	MessageTag *m = find_mtag(mtags, "unrealircd.org/issued-by");
+	if (m && m->value && !strncmp(m->value, "RPC:", 4))
+		return m->value;
+	return NULL;
 }

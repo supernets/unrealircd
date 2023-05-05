@@ -96,6 +96,7 @@ extern int myncmp(const char *, const char *, int);
 #endif
 
 extern char *strtoken(char **, char *, char *);
+extern char *strtoken_noskip(char **, char *, char *);
 
 extern MODVAR int  global_count, max_global_count;
 #ifdef _WIN32
@@ -167,7 +168,7 @@ extern MODVAR unsigned char char_atribs[];
  * you are doing.
  */
 
-/* IRCu/Hybrid/Unreal way now :) -Stskeeps */
+/* IRCu/Hybrid/unrealircd way now :) -Stskeeps */
 
 #define EXPAR1	extchmstr[0]
 #define EXPAR2	extchmstr[1]

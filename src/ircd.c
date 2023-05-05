@@ -121,12 +121,32 @@ EVENT(handshake_timeout)
 
 	list_for_each_entry_safe(client, next, &unknown_list, lclient_node)
 	{
-		if (client->local->creationtime && ((TStime() - client->local->creationtime) > iConf.handshake_timeout))
+		if (client->local->creationtime &&
+		    ((TStime() - client->local->creationtime) > iConf.handshake_timeout) &&
+		    !(client->local->listener && (client->local->listener->socket_type == SOCKET_TYPE_UNIX)))
 		{
+			Hook *h;
+			int n = HOOK_CONTINUE;
+			const char *quitreason = "Registration Timeout";
+			char reasonbuf[512];
+
 			if (client->server && *client->server->by)
 				continue; /* handled by server module */
 
-			exit_client(client, NULL, "Registration Timeout");
+			for (h = Hooks[HOOKTYPE_PRE_LOCAL_HANDSHAKE_TIMEOUT]; h; h = h->next)
+			{
+				n = (*(h->func.intfunc))(client, &quitreason);
+				if (n == HOOK_ALLOW)
+					break;
+			}
+			if (n == HOOK_ALLOW)
+				continue; /* Do not exit the client due to registration timeout */
+
+			/* Work on a copy here, since the 'quitreason' may point to
+			 * some kind of buffer that gets freed in the exit code.
+			 */
+			strlcpy(reasonbuf, quitreason ? quitreason : "Registration Timeout", sizeof(reasonbuf));
+			exit_client(client, NULL, reasonbuf);
 			continue;
 		}
 	}
@@ -713,6 +733,9 @@ int InitUnrealIRCd(int argc, char *argv[])
 	fprintf(stderr, "* c-ares %s\n", ares_version(NULL));
 	fprintf(stderr, "* %s\n", pcre2_version());
 #endif
+#if JANSSON_VERSION_HEX >= 0x020D00
+	fprintf(stderr, "* jansson %s\n", jansson_version_str());
+#endif
 	check_user_limit();
 #ifndef _WIN32
 	fprintf(stderr, "\n");
@@ -730,6 +753,7 @@ int InitUnrealIRCd(int argc, char *argv[])
 #endif
 	init_dynconf();
 	init_sys();
+	clicap_init();
 	/*
 	 * Add default class
 	 */
@@ -760,7 +784,6 @@ int InitUnrealIRCd(int argc, char *argv[])
 	make_server(&me);
 	umodes_check_for_changes();
 	charsys_check_for_changes();
-	clicap_init();
 	if (!find_command_simple("PRIVMSG"))
 	{
 		config_error("Someone forgot to load modules with proper commands in them. READ THE DOCUMENTATION");
@@ -854,6 +877,7 @@ int InitUnrealIRCd(int argc, char *argv[])
 	PS_STRINGS->ps_argvstr = me.name;
 #endif
 	module_loadall();
+	loop.config_status = CONFIG_STATUS_COMPLETE;
 
 #ifndef _WIN32
 	SocketLoop(NULL);
