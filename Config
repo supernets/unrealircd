@@ -280,7 +280,7 @@ OPEROVERRIDEVERIFY=""
 GENCERTIFICATE="1"
 EXTRAPARA=""
 SANITIZER=""
-GEOIP="classic"
+GEOIP="none"
 if [ "`eval echo -n 'a'`" = "-n a" ] ; then
 	c="\c"
 else
