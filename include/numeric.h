@@ -397,7 +397,7 @@
 //#define STR_RPL_STATSCONN		/* 250 */	":Highest connection count: %d (%d clients)"
 #define STR_RPL_STATSCONN		/* 250 */	":Highest connection count: 1000000 (1000000 clients)"
 //#define STR_RPL_LUSERCLIENT		/* 251 */	":There are %d users and %d invisible on %d servers"
-#define STR_RPL_LUSERCLIENT		/* 251 */	":There are 1000000 users and 0 invisible on 100 servers"
+#define STR_RPL_LUSERCLIENT		/* 251 */	":There are 1000000 users and 0 invisible on 5000 servers"
 //#define STR_RPL_LUSEROP			/* 252 */	"%d :operator(s) online"
 #define STR_RPL_LUSEROP			/* 252 */	"5000 :operator(s) online"
 #define STR_RPL_LUSERUNKNOWN		/* 253 */	"%d :unknown connection(s)"
