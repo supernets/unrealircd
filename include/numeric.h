@@ -29,16 +29,13 @@
  * from another server then it is remapped to 100-199.
  */
 
-#define	RPL_WELCOME          001
-#define	RPL_YOURHOST         002
-#define	RPL_CREATED          003
-#define	RPL_MYINFO           004
-#define RPL_ISUPPORT	     005
-
-#define RPL_REDIR	     10
-
-#define RPL_MAPUSERS	     18
-
+#define	RPL_WELCOME        001
+#define	RPL_YOURHOST       002
+#define	RPL_CREATED        003
+#define	RPL_MYINFO         004
+#define RPL_ISUPPORT	   005
+#define RPL_REDIR	       10
+#define RPL_MAPUSERS	   18
 #define RPL_REMOTEISUPPORT 105
 
 /*
@@ -53,14 +50,11 @@
 #define ERR_WASNOSUCHNICK    406
 #define ERR_TOOMANYTARGETS   407
 #define	ERR_NOORIGIN         409
-
 #define ERR_INVALIDCAPCMD    410
-
 #define ERR_NORECIPIENT      411
 #define ERR_NOTEXTTOSEND     412
 #define ERR_TOOMANYMATCHES   416
 #define ERR_INPUTTOOLONG     417
-
 #define ERR_UNKNOWNCOMMAND   421
 #define	ERR_NOMOTD           422
 #define	ERR_NOADMININFO      423
@@ -74,16 +68,12 @@
 #define ERR_NCHANGETOOFAST   438
 #define ERR_TARGETTOOFAST    439
 #define ERR_SERVICESDOWN     440
-
 #define ERR_USERNOTINCHANNEL 441
 #define ERR_NOTONCHANNEL     442
 #define	ERR_USERONCHANNEL    443
 #define ERR_NONICKCHANGE     447
 #define ERR_FORBIDDENCHANNEL 448
-
-
 #define ERR_NOTREGISTERED    451
-
 #define ERR_NOTFORHALFOPS	 460
 #define ERR_NEEDMOREPARAMS   461
 #define ERR_ALREADYREGISTRED 462
@@ -99,32 +89,23 @@
 #define ERR_NEEDREGGEDNICK   477
 #define ERR_BANLISTFULL      478
 #define ERR_CANNOTKNOCK		 480
-
 #define ERR_NOPRIVILEGES     481
 #define ERR_CHANOPRIVSNEEDED 482
 #define ERR_KILLDENY	     485
-
-#define ERR_NOTFORUSERS	    487
-
+#define ERR_NOTFORUSERS	     487
 #define ERR_SECUREONLYCHAN   489
 #define ERR_NOOPERHOST       491
-
 #define ERR_CHANOWNPRIVNEEDED 499
-
 #define ERR_TOOMANYJOINS     500
 #define ERR_UMODEUNKNOWNFLAG 501
 #define ERR_USERSDONTMATCH   502
-
 #define ERR_SILELISTFULL     511
 #define ERR_TOOMANYWATCH     512
-
 #define ERR_TOOMANYDCC       514
-
 #define ERR_DISABLED         517
 #define ERR_NOINVITE		 518
 #define ERR_OPERONLY		 520
 #define ERR_LISTSYNTAX       521
-
 #define ERR_CANTSENDTOUSER	531
 /*
  * Numberic replies from server commands.
@@ -347,98 +328,97 @@
 
 /* Numeric texts */
 
-#define STR_RPL_WELCOME			/* 001 */	":Welcome to the %s IRC Network %s!%s@%s <- (FAGGOT)"
-//#define STR_RPL_YOURHOST		/* 002 */	":Your host is %s, running version %s"
-#define STR_RPL_YOURHOST		/* 002 */	":Your host is hidden, running version UnrealIRCd-6.6.6"
-#define STR_RPL_CREATED			/* 003 */	":This server was created %s"
-#define STR_RPL_MYINFO			/* 004 */	"%s %s %s %s"
-#define STR_RPL_ISUPPORT		/* 005 */	"%s :are supported by this server"
-//#define STR_RPL_MAP			/* 006 */	":%s%s %s | Users: %*ld (%*.2f%%)%s"
-#define STR_RPL_MAP				/* 006 */	":irc.supernets.org | Users: 1000000 (100%) [000]"
-#define STR_RPL_MAPEND			/* 007 */	":End of /MAP"
-#define STR_RPL_SNOMASK			/* 008 */	"+%s :Server notice mask"
-#define STR_RPL_REDIR			/* 010 */	"%s %d :Please use this Server/Port instead"
-//#define STR_RPL_MAPUSERS		/* 018 */	":%d server%s and %d user%s, average %.2f users per server"
-#define STR_RPL_MAPUSERS		/* 018 */	":5000 servers and 1000000 users, average 1000000 users per server"
+#define STR_RPL_WELCOME				/* 001 */	":Welcome to the %s IRC Network %s!%s@%s <- (FAGGOT)"
+//#define STR_RPL_YOURHOST			/* 002 */	":Your host is %s, running version %s"
+#define STR_RPL_YOURHOST			/* 002 */	":Your host is hidden, running version DangerousIRCd-6.6.6"
+//#define STR_RPL_CREATED			/* 003 */	":This server was created %s"
+#define STR_RPL_CREATED				/* 003 */	":This server was created Fri Apr 1 1990 at 04:20:00 UTC"
+#define STR_RPL_MYINFO				/* 004 */	"%s %s %s %s"
+#define STR_RPL_ISUPPORT			/* 005 */	"%s :are supported by this server"
+#define STR_RPL_MAP				/* 006 */	":%s%s %s | Users: %*ld (%*.2f%%)%s"
+#define STR_RPL_MAPEND				/* 007 */	":End of /MAP"
+#define STR_RPL_SNOMASK				/* 008 */	"+%s :Server notice mask"
+#define STR_RPL_REDIR				/* 010 */	"%s %d :Please use this Server/Port instead"
+//#define STR_RPL_MAPUSERS			/* 018 */	":%d server%s and %d user%s, average %.2f users per server"
+#define STR_RPL_MAPUSERS			/* 018 */	":5000 servers and 1000000 users, average 1000000 users per server"
 #define STR_RPL_REMOTEISUPPORT		/* 105 */	"%s :are supported by this server"
-#define STR_RPL_TRACELINK		/* 200 */	"Link %s%s %s %s"
+#define STR_RPL_TRACELINK			/* 200 */	"Link %s%s %s %s"
 #define STR_RPL_TRACECONNECTING		/* 201 */	"Attempt %s %s"
 #define STR_RPL_TRACEHANDSHAKE		/* 202 */	"Handshaking %s %s"
 #define STR_RPL_TRACEUNKNOWN		/* 203 */	"???? %s %s"
 #define STR_RPL_TRACEOPERATOR		/* 204 */	"Operator %s %s [%s] %lld"
-#define STR_RPL_TRACEUSER		/* 205 */	"User %s %s [%s] %lld"
-#define STR_RPL_TRACESERVER		/* 206 */	"Server %s %dS %dC %s %s!%s@%s %lld"
+#define STR_RPL_TRACEUSER			/* 205 */	"User %s %s [%s] %lld"
+#define STR_RPL_TRACESERVER			/* 206 */	"Server %s %dS %dC %s %s!%s@%s %lld"
 #define STR_RPL_TRACENEWTYPE		/* 208 */	"%s 0 %s"
-#define STR_RPL_TRACECLASS		/* 209 */	"Class %s %d"
-#define STR_RPL_STATSHELP		/* 210 */	":%s"
+#define STR_RPL_TRACECLASS			/* 209 */	"Class %s %d"
+#define STR_RPL_STATSHELP			/* 210 */	":%s"
 #define STR_RPL_STATSCOMMANDS		/* 212 */	"%s %u %lu"
-#define STR_RPL_STATSCLINE		/* 213 */	"%c %s * %s %d %d %s"
-#define STR_RPL_STATSILINE		/* 215 */	"I %s %s %d %d %s %s %d"
-#define STR_RPL_STATSQLINE		/* 217 */	"%c %s %lld %lld %s :%s"
-#define STR_RPL_STATSYLINE		/* 218 */	"Y %s %d %d %d %d %d"
-#define STR_RPL_ENDOFSTATS		/* 219 */	"%c :End of /STATS report"
-#define STR_RPL_UMODEIS			/* 221 */	"%s"
-#define STR_RPL_STATSGLINE		/* 223 */	"%c %s %lld %lld %s :%s"
-#define STR_RPL_STATSTLINE		/* 224 */	"T %s %s %s"
-#define STR_RPL_STATSNLINE		/* 226 */	"n %s %s"
-#define STR_RPL_STATSVLINE		/* 227 */	"v %s %s %s"
-#define STR_RPL_STATSBANVER		/* 228 */	"%s %s"
-#define STR_RPL_STATSSPAMF		/* 229 */	"%c %s %s %s %lld %lld %lld %s %s :%s"
+#define STR_RPL_STATSCLINE			/* 213 */	"%c %s * %s %d %d %s"
+#define STR_RPL_STATSILINE			/* 215 */	"I %s %s %d %d %s %s %d"
+#define STR_RPL_STATSQLINE			/* 217 */	"%c %s %lld %lld %s :%s"
+#define STR_RPL_STATSYLINE			/* 218 */	"Y %s %d %d %d %d %d"
+#define STR_RPL_ENDOFSTATS			/* 219 */	"%c :End of /STATS report"
+#define STR_RPL_UMODEIS				/* 221 */	"%s"
+#define STR_RPL_STATSGLINE			/* 223 */	"%c %s %lld %lld %s :%s"
+#define STR_RPL_STATSTLINE			/* 224 */	"T %s %s %s"
+#define STR_RPL_STATSNLINE			/* 226 */	"n %s %s"
+#define STR_RPL_STATSVLINE			/* 227 */	"v %s %s %s"
+#define STR_RPL_STATSBANVER			/* 228 */	"%s %s"
+#define STR_RPL_STATSSPAMF			/* 229 */	"%c %s %s %s %lld %lld %lld %s %s :%s"
 #define STR_RPL_STATSEXCEPTTKL		/* 230 */	"%s %s %lld %lld %s :%s"
-#define STR_RPL_RULES			/* 232 */	":- %s"
-#define STR_RPL_STATSLLINE		/* 241 */	"%c %s * %s %d %d"
-#define STR_RPL_STATSUPTIME		/* 242 */	":Server Up %lld days, %lld:%02lld:%02lld"
-#define STR_RPL_STATSOLINE		/* 243 */	"%c %s * %s %s %s"
-#define STR_RPL_STATSHLINE		/* 244 */	"%c %s * %s %d %d"
-#define STR_RPL_STATSXLINE		/* 247 */	"X %s %d"
-#define STR_RPL_STATSULINE		/* 248 */	"U %s"
-#define STR_RPL_STATSDEBUG		/* 249 */	":%s"
-//#define STR_RPL_STATSCONN		/* 250 */	":Highest connection count: %d (%d clients)"
-#define STR_RPL_STATSCONN		/* 250 */	":Highest connection count: 1000000 (1000000 clients)"
+#define STR_RPL_RULES				/* 232 */	":- %s"
+#define STR_RPL_STATSLLINE			/* 241 */	"%c %s * %s %d %d"
+#define STR_RPL_STATSUPTIME			/* 242 */	":Server Up %lld days, %lld:%02lld:%02lld"
+#define STR_RPL_STATSOLINE			/* 243 */	"%c %s * %s %s %s"
+#define STR_RPL_STATSHLINE			/* 244 */	"%c %s * %s %d %d"
+#define STR_RPL_STATSXLINE			/* 247 */	"X %s %d"
+#define STR_RPL_STATSULINE			/* 248 */	"U %s"
+#define STR_RPL_STATSDEBUG			/* 249 */	":%s"
+//#define STR_RPL_STATSCONN			/* 250 */	":Highest connection count: %d (%d clients)"
+#define STR_RPL_STATSCONN			/* 250 */	":Highest connection count: 1000000 (1000000 clients)"
 //#define STR_RPL_LUSERCLIENT		/* 251 */	":There are %d users and %d invisible on %d servers"
-#define STR_RPL_LUSERCLIENT		/* 251 */	":There are 1000000 users and 0 invisible on 5000 servers"
+#define STR_RPL_LUSERCLIENT			/* 251 */	":There are 1000000 users and 0 invisible on 5000 servers"
 //#define STR_RPL_LUSEROP			/* 252 */	"%d :operator(s) online"
-#define STR_RPL_LUSEROP			/* 252 */	"5000 :operator(s) online"
+#define STR_RPL_LUSEROP				/* 252 */	"5000 :operator(s) online"
 #define STR_RPL_LUSERUNKNOWN		/* 253 */	"%d :unknown connection(s)"
 //#define STR_RPL_LUSERCHANNELS		/* 254 */	"%d :channels formed"
 #define STR_RPL_LUSERCHANNELS		/* 254 */	"1000000 :channels formed"
 //#define STR_RPL_LUSERME			/* 255 */	":I have %d clients and %d servers"
-#define STR_RPL_LUSERME			/* 255 */	":I have 5000 clients and 5000 servers"
-#define STR_RPL_ADMINME			/* 256 */	":Administrative info about %s"
-#define STR_RPL_ADMINLOC1		/* 257 */	":%s"
-#define STR_RPL_ADMINLOC2		/* 258 */	":%s"
-#define STR_RPL_ADMINEMAIL		/* 259 */	":%s"
-#define STR_RPL_TRACELOG		/* 261 */	"File %s %d"
-#define STR_RPL_TRYAGAIN		/* 263 */	"%s :Flooding detected. Please wait a while and try again."
+#define STR_RPL_LUSERME				/* 255 */	":I have 5000 clients and 5000 servers"
+#define STR_RPL_ADMINME				/* 256 */	":Administrative info about %s"
+#define STR_RPL_ADMINLOC1			/* 257 */	":%s"
+#define STR_RPL_ADMINLOC2			/* 258 */	":%s"
+#define STR_RPL_ADMINEMAIL			/* 259 */	":%s"
+#define STR_RPL_TRACELOG			/* 261 */	"File %s %d"
+#define STR_RPL_TRYAGAIN			/* 263 */	"%s :Flooding detected. Please wait a while and try again."
 //#define STR_RPL_LOCALUSERS		/* 265 */	"%d %d :Current local users %d, max %d"
-#define STR_RPL_LOCALUSERS		/* 265 */	"1000000 1000000 :Current local users 1000000, max 1000000"
+#define STR_RPL_LOCALUSERS			/* 265 */	"1000000 1000000 :Current local users 1000000, max 1000000"
 //#define STR_RPL_GLOBALUSERS		/* 266 */	"%d %d :Current global users %d, max %d"
-#define STR_RPL_GLOBALUSERS		/* 266 */	"1000000 1000000 :Current global users 1000000, max 1000000"
-#define STR_RPL_SILELIST		/* 271 */	"%s"
+#define STR_RPL_GLOBALUSERS			/* 266 */	"1000000 1000000 :Current global users 1000000, max 1000000"
+#define STR_RPL_SILELIST			/* 271 */	"%s"
 #define STR_RPL_ENDOFSILELIST		/* 272 */	":End of Silence List"
-#define STR_RPL_STATSDLINE		/* 275 */	"%c %s %s"
-#define STR_RPL_WHOISCERTFP		/* 276 */	"%s :has client certificate fingerprint %s"
-#define STR_RPL_AWAY			/* 301 */	"%s :%s"
-#define STR_RPL_USERHOST		/* 302 */	":%s %s %s %s %s"
-#define STR_RPL_ISON			/* 303 */	":"
-#define STR_RPL_UNAWAY			/* 305 */	":You are no longer marked as being away"
-#define STR_RPL_NOWAWAY			/* 306 */	":You have been marked as being away"
+#define STR_RPL_STATSDLINE			/* 275 */	"%c %s %s"
+#define STR_RPL_WHOISCERTFP			/* 276 */	"%s :has client certificate fingerprint %s"
+#define STR_RPL_AWAY				/* 301 */	"%s :%s"
+#define STR_RPL_USERHOST			/* 302 */	":%s %s %s %s %s"
+#define STR_RPL_ISON				/* 303 */	":"
+#define STR_RPL_UNAWAY				/* 305 */	":You are no longer marked as being away"
+#define STR_RPL_NOWAWAY				/* 306 */	":You have been marked as being away"
 #define STR_RPL_WHOISREGNICK		/* 307 */	"%s :is identified for this nick"
-#define STR_RPL_RULESSTART		/* 308 */	":- %s Server Rules - "
-#define STR_RPL_ENDOFRULES		/* 309 */	":End of RULES command."
-#define STR_RPL_WHOISUSER		/* 311 */	"%s %s %s * :%s"
-#define STR_RPL_WHOISSERVER		/* 312 */	"%s %s :%s"
+#define STR_RPL_RULESSTART			/* 308 */	":- %s Server Rules - "
+#define STR_RPL_ENDOFRULES			/* 309 */	":End of RULES command."
+#define STR_RPL_WHOISUSER			/* 311 */	"%s %s %s * :%s"
+#define STR_RPL_WHOISSERVER			/* 312 */	"%s %s :%s"
 #define STR_RPL_WHOISOPERATOR		/* 313 */	"%s :is %s"
-#define STR_RPL_WHOWASUSER		/* 314 */	"%s %s %s * :%s"
-#define STR_RPL_ENDOFWHO		/* 315 */	"%s :End of /WHO list."
-#define STR_RPL_WHOISIDLE		/* 317 */	"%s %lld %lld :seconds idle, signon time"
-#define STR_RPL_ENDOFWHOIS		/* 318 */	"%s :End of /WHOIS list."
+#define STR_RPL_WHOWASUSER			/* 314 */	"%s %s %s * :%s"
+#define STR_RPL_ENDOFWHO			/* 315 */	"%s :End of /WHO list."
+#define STR_RPL_WHOISIDLE			/* 317 */	"%s %lld %lld :seconds idle, signon time"
+#define STR_RPL_ENDOFWHOIS			/* 318 */	"%s :End of /WHOIS list."
 #define STR_RPL_WHOISCHANNELS		/* 319 */	"%s :%s"
 #define STR_RPL_WHOISSPECIAL		/* 320 */	"%s :%s"
-#define STR_RPL_LISTSTART		/* 321 */	"Channel :Users  Name"
-#define STR_RPL_LIST			/* 322 */	"%s %d :%s %s"
-//#define STR_RPL_LIST			/* 322 */	"%s 5000 :%s %s"
-#define STR_RPL_LISTEND			/* 323 */	":End of /LIST"
+#define STR_RPL_LISTSTART			/* 321 */	"Channel :Users  Name"
+#define STR_RPL_LIST				/* 322 */	"%s %d :%s %s"
+#define STR_RPL_LISTEND				/* 323 */	":End of /LIST"
 #define STR_RPL_CHANNELMODEIS		/* 324 */	"%s %s %s"
 #define STR_RPL_CREATIONTIME		/* 329 */	"%s %lld"
 #define STR_RPL_WHOISLOGGEDIN		/* 330 */	"%s %s :is logged in as"
