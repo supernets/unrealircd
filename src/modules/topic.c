@@ -312,8 +312,7 @@ void _set_channel_topic(Client *client, Channel *channel, MessageTag *recv_mtags
 	sendto_server(client, 0, 0, mtags, ":%s TOPIC %s %s %lld :%s",
 	    client->id, channel->name, channel->topic_nick,
 	    (long long)channel->topic_time, channel->topic);
-	sendto_channel(channel, client, NULL, 0, 0, SEND_LOCAL, mtags,
-		       ":%s TOPIC %s :%s",
-		       client->name, channel->name, channel->topic);
+	// EXPERIMENTAL - have not tried this
+	//sendto_channel(channel, client, NULL, 0, 0, SEND_LOCAL, mtags, ":%s TOPIC %s :%s", client->name, channel->name, channel->topic);
 	free_message_tags(mtags);
 }
