@@ -213,15 +213,12 @@ install: all
 	$(INSTALL) -m 0600 doc/conf/tls/curl-ca-bundle.crt $(DESTDIR)@CONFDIR@/tls
 	@# delete modules/cap directory, to avoid confusing with U4 to U5 upgrades:
 	rm -rf $(DESTDIR)@MODULESDIR@/cap
-	$(INSTALL) -m 0700 -d $(DESTDIR)@MODULESDIR@/third
-	@rm -f $(DESTDIR)@MODULESDIR@/third/*.so 1>/dev/null 2>&1
 	@#This step can fail with zero files, so we ignore exit status:
-	-$(INSTALL) -m 0700 src/modules/third/*.so $(DESTDIR)@MODULESDIR@/third
 	$(INSTALL) -m 0700 -d $(DESTDIR)@TMPDIR@
 	$(INSTALL) -m 0700 -d $(DESTDIR)@CACHEDIR@
 	$(INSTALL) -m 0700 -d $(DESTDIR)@PERMDATADIR@
 	$(INSTALL) -m 0700 -d $(DESTDIR)@LOGDIR@
-	-@if [ ! -f "$(DESTDIR)@CONFDIR@/tls/server.cert.pem" ] ; then \
+	-@if [ -f "$(DESTDIR)@CONFDIR@/tls/server.cert.pem" ] ; then \
 		$(INSTALL) -m 0600 server.req.pem $(DESTDIR)@CONFDIR@/tls ; \
 		$(INSTALL) -m 0600 server.key.pem $(DESTDIR)@CONFDIR@/tls ; \
 		$(INSTALL) -m 0600 server.cert.pem $(DESTDIR)@CONFDIR@/tls ; \
