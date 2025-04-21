@@ -38,16 +38,22 @@
 
 4─────────┤ 0THE WILD WILD WEST OF IRC 4├─────────
 
+14• 7          Hub   hub.supernets.org
 14• 7  Round-robin   irc.supernets.org 14(IPv4/IPv6)
-14• 7        Onion   14removed until further notice
+14• 7        Onion   x6uqarww3ldvovqgkor3n3ixx6sbyclasfckem2konk7izzcaumcxrad.onion
+14• 7        Webchat https://irc.supernets.org
 
 14• 7        Ports   6660-6669 & 7000
 14• 7SSL/TLS Ports   6697      & 9000
 
+4─────────────────┤ 0SERVICES 4├─────────────────
+
 14• 7         Mail   12admin@supernets.org
 14• 7          Git   12https://git.supernets.org
 14• 7      Twitter   12https://twitter.com/super_nets
-14• 7      Website   12https://supernets.org/
+14• 7      Website   12https://supernets.org
+14• 7        Jitsi   12https://hardchats.com
+14• 7         XMPP   12xmpp.supernets.org
 
 4─────────┤ 0MOST DANGEROUS IRC NETWORK 4├────────
 

@@ -268,7 +268,7 @@ done
 c=""
 n=""
 UNREALCWD="`pwd`"
-BASEPATH="$HOME/unrealircd"
+BASEPATH="/opt/ircd"
 DEFPERM="0600"
 SSLDIR=""
 NICKNAMEHISTORYLENGTH="100"

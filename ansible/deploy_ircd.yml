@@ -1,0 +1,106 @@
+---
+- name: Deploy UnrealIRCd
+  hosts: ircd_servers
+  become: true
+  gather_facts: true
+
+  vars:
+    ircd_user: ircd
+    install_dir: /opt/ircd
+
+  tasks:
+    - name: Install required packages
+      package:
+        name:
+          - git
+          - make
+          - gcc
+          - curl
+        state: present
+
+    - name: Check if Docker is installed
+      stat:
+        path: /usr/bin/docker
+      register: docker_check
+
+    - name: Install Docker using convenience script
+      block:
+        - name: Download Docker installation script
+          get_url:
+            url: https://get.docker.com
+            dest: /tmp/get-docker.sh
+            mode: '0755'
+            force: yes
+
+        - name: Execute Docker installation script
+          command: /tmp/get-docker.sh
+          args:
+            creates: /usr/bin/docker
+
+        - name: Clean up installation script
+          file:
+            path: /tmp/get-docker.sh
+            state: absent
+      when: not docker_check.stat.exists
+
+    - name: Create ircd user
+      user:
+        name: "{{ ircd_user }}"
+        groups: docker
+        append: yes
+        system: yes
+
+    - name: Enable and start Docker service
+      systemd:
+        name: docker
+        state: started
+        enabled: yes
+        
+    - name: Check if repository exists
+      stat:
+        path: "{{ install_dir }}/.git"
+      register: repo_check
+
+    - name: Clone UnrealIRCd repository
+      git:
+        repo: 'https://git.supernets.org/supernets/ircd'
+        dest: "{{ install_dir }}"
+        force: true
+        version: master
+      when: not repo_check.stat.exists
+
+    - name: Update existing repository
+      command:
+        cmd: git pull
+        chdir: "{{ install_dir }}"
+      when: repo_check.stat.exists
+      register: git_pull
+      changed_when: git_pull.stdout != 'Already up to date.'
+
+    - name: Set ircd ownership recursively
+      file:
+        path: "{{ install_dir }}"
+        state: directory
+        owner: "{{ ircd_user }}"
+        group: "{{ ircd_user }}"
+        recurse: yes
+
+    - name: Set execute permission on setup.sh
+      file:
+        path: "{{ install_dir }}/setup.sh"
+        mode: '0755'
+
+    - name: Run setup script
+      command:
+        cmd: ./setup.sh
+        chdir: "{{ install_dir }}"
+      become_user: "{{ ircd_user }}"
+      register: setup_result
+      changed_when: false
+      failed_when: setup_result.rc != 0
+      ignore_errors: true
+
+    - name: Show setup output
+      debug:
+        var: setup_result.stdout_lines
+      when: setup_result is defined
