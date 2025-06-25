@@ -1,0 +1,4 @@
+# SuperNETS UnrealIRCd - Developed by acidvegas (https://github.com/supernets/unrealircd)
+# unrealircd/.gitignore
+
+.env

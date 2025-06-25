@@ -1,0 +1,64 @@
+#!/bin/bash
+# We assume we are executed from extras/tests/tls
+
+function fail()
+{
+	echo "TLS TEST ERROR: $*"
+	exit 1
+}
+
+TESTSSL="testssl.sh"
+OPENSSL="openssl"
+if [ -x ~/testssl.sh/testssl.sh ]; then
+	TESTSSL="$HOME/testssl.sh/testssl.sh"
+elif [ -x ../../../testssl.sh/ ]; then
+	TESTSSL="`readlink -f ../../../testssl.sh/testssl.sh`"
+fi
+
+$TESTSSL --help >/dev/null || exit 1
+
+
+# This is the actual scan, later on we use the 'testssl.csv' result
+$TESTSSL --nodns none --color 0 --cipher-per-proto --std --fs --csvfile testssl.pre.csv --logfile testssl.log 127.0.0.1:5901
+
+# Filter this useless stuff out
+cat testssl.pre.csv|grep -vF "No engine or GOST support" >testssl.csv
+
+# Now check if profile matches, if so.. everything is ok.
+FAILED=1
+for f in testssl_profiles/*.txt
+do
+	diff -uab $f testssl.csv 1>/dev/null 2>&1
+	if [ "$?" -eq 0 ]; then
+		FAILED=0
+		echo "Testssl profile $f matched."
+		break
+	fi
+done
+
+if [ "$FAILED" -eq 1 ]; then
+	echo "*** Differences found between testssl scan and expected output ***"
+	if [ -f testssl_profiles/$BUILDCONFIG.txt ]; then
+		COMPARE_PROFILE="testssl_profiles/$BUILDCONFIG.txt"
+	else
+		COMPARE_PROFILE="testssl_profiles/baseline.txt"
+	fi
+	echo "== EXPECTED OUTPUT ($COMPARE_PROFILE) =="
+	cat $COMPARE_PROFILE
+	echo
+	echo "== ACTUAL TEST OUTPUT =="
+	cat testssl.csv
+	echo
+	echo "== DIFF =="
+	diff -uab $COMPARE_PROFILE testssl.csv
+	echo
+	echo "Testssl failed."
+	exit 1
+else
+	echo "*** Testssl output was good ***"
+	cat testssl.csv
+fi
+
+echo
+echo "TLS tests ended (no issues)."
+exit 0
