@@ -222,7 +222,7 @@ setup_firewall() {
     iptables -A INPUT -p tcp --dport 6697,9000 -j ACCEPT
 
     # Allow IRC S2S access
-    #iptables -A INPUT -p tcp --dport $S2S_PORT -j ACCEPT
+    iptables -A INPUT -p tcp --dport $S2S_PORT -j ACCEPT
 
     # IPv6 Default chain policies
     ip6tables -P INPUT   DROP
