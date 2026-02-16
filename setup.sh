@@ -29,6 +29,7 @@ fi
 # Copy static conf files from source
 cp $(pwd)/src/doc/conf/ircd.motd              $(pwd)/assets/conf/
 cp $(pwd)/src/doc/conf/ircd.rules             $(pwd)/assets/conf/
+cp $(pwd)/src/doc/conf/remote.motd            $(pwd)/assets/conf/
 cp $(pwd)/src/doc/conf/tls/curl-ca-bundle.crt $(pwd)/assets/conf/tls/
 
 # Generate unrealircd.conf for leaf
