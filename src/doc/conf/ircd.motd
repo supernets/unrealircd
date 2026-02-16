@@ -39,13 +39,11 @@
 4─────────┤ 0THE WILD WILD WEST OF IRC 4├─────────
 
 14• 7          Hub   hub.supernets.org
-14• 7     Services   services.supernets.org
 14• 7  Round-robin   irc.supernets.org 14(IPv4/IPv6)
-14• 7        Onion   x6uqarww3ldvovqgkor3n3ixx6sbyclasfckem2konk7izzcaumcxrad.onion
-14• 7      Webchat   https://irc.supernets.org
+14• 7      Webchat   https://webchat.supernets.org
 
-14• 7        Ports   6660-6669 & 7000
-14• 7SSL/TLS Ports   6697      & 9000
+14• 7        Ports   6667
+14• 7SSL/TLS Ports   6697
 
 4─────────────────┤ 0SERVICES 4├─────────────────
 

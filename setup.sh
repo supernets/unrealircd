@@ -26,7 +26,9 @@ if [ ! -f $(pwd)/assets/conf/tls/server.cert.pem ]; then
 	chmod 600 $(pwd)/assets/conf/tls/server.key.pem $(pwd)/assets/conf/tls/server.cert.pem
 fi
 
-# Copy the curl-ca-bundle.crt to the assets/conf/tls directory
+# Copy static conf files from source
+cp $(pwd)/src/doc/conf/ircd.motd              $(pwd)/assets/conf/
+cp $(pwd)/src/doc/conf/ircd.rules             $(pwd)/assets/conf/
 cp $(pwd)/src/doc/conf/tls/curl-ca-bundle.crt $(pwd)/assets/conf/tls/
 
 # Generate unrealircd.conf for leaf
@@ -48,16 +50,4 @@ docker run -d --name unrealircd --restart unless-stopped --network host \
 # Output SPKIFP & IP
 SPKIFP=$(docker exec -w /opt/unrealircd unrealircd /opt/unrealircd/unrealircd spkifp | tail -n2 | head -1)
 IP4=$(curl -4 -s https://maxmind.supernets.org | jq -rc .ip)
-printf "\nSPKIFP: $SPKIFP\nIPv4:   $IP4\n"
-
-echo "link $SERVER_NAME.supernets.org {
-	incoming { mask $IP4; }
-	outgoing {
-		bind-ip *;
-		hostname $IP4;
-		port 9000;
-		options { tls; }
-	}
-	$SPKIFP
-	class servers;
-}"
+printf "\n\n\n\nlink $SERVER_NAME.supernets.org {\n\t\incoming { mask $IP4; }\n\t\outgoing {\n\t\tbind-ip *;\n\t\thostname $IP4;\n\t\tport 9000;\n\t\toptions { tls; }\n\t}\n\t$SPKIFP\n\tclass servers;\n}"

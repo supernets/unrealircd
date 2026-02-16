@@ -192,6 +192,11 @@
       become_user: supernets
       shell: "cd {{ deploy_path }} && bash setup.sh"
 
+    - name: Remove .env from remote
+      file:
+        path: "{{ deploy_path }}/assets/.env"
+        state: absent
+
     # --- Firewall ---
     - name: Run firewall
       script: "{{ assets_path }}/scripts/firewall.sh"
