@@ -1,5 +1,5 @@
 #!/bin/bash
-# SuperNETs IRC Firewall - Developed by acidvegas (https://git.supernets.org/supernets/unrealircd)
+# SuperNETS UnrealIRCd - Developed by acidvegas (https://git.supernets.org/supernets/unrealircd)
 # unrealircd/assets/firewall.sh
 
 # Set xtrace, exit on error, & verbose mode

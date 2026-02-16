@@ -1,6 +1,5 @@
-#!/bin/bash
-# SuperNETs UnrealIRCd Docker Setup - Developed by acidvegas (https://github.com/supernets/unrealircd)
-# Dockerfile
+# SuperNETS UnrealIRCd - Developed by acidvegas (https://git.supernets.org/supernets/unrealircd)
+# unrealircd/Dockerfile
 
 # Use a bare minimal Alpine Linux base image
 FROM alpine:latest

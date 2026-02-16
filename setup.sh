@@ -1,5 +1,6 @@
 #!/bin/bash
-# SuperNETs UnrealIRCd Docker Setup - Developed by acidvegas (https://github.com/supernets/unrealircd)
+# SuperNETS UnrealIRCd - Developed by acidvegas (https://git.supernets.org/supernets/unrealircd)
+# unrealircd/setup.sh
 
 # Load environment variables
 [ -f assets/.env ] && source assets/.env || { echo "Error: assets/.env file not found"; exit 1; }

@@ -1,5 +1,5 @@
 #!/bin/bash
-# SuperNETs UnrealIRCd source update script - Developed by acidvegas (https://github.com/supernets/unrealircd)
+# SuperNETS UnrealIRCd - Developed by acidvegas (https://git.supernets.org/supernets/unrealircd)
 # unrealircd/assets/helper.sh
 
 get_latest_release() {
