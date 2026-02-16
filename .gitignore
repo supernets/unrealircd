@@ -2,6 +2,7 @@
 # unrealircd/.gitignore
 
 assets/ansible/inventory.ini
+assets/conf/unrealircd.*.conf
 assets/conf/unrealircd.conf
 assets/conf/tls/*
 assets/data/*
