@@ -1,0 +1,203 @@
+---
+# SuperNETs UnrealIRCd Ansible Playbook - Developed by acidvegas (https://github.com/supernets/unrealircd)
+#
+# Usage:
+#   Deploy all:  ansible-playbook -i inventory.ini deploy.yml
+#   Deploy one:  ansible-playbook -i inventory.ini deploy.yml --limit bulbasaur
+
+- name: Deploy UnrealIRCd
+  hosts: leafs
+
+  vars:
+    deploy_path: /opt/unrealircd
+    repo_path: "{{ playbook_dir }}/../.."
+    assets_path: "{{ playbook_dir }}/.."
+
+  pre_tasks:
+    - name: Check for TLS certs locally
+      local_action: stat path="{{ assets_path }}/conf/tls/{{ item }}"
+      loop:
+        - irc.key
+        - irc.crt
+      register: tls_check
+      run_once: true
+
+    - name: Fail if TLS certs are missing
+      fail:
+        msg: "Missing {{ item.item }} in assets/conf/tls/"
+      when: not item.stat.exists
+      loop: "{{ tls_check.results }}"
+      run_once: true
+
+    - name: Fail if SID is not defined
+      fail:
+        msg: "No sid defined for {{ inventory_hostname }} in inventory.ini"
+      when: sid is not defined
+
+  tasks:
+    # --- SSH Port Detection ---
+    - name: Get SSH port from remote sshd_config
+      shell: grep -oP '^Port \K\d+' /etc/ssh/sshd_config || echo 22
+      register: ssh_port_result
+      changed_when: false
+
+    - name: Set SSH port fact
+      set_fact:
+        ssh_port: "{{ ssh_port_result.stdout }}"
+
+    # --- System Hardening ---
+    - name: Setup journal
+      shell: |
+        printf "[Journal]\nStorage=volatile\nSplitMode=none\nRuntimeMaxUse=500K" > /etc/systemd/journald.conf
+        systemctl stop systemd-journald
+        rm -rf /var/log/journal
+        systemctl start systemd-journald
+
+    - name: Wipe /etc/issue
+      copy:
+        content: ""
+        dest: /etc/issue
+
+    - name: Prevent bash history for root
+      file:
+        src: /dev/null
+        dest: /root/.bash_history
+        state: link
+        force: yes
+
+    - name: Hide lastlog
+      shell: sed -i '/session    optional   pam_lastlog.so/d' /etc/pam.d/login
+
+    - name: Harden sshd_config
+      shell: |
+        printf "AuthenticationMethods publickey\nBanner /etc/issue\nClientAliveInterval 0\nDisableForwarding yes\nPermitRootLogin prohibit-password\nPort {{ ssh_port }}\nPrintLastLog no" > /etc/ssh/sshd_config
+      notify: Restart sshd
+
+    # --- Setup MOTD ---
+    - name: Install nms (no-more-secrets)
+      shell: |
+        git clone --depth 1 https://github.com/bartobri/no-more-secrets /tmp/nms
+        make -C /tmp/nms clean all install
+        rm -rf /tmp/nms
+      args:
+        creates: /usr/local/bin/nms
+
+    - name: Setup MOTD login script
+      shell: |
+        printf 'clear && ((echo && printf "   E N T E R   T H E   V O I D\n"  && echo) | nms -af red) && cat /etc/motd' > /etc/profile.d/motd.sh
+        chmod +x /etc/profile.d/motd.sh
+
+    - name: Download MOTD art
+      shell: wget -O /etc/motd https://raw.githubusercontent.com/acidvegas/void/master/local/share/art/supernets.txt
+
+    # --- Install Docker ---
+    - name: Install dependencies
+      apt:
+        name: [curl, git, openssl, wget, iptables-persistent, netfilter-persistent, build-essential]
+        state: present
+        update_cache: yes
+
+    - name: Install Docker
+      shell: curl -fsSL https://get.docker.com | sh
+      args:
+        creates: /usr/bin/docker
+
+    # --- Create supernets user ---
+    - name: Create supernets user
+      user:
+        name: supernets
+        shell: /bin/bash
+        create_home: yes
+        groups: docker
+        append: yes
+
+    - name: Prevent bash history for supernets
+      file:
+        src: /dev/null
+        dest: /home/supernets/.bash_history
+        state: link
+        force: yes
+
+    # --- Deploy UnrealIRCd ---
+    - name: Create deploy directory
+      file:
+        path: "{{ deploy_path }}"
+        state: directory
+        owner: supernets
+        group: supernets
+
+    - name: Sync repo files
+      synchronize:
+        src: "{{ repo_path }}/"
+        dest: "{{ deploy_path }}/"
+        rsync_opts:
+          - "--exclude=.git"
+          - "--exclude=assets"
+
+    - name: Create assets/conf/tls directory
+      file:
+        path: "{{ deploy_path }}/assets/conf/tls"
+        state: directory
+        owner: supernets
+        group: supernets
+
+    - name: Copy TLS certs
+      copy:
+        src: "{{ assets_path }}/conf/tls/{{ item }}"
+        dest: "{{ deploy_path }}/assets/conf/tls/{{ item }}"
+        owner: supernets
+        group: supernets
+        mode: "0600"
+      loop:
+        - irc.key
+        - irc.crt
+
+    - name: Fix ownership of deploy directory
+      file:
+        path: "{{ deploy_path }}"
+        state: directory
+        owner: supernets
+        group: supernets
+        recurse: yes
+
+    - name: Copy .env file
+      copy:
+        src: "{{ assets_path }}/.env"
+        dest: "{{ deploy_path }}/assets/.env"
+        owner: supernets
+        group: supernets
+        mode: "0600"
+
+    - name: Override SID in .env
+      lineinfile:
+        path: "{{ deploy_path }}/assets/.env"
+        regexp: '^SID='
+        line: 'SID="{{ sid }}"'
+        owner: supernets
+        group: supernets
+        mode: "0600"
+      when: sid is defined
+
+    - name: Override SERVER_NAME in .env
+      lineinfile:
+        path: "{{ deploy_path }}/assets/.env"
+        regexp: '^SERVER_NAME='
+        line: 'SERVER_NAME="{{ inventory_hostname }}"'
+        owner: supernets
+        group: supernets
+        mode: "0600"
+
+    - name: Run setup.sh as supernets
+      become: yes
+      become_user: supernets
+      shell: "cd {{ deploy_path }} && bash setup.sh"
+
+    # --- Firewall ---
+    - name: Run firewall
+      script: "{{ assets_path }}/scripts/firewall.sh"
+
+  handlers:
+    - name: Restart sshd
+      systemd:
+        name: sshd
+        state: restarted

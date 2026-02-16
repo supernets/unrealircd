@@ -1,8 +1,9 @@
 # SuperNETS UnrealIRCd - Developed by acidvegas (https://github.com/supernets/unrealircd)
 # unrealircd/.gitignore
 
-assets/conf/tls/*
+assets/ansible/inventory.ini
 assets/conf/unrealircd.conf
+assets/conf/tls/*
 assets/data/*
 assets/logs/*
-.env
+assets/.env
