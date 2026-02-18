@@ -491,7 +491,7 @@
 //#define STR_RPL_TIME					/* 391 */	"%s :%s"
 #define STR_RPL_TIME					/* 391 */	"%s :SMOKE:30"
 #define STR_RPL_HOSTHIDDEN				/* 396 */	"%s :is now your displayed host"
-//#define STR_ERR_NOSUCHNICK				/* 401 */	"%s :No such nick/channel"
+//#define STR_ERR_NOSUCHNICK			/* 401 */	"%s :No such nick/channel"
 #define STR_ERR_NOSUCHNICK				/* 401 */	"%s :WHO?"
 //#define STR_ERR_NOSUCHSERVER			/* 402 */	"%s :No such server"
 #define STR_ERR_NOSUCHSERVER			/* 402 */	"%s :WHO?"
