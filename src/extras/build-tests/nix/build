@@ -1,0 +1,62 @@
+#!/bin/bash
+
+# Exit on any failure:
+set -e
+
+# Verbose:
+set -x
+
+if [ "$1" != "" ]; then
+	BUILDCONFIG="$*"
+fi
+
+if [[ "$OSTYPE" == "freebsd"* ]]; then
+	export MAKE="gmake -j4"
+else
+	export MAKE="make -j4"
+fi
+
+# -DRAWCMDLOGGING was dropped, but can be useful for debugging
+export CPPFLAGS="$CPPFLAGS -DFAKELAG_CONFIGURABLE -DNOREMOVETMP -DTESTSUITE"
+
+# !! skipped for now: extras/build-tests/nix/select-config $BUILDCONFIG !!
+# !! temporary use this:
+cp extras/build-tests/nix/configs/default ./config.settings
+
+if [ "$USE_SHIPPED_LIBS" = "1" ]; then
+    echo 'EXTRAPARA="--enable-werror --without-system-pcre2 --without-system-argon2 --without-system-sodium --without-system-cares --without-system-jansson"' >>config.settings
+fi
+
+# If SSLDIR is set the environment, this overrides config.settings
+# Used for example in the openssl3 build tests.
+if [ "$SSLDIR" != "" ]; then
+	echo 'SSLDIR="'"$SSLDIR"'"' >>config.settings
+fi
+
+# Read config.settings, this makes a couple of variables available to us.
+. ./config.settings
+if [ "$SSLDIR" != "" ]; then
+	# In case we build local openssl/libressl
+	export LD_LIBRARY_PATH="$SSLDIR/lib"
+fi
+./Config -quick || (tail -n 5000 config.log; exit 1)
+$MAKE
+(echo 'Y'; yes '')|./unrealircd mkcert
+$MAKE || exit 1
+$MAKE install || exit 1
+./unrealircd module install third/dumpcmds || exit 1
+
+set +x
+echo ""
+echo "***********************************************"
+echo "UnrealIRCd build & install successful."
+echo "***********************************************"
+
+if [[ "$OSTYPE" == "darwin"* ]]; then
+	otool -L ~/unrealircd/bin/unrealircd
+else
+	ldd ~/unrealircd/bin/unrealircd
+fi
+
+# This was only the 'building' part, so give a hint...
+echo "You can now run extras/build-tests/nix/run-tests"

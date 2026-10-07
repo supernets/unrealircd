@@ -1,0 +1,43 @@
+#!/bin/bash
+#
+# This script fires up a two-server IRC network and runs the test framework
+#
+
+# Exit on error:
+set -e
+
+# Verbose:
+set -x
+
+# Kill old instances
+killall -9 unrealircd || true
+
+# Install 'unrealircd-tests'
+rm -rf unrealircd-tests/
+git clone -q --branch unreal60 https://github.com/unrealircd/unrealircd-tests.git unrealircd-tests
+cd unrealircd-tests
+
+# FreeBSD has various issues with the tests from us and others,
+# better set a flag to keep it simple:
+if uname -a|grep -q FreeBSD; then
+	NOSERVICES=1
+fi
+
+# Run the test framework, testing both services:
+if [ "$NOSERVICES" = 1 ]; then
+	./run -services none $RUNTESTFLAGS || exit 1
+else
+	# Linux tests both with anope and atheme services:
+	./run -services anope $RUNTESTFLAGS || exit 1
+	./run -services atheme $RUNTESTFLAGS || exit 1
+fi
+
+# Database writing/reading tests
+## unencrypted:
+./run -services none -boot tests/db/writing/* || exit 1
+./run -services none -keepdbs -boot tests/db/reading/* || exit 1
+## encrypted:
+./run -services none -include db_crypted.conf -boot tests/db/writing/* || exit 1
+./run -services none -include db_crypted.conf -keepdbs -boot tests/db/reading/* || exit 1
+
+echo "If you also want to run the SSL/TLS tests, see extras/tests/tls/tls-tests"
