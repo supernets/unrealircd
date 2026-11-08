@@ -98,6 +98,13 @@ CMD_FUNC(cmd_starttls)
 	SetStartTLSHandshake(client);
 	if ((client->local->ssl = SSL_new(ctx)) == NULL)
 		goto fail;
+#ifdef SSL_OP_NO_RENEGOTIATION
+	/* No TLS renegotiations. OpenSSL 3.0.0 and later already do this by default */
+	SSL_set_options(client->local->ssl, SSL_OP_NO_RENEGOTIATION);
+#elif defined(SSL_OP_NO_CLIENT_RENEGOTIATION)
+	/* Same, but for LibreSSL <4.1.0 which doesn't have SSL_OP_NO_RENEGOTIATION */
+	SSL_set_options(client->local->ssl, SSL_OP_NO_CLIENT_RENEGOTIATION);
+#endif
 	SetTLS(client);
 	SSL_set_fd(client->local->ssl, client->local->fd);
 	SSL_set_nonblocking(client->local->ssl);
